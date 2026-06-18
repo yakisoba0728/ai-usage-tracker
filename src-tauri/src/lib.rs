@@ -3,6 +3,7 @@ pub mod config;
 pub mod http;
 pub mod jwt;
 pub mod model;
+pub mod oauth;
 pub mod providers;
 pub mod scheduler;
 pub mod secrets;

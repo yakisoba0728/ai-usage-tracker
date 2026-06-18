@@ -1,11 +1,14 @@
-//! Claude (via Claude Code) — modeled on claude-meter (MIT).
+//! Claude (via Claude Code) — modeled on claude-meter (MIT), with self-refresh.
 //! Reads the OAuth token Claude Code stores (macOS Keychain service
-//! `Claude Code-credentials`, else `~/.claude/.credentials.json`), checks expiry,
-//! and calls `api.anthropic.com/api/oauth/usage` + `/api/oauth/profile`.
-//! No self-refresh: the Claude Code CLI rotates the token.
+//! `Claude Code-credentials`, else `~/.claude/.credentials.json`); when the
+//! access token is expired it refreshes via Anthropic OAuth using Claude Code's
+//! PUBLIC client_id (no own OAuth app) and writes the rotated token back so the
+//! CLI and app stay in sync. Then calls `api.anthropic.com/api/oauth/usage` +
+//! `/api/oauth/profile`. This removes the "run `claude` once" requirement.
 
 use async_trait::async_trait;
 use serde::Deserialize;
+use serde_json::Value;
 
 use crate::http;
 use crate::model::{LimitWindow, Provider, ServiceUsage};
@@ -14,6 +17,7 @@ use crate::secrets;
 
 const API_BASE: &str = "https://api.anthropic.com";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
+const KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
 
 /// The credential blob (keychain value or file content).
 #[derive(Deserialize)]
@@ -22,29 +26,33 @@ struct CredBlob {
     oauth: Option<OAuthCreds>,
     // legacy flat shape fallback
     #[serde(rename = "accessToken", default)] flat_access: Option<String>,
-    #[serde(rename = "expiresAt", default)] flat_expires: Option<i64>,
+    #[serde(rename = "refreshToken", default)] flat_refresh: Option<String>,
+    #[serde(rename = "expiresAt", default)] flat_expires: i64,
     #[serde(rename = "subscriptionType", default)] flat_sub: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct OAuthCreds {
     #[serde(rename = "accessToken")] access_token: String,
+    #[serde(rename = "refreshToken", default)] refresh_token: Option<String>,
     #[serde(rename = "expiresAt", default)] expires_at: i64,
     #[serde(rename = "subscriptionType", default)] subscription_type: Option<String>,
 }
 
 struct ResolvedCreds {
     access_token: String,
+    refresh_token: Option<String>,
     expires_at: i64,
     subscription_type: Option<String>,
 }
 
-fn resolve_creds(blob: serde_json::Value) -> Result<ResolvedCreds, ProviderError> {
-    let parsed: CredBlob = serde_json::from_value(blob)
-        .map_err(|e| ProviderError::Parse(format!("claude creds: {e}")))?;
+fn resolve_creds(blob: Value) -> Result<ResolvedCreds, ProviderError> {
+    let parsed: CredBlob =
+        serde_json::from_value(blob).map_err(|e| ProviderError::Parse(format!("claude creds: {e}")))?;
     if let Some(o) = parsed.oauth {
         return Ok(ResolvedCreds {
             access_token: o.access_token,
+            refresh_token: o.refresh_token,
             expires_at: o.expires_at,
             subscription_type: o.subscription_type,
         });
@@ -54,7 +62,8 @@ fn resolve_creds(blob: serde_json::Value) -> Result<ResolvedCreds, ProviderError
         .flat_access
         .map(|access_token| ResolvedCreds {
             access_token,
-            expires_at: parsed.flat_expires.unwrap_or(0),
+            refresh_token: parsed.flat_refresh,
+            expires_at: parsed.flat_expires,
             subscription_type: parsed.flat_sub,
         })
         .ok_or_else(|| ProviderError::Parse("claude creds: no accessToken".into()))
@@ -146,6 +155,65 @@ fn normalize(raw: &UsageResponse) -> Vec<LimitWindow> {
     ws
 }
 
+/// Build the refreshed credential blob, preserving all other fields (scopes,
+/// plan, tier). Pure (no I/O) so it can be unit-tested.
+fn merge_refresh(
+    orig: &Value,
+    access_token: &str,
+    refresh_token: &str,
+    expires_at: i64,
+) -> Result<Value, ProviderError> {
+    let mut blob = orig.clone();
+    let target: &mut serde_json::map::Map<String, Value> = if let Some(o) =
+        blob.get_mut("claudeAiOauth").and_then(|v| v.as_object_mut())
+    {
+        o
+    } else if let Some(obj) = blob.as_object_mut() {
+        obj
+    } else {
+        return Err(ProviderError::Parse(
+            "claude creds: cannot write back (unexpected blob shape)".into(),
+        ));
+    };
+    target.insert("accessToken".into(), serde_json::json!(access_token));
+    target.insert("refreshToken".into(), serde_json::json!(refresh_token));
+    target.insert("expiresAt".into(), serde_json::json!(expires_at));
+    Ok(blob)
+}
+
+fn write_creds(s: &str) -> Result<(), ProviderError> {
+    #[cfg(target_os = "macos")]
+    {
+        let acct = std::env::var("USER").unwrap_or_default();
+        let out = std::process::Command::new("/usr/bin/security")
+            .args([
+                "add-generic-password",
+                "-s",
+                KEYCHAIN_SERVICE,
+                "-a",
+                &acct,
+                "-w",
+                s,
+                "-U",
+            ])
+            .output()
+            .map_err(|e| ProviderError::Network(format!("security write: {e}")))?;
+        if !out.status.success() {
+            return Err(ProviderError::Network(format!(
+                "security write failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            )));
+        }
+        return Ok(());
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let p = secrets::claude_token_path();
+        std::fs::write(&p, s).map_err(|e| ProviderError::Network(format!("write {}: {e}", p.display())))?;
+        Ok(())
+    }
+}
+
 #[async_trait]
 impl crate::providers::ProviderApi for ClaudeProvider {
     fn key(&self) -> Provider {
@@ -153,12 +221,30 @@ impl crate::providers::ProviderApi for ClaudeProvider {
     }
 
     async fn fetch(&self) -> Result<ServiceUsage, ProviderError> {
-        let creds = resolve_creds(secrets::read_claude_creds_json()?)?;
+        let blob = secrets::read_claude_creds_json()?;
+        let mut creds = resolve_creds(blob.clone())?;
         let now_ms = chrono::Utc::now().timestamp_millis();
+
         if creds.expires_at > 0 && creds.expires_at < now_ms {
-            return Err(ProviderError::Expired(
-                "Claude Code token expired — run `claude` once to refresh".into(),
-            ));
+            let Some(rt) = creds.refresh_token.clone() else {
+                return Err(ProviderError::Expired(
+                    "Claude Code token expired and no refresh_token available".into(),
+                ));
+            };
+            let form = [
+                ("grant_type", "refresh_token"),
+                ("refresh_token", rt.as_str()),
+                ("client_id", crate::oauth::CLAUDE_CLIENT_ID),
+            ];
+            let refreshed =
+                crate::oauth::refresh_form(&self.http, crate::oauth::CLAUDE_TOKEN_URL, &form).await?;
+            let new_expires = refreshed
+                .expires_in
+                .map(|s| now_ms + (s as i64) * 1000)
+                .unwrap_or(0);
+            let new_blob = merge_refresh(&blob, &refreshed.access_token, &refreshed.refresh_token, new_expires)?;
+            let _ = write_creds(&serde_json::to_string(&new_blob).unwrap_or_default());
+            creds.access_token = refreshed.access_token;
         }
 
         let h = [("anthropic-version", ANTHROPIC_VERSION)];
@@ -199,14 +285,28 @@ mod tests {
     }
 
     #[test]
-    fn resolve_nested_and_flat() {
-        let nested = serde_json::json!({"claudeAiOauth":{"accessToken":"a","expiresAt":0,"subscriptionType":"max"}});
+    fn resolve_nested_and_flat_including_refresh() {
+        let nested = serde_json::json!({"claudeAiOauth":{"accessToken":"a","refreshToken":"r","expiresAt":0,"subscriptionType":"max"}});
         let r = resolve_creds(nested).unwrap();
         assert_eq!(r.access_token, "a");
+        assert_eq!(r.refresh_token.as_deref(), Some("r"));
         assert_eq!(r.subscription_type.as_deref(), Some("max"));
 
         let flat = serde_json::json!({"accessToken":"b","expiresAt":0});
         let r2 = resolve_creds(flat).unwrap();
         assert_eq!(r2.access_token, "b");
+        assert!(r2.refresh_token.is_none());
+    }
+
+    #[test]
+    fn merge_refresh_preserves_other_fields() {
+        let blob = serde_json::json!({"claudeAiOauth":{"accessToken":"old","refreshToken":"oldr","expiresAt":1,"scopes":["user:profile"],"subscriptionType":"max","rateLimitTier":"t"}});
+        let merged = merge_refresh(&blob, "new", "newr", 999).unwrap();
+        let o = &merged["claudeAiOauth"];
+        assert_eq!(o["accessToken"], "new");
+        assert_eq!(o["refreshToken"], "newr");
+        assert_eq!(o["expiresAt"], 999);
+        assert_eq!(o["subscriptionType"], "max"); // preserved
+        assert_eq!(o["scopes"][0], "user:profile"); // preserved
     }
 }

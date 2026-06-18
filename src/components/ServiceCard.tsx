@@ -71,6 +71,11 @@ export function ServiceCard({ service }: ServiceCardProps) {
                 />
               ))}
             </div>
+          ) : service.error ? (
+            <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
+              <AlertCircle className="mt-0.5 shrink-0 text-muted-foreground/60" />
+              <span className="break-words">{service.error.trim()}</span>
+            </p>
           ) : (
             <p className="text-xs text-muted-foreground">
               No usage windows reported.

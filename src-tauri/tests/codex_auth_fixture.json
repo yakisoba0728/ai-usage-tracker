@@ -1,0 +1,10 @@
+{
+  "auth_mode": null,
+  "tokens": {
+    "id_token": "HEADER.eyJlbWFpbCI6Im1lQGV4LmNvbSIsIm5hbWUiOiJNZSIsImh0dHBzOi8vYXBpLm9wZW5haS5jb20vYXV0aCI6eyJwbGFuIjoicGx1cyJ9fQ.SIG",
+    "access_token": "a.b.c",
+    "refresh_token": "r",
+    "account_id": "acct_1"
+  },
+  "last_refresh": "2026-06-18T12:34:56.789Z"
+}

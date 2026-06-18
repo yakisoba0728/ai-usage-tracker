@@ -1,5 +1,11 @@
 //! Provider trait + shared error type + parallel `fetch_all`.
 
+pub mod claude;
+pub mod codex;
+pub mod copilot;
+pub mod cursor;
+pub mod gemini;
+
 use async_trait::async_trait;
 use futures::future::join_all;
 

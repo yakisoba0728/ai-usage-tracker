@@ -1451,3 +1451,19 @@ Plan complete and saved to `docs/superpowers/plans/2026-06-18-ai-usage-tracker.m
 2. **Inline Execution** — execute tasks in this session using executing-plans, batch execution with checkpoints.
 
 Which approach?
+
+---
+
+## Plan Amendments — advisor review (2026-06-18)
+
+Code-level deltas (from advisor review + live verification) applied during implementation; see spec "Revision 2" for rationale:
+
+- **T3 secrets:** macOS Claude via `/usr/bin/security` (account is the OS user, not empty); **drop the `keyring` crate**. Codex: no `auth_mode` gate; honor `$CODEX_HOME`.
+- **T4 jwt:** tolerate padded base64url.
+- **T2 `fetch_all`:** parallel via `futures::future::join_all`.
+- **T5/T6/T7 http.rs:** `reqwest` features `["rustls-tls","json"]`; client `.timeout(15s).connect_timeout(5s)`. Codex (T6): add `User-Agent` + `chatgpt-account-id` header; capture the live shape now.
+- **T8:** capabilities `core:tray:*` + window `allow-hide`; `RunEvent::ExitRequested => prevent_exit()`; `app.listen("usage-updated")` → `tray.set_title`.
+- **New providers (Extend phase):** Copilot (gh token + billing API) and Cursor (state.vscdb + Connect-RPC), each with fixtures + unit tests.
+
+### Execution waves (~5 dispatches)
+W1 scaffold (done) → W2 core foundation (one agent: model+trait+errors+secrets+jwt+http; freeze shared files) → W3 three parallel provider agents (claude/codex/gemini) → W4 integration (scheduler+commands+tray+main+caps) → W5 frontend+build. Copilot/Cursor added as a parallel extension wave after W3.

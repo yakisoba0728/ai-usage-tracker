@@ -295,3 +295,30 @@ docs/superpowers/plans/     # implementation plan
 - Additional providers (Cursor, Copilot, etc.).
 - Notifications on approaching limits.
 - In-app onboarding that triggers each CLI's login.
+
+---
+
+## Revision 2 — Advisor review + live verification (2026-06-18)
+
+Incorporates the senior-advisor review and live checks on the dev machine. Supersedes any conflicting earlier text.
+
+### Secrets / auth (§6.1, §6.2, §11)
+- **Claude on macOS: shell out to `/usr/bin/security find-generic-password -s "Claude Code-credentials" -w`** (matches claude-meter). The Keychain entry's account is the OS username (verified live: `"acct"="yakisoba"`), so the `keyring` crate's `Entry::new(service, "")` returns NotFound. The `keyring` crate is **dropped** (it also ships a mock backend without explicit features). Linux/Windows still read `~/.claude/.credentials.json`.
+- **Codex:** do NOT gate on `auth_mode=="chatgpt"` (verified top-level `auth_mode` is null on a live file while tokens are present). Use presence of `tokens.access_token`. Honor `$CODEX_HOME` (default `~/.codex`). Send a browser-like `User-Agent` and `chatgpt-account-id: <tokens.account_id>` header (Cloudflare-fronted endpoint). Capture the live `/codex/usage` shape during implementation (not deferred).
+- **JWT decode (§6.2 Codex):** tolerate base64url WITH padding (strip `=` / try all engines).
+
+### HTTP (§5.2, §11)
+- `reqwest` must enable the `json` feature (Gemini `.json(&payload)`); use `rustls-tls`. Shared client sets `.timeout(15s).connect_timeout(5s)` so a hung provider can't block its slot (§9 isolation).
+- **`fetch_all` runs providers in parallel** (`futures::future::join_all` / `JoinSet`), not sequentially.
+
+### Tauri integration (§5.1, §8)
+- Tray requires explicit `core:tray:*` capability permissions; window needs `allow-hide`; **stay-alive** needs `RunEvent::ExitRequested { api, .. } => api.prevent_exit()`, not only window-close prevention.
+- Tray title driven by an `app.listen("usage-updated", …)` handler in `setup` calling `tray.set_title(max%)`.
+
+### Scope expansion — additional providers (new §6.4, §6.5)
+- **GitHub Copilot (HIGH):** reuse `gh` CLI token (`~/.config/gh/hosts.yml`; macOS keychain `github.com` fallback). `GET https://api.github.com/users/{user}/settings/billing/ai_credit/usage?year=&month=` (fallback `.../premium_request/usage`). Headers `Authorization: token <gh-token>`, `X-GitHub-Api-Version: 2026-03-10`, `Accept: application/vnd.github+json`. Real `netQuantity`; `remaining = plan_allowance − ΣnetQuantity`. **Caveat:** needs "Plan: read" scope; gh's default OAuth token may lack it → surface a "create a fine-grained PAT" hint on 403.
+- **Cursor (MEDIUM, "unstable" badge):** read the Cursor sign-in token from `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` (SQLite via `rusqlite`). `POST https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage` with `Authorization: Bearer <token>`, `Content-Type: application/json`, `Connect-Protocol-Version: 1`. Returns `planUsage` (cents) + on-demand hints; defensive parsing only. (Not live-testable here — Cursor not installed.)
+- **Out of v1:** Windsurf, Augment (no individual real-usage endpoint behind local creds).
+
+### Tests (§10)
+- Add `StubProvider` to prove `fetch_all` error-isolation; add Gemini refresh-success path, Codex 401/expiry path, scheduler backoff test.

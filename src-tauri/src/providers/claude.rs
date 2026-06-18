@@ -115,7 +115,7 @@ fn window(label: &str, w: &Window) -> LimitWindow {
 }
 
 /// Pure normalization (unit-testable, no network).
-pub fn normalize(raw: &UsageResponse) -> Vec<LimitWindow> {
+fn normalize(raw: &UsageResponse) -> Vec<LimitWindow> {
     let mut ws = Vec::new();
     if let Some(w) = &raw.five_hour {
         ws.push(window("5-hour", w));

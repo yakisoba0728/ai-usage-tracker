@@ -58,7 +58,7 @@ fn read_tokens() -> Result<Tokens, ProviderError> {
 }
 
 /// Pure: build a single credits window from a defensively-parsed usage blob.
-pub fn normalize(u: &CodexUsage) -> Vec<LimitWindow> {
+fn normalize(u: &CodexUsage) -> Vec<LimitWindow> {
     let limit = match (u.used_credits, u.remaining_credits) {
         (Some(used), Some(rem)) => Some(used + rem),
         _ => None,

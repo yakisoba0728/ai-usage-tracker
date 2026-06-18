@@ -69,7 +69,7 @@ fn client_metadata(creds: &OauthCreds) -> Result<(String, String), ProviderError
 }
 
 /// Build the refresh form (unit-testable, no network).
-pub fn refresh_form(creds: &OauthCreds) -> Result<Vec<(String, String)>, ProviderError> {
+fn refresh_form(creds: &OauthCreds) -> Result<Vec<(String, String)>, ProviderError> {
     let (id, sec) = client_metadata(creds)?;
     Ok(vec![
         ("grant_type".into(), "refresh_token".into()),
@@ -80,7 +80,7 @@ pub fn refresh_form(creds: &OauthCreds) -> Result<Vec<(String, String)>, Provide
 }
 
 /// Pure: buckets → LimitWindows.
-pub fn normalize(resp: &QuotaResp) -> Vec<LimitWindow> {
+fn normalize(resp: &QuotaResp) -> Vec<LimitWindow> {
     resp.buckets
         .iter()
         .filter_map(|b| {

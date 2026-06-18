@@ -80,7 +80,7 @@ fn read_cursor_token() -> Result<String, ProviderError> {
 
 /// Pure: plan usage → window. plan_usage/max_plan_usage give a percentage when
 /// both are present.
-pub fn normalize(u: &CursorUsage) -> Vec<LimitWindow> {
+fn normalize(u: &CursorUsage) -> Vec<LimitWindow> {
     let used_percent = match (u.plan_usage, u.max_plan_usage) {
         (Some(used), Some(max)) if max > 0.0 => Some((used / max * 100.0) as f32),
         _ => None,

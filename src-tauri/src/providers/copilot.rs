@@ -80,7 +80,7 @@ fn gh_token() -> Result<String, ProviderError> {
 }
 
 /// Pure: sum netQuantity → used credits. Allowance/percent omitted (plan-dependent).
-pub fn normalize(resp: &BillingResp) -> Vec<LimitWindow> {
+fn normalize(resp: &BillingResp) -> Vec<LimitWindow> {
     let used: f64 = resp.usage_items.iter().filter_map(|i| i.net_quantity).sum();
     vec![LimitWindow {
         label: "AI credits used (month)".into(),

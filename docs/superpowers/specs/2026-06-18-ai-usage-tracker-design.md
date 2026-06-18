@@ -12,17 +12,17 @@ A cross-platform desktop application built on **Tauri 2** that shows **live, rea
 dashboard.
 
 Usage data is obtained by reusing the **OAuth tokens already stored locally by
-each service's official CLI** (Claude Code, Codex CLI, Gemini CLI), refreshing
-them with their published client metadata, and calling each provider's
-internal/unofficial usage endpoints directly. The app **never registers its own
-OAuth client** and **never estimates usage from local token logs**.
+each service's official CLI** (Claude Code, Codex CLI, Gemini CLI) and calling
+each provider's internal/unofficial usage endpoints directly. The app **never
+registers its own OAuth client** and **never estimates usage from local token
+logs**. Token refresh (where implemented) reuses each CLI's *already-stored,
+publicly visible* client metadata — it does not invent new credentials.
 
 ## 2. Goals & Non-Goals
 
 ### Goals
 - Display real server-side usage for Claude, Codex, and Gemini subscriptions.
-- Reuse existing CLI OAuth tokens (read stored token files / OS keychain);
-  refresh tokens with the official CLI client metadata (no self-issued OAuth app).
+- Reuse existing CLI OAuth tokens (read stored token files / OS keychain).
 - Tray-resident + dashboard hybrid UX; always-current tray indicator.
 - Background auto-polling (default 5 min, user-configurable).
 - Public distribution on macOS, Linux, and Windows.
@@ -46,21 +46,15 @@ OAuth client** and **never estimates usage from local token logs**.
 | Refresh | Background auto-polling (5 min, configurable) | Tray must stay current without user action. |
 | Frontend | React 19 + TS + Tailwind + shadcn/ui | Mainstream, strong dashboard/chart ecosystem, fast for Tauri. |
 | Reuse strategy | Port reference repos' **API contracts** to Rust; do **not** vendor Python/TS code | Bundling Python is impractical in Tauri; TS-in-frontend fails on CORS + keychain + security. |
+| Token refresh | **Per-provider** (not cross-cutting) | Claude/Codex = read-only + hint on expiry (matches proven `claude-meter`); Gemini = self-refresh (matches `gemini-cli-usage`). |
 
-## 4. Reference Repositories (authoritative API spec)
+## 4. Reference Implementations (authoritative API spec, ported to Rust)
 
-These are used as the source of truth for **endpoints, auth headers, refresh
-flows, and response field shapes**. Their code is ported to Rust, not bundled.
-
-- **Claude** — `m13v/claude-meter`, `eddmann/ClaudeMeter`: server-side usage
-  endpoints; fields `five_hour`, `seven_day`, `seven_day_sonnet/opus/oauth_apps`,
-  `extra_usage.used_credits`.
-- **Codex** — OpenAI Codex CLI source (`codex-rs/login`) + community usage tools:
-  `GET https://chatgpt.com/backend-api/codex/usage` with `~/.codex/auth.json`
-  bearer token.
-- **Gemini** — `wakamex/gemini-cli-usage`: mirrors Gemini CLI's Google Code
-  Assist flow (`loadCodeAssist`, `retrieveUserQuota`) using
-  `~/.gemini/oauth_creds.json`.
+| Provider | Reference | License | Used as source of truth for |
+|---|---|---|---|
+| Claude | `m13v/claude-meter` (`src/oauth.rs`, `src/models.rs`) — **Rust** | MIT | Keychain read, `/api/oauth/usage` + `/api/oauth/profile`, `UsageResponse` shape, no-refresh model. **Closely modeled.** |
+| Gemini | `wakamex/gemini-cli-usage` (`src/gemini_cli_usage/__init__.py`) — Python | MIT | OAuth refresh, Code Assist `loadCodeAssist`/`retrieveUserQuota`, bucket parsing. |
+| Codex | `openai/codex` (`codex-rs/login`) — Rust | Apache-2.0 | `~/.codex/auth.json` token shape, JWT claims, `CLIENT_ID`/refresh-URL locations (for future self-refresh). |
 
 ## 5. Architecture
 
@@ -75,67 +69,62 @@ flows, and response field shapes**. Their code is ported to Rust, not bundled.
 React (webview)  ──IPC──▶  Rust core
                           ├─ scheduler   (tokio interval, parallel provider fetch)
                           ├─ providers   (Provider trait + Claude/Codex/Gemini)
-                          ├─ secrets     (fs + keychain credential read)
-                          ├─ refresh     (OAuth refresh w/ official client metadata)
-                          └─ http        (reqwest + rustls, per-provider headers)
+                          │     └─ each provider owns its token-read + refresh + HTTP
+                          ├─ secrets     (cross-platform credential file/keychain read)
+                          └─ http        (reqwest + rustls, shared client, per-provider headers)
 ```
 - **Secrets boundary:** access/refresh tokens are read and used **inside Rust
   only**. They are never serialized to the frontend. Only non-secret usage
   snapshots cross IPC.
+- **Refresh is per-provider:** Claude/Codex read the current token and surface a
+  hint on expiry; Gemini refreshes its token itself (see §6.3).
 
 ### 5.3 IPC
 - Commands (frontend → backend): `get_usage`, `refresh_now`, `get_config`,
   `set_config`.
-- Events (backend → frontend): `usage-updated` (full snapshot), `provider-error`
-  (per-provider, with actionable hint).
+- Events (backend → frontend): `usage-updated` (full snapshot).
 
-## 6. Providers (detailed contracts)
+## 6. Providers (source-verified contracts)
 
-> Reverse-engineered endpoints shift over time. Items marked **[confirm]** must be
-> verified against the reference repo / official CLI source during implementation;
-> the overall flow and auth model are fixed by this spec.
-
-### 6.1 Claude (via Claude Code)
+### 6.1 Claude (via Claude Code) — modeled on `claude-meter` (MIT)
 
 - **Token source**
-  - macOS: **Keychain** (read via `keyring` crate). Service/account name
-    **[confirm]** against Claude Code source.
+  - macOS: **Keychain**, service `Claude Code-credentials`, read via the `keyring`
+    crate (claude-meter shells out to `/usr/bin/security`; we use `keyring` for
+    cross-platform cleanliness). First read may prompt macOS for keychain access;
+    user clicks *Always Allow*.
   - Linux/Windows: `~/.claude/.credentials.json` (mode `0600`), or
     `$CLAUDE_CONFIG_DIR/.credentials.json`.
-- **Credential shape**
+- **Credential shape** (the keychain value / file content is this JSON):
   ```json
-  {
-    "claudeAiOauth": {
-      "accessToken": "sk-ant-oat01-…",
-      "refreshToken": "sk-ant-ort01-…",
-      "expiresAt": 1775906657084,
-      "scopes": ["user:inference", …],
-      "subscriptionType": "max",
-      "rateLimitTier": "default_claude_max_5x"
-    }
-  }
+  {"claudeAiOauth": {
+    "accessToken": "sk-ant-oat01-…",
+    "refreshToken": "sk-ant-ort01-…",
+    "expiresAt": 1778299177154,
+    "scopes": ["user:profile", "user:inference", …],
+    "subscriptionType": "max",
+    "rateLimitTier": "default_claude_max_20x"
+  }}
   ```
-  (Older flat shape `{accessToken, refreshToken, expiresAt, …}` must also be
-  tolerated.)
-- **Refresh:** `POST` Anthropic OAuth token endpoint with
-  `grant_type=refresh_token` + Claude Code's public `client_id` **[confirm
-  endpoint + client_id]**.
-- **Usage endpoint:** `GET https://api.anthropic.com/api/oauth/usage`
-  (preferred; fallback `claude.ai/api/organizations/{org}/usage`).
-  Header `Authorization: Bearer <accessToken>`.
-- **Usage fields → windows:**
-  - `five_hour` → "5시간" window
-  - `seven_day` → "7일" window
-  - `seven_day_sonnet` / `seven_day_opus` / `seven_day_oauth_apps` → sub-windows
-  - `extra_usage.used_credits` → extra-usage indicator
-  Each with `used_percentage` and `resets_at`.
-- **Plan display:** `subscriptionType` (pro / max / …).
+- **Endpoints** (base `https://api.anthropic.com`), headers `Authorization: Bearer
+  <accessToken>`, `Accept: application/json`, `anthropic-version: 2023-06-01`:
+  - `GET /api/oauth/usage` → rolling-window quotas + `extra_usage`.
+  - `GET /api/oauth/profile` → `{account:{email}, organization:{uuid}}`.
+- **Response model** (`UsageResponse`):
+  ```
+  five_hour, seven_day, seven_day_sonnet, seven_day_opus,
+  seven_day_oauth_apps, seven_day_omelette, seven_day_cowork
+      : Option<Window{ utilization: f64, resets_at: Option<DateTime<Utc>> }>
+  extra_usage : Option<{ is_enabled, monthly_limit, used_credits, utilization, currency }>
+  ```
+- **Refresh:** **none.** The running Claude Code CLI rotates the token; we read
+  whatever is stored. If `expiresAt < now`, bail with a hint to run `claude` once.
+- **Plan display:** `subscriptionType` (pro / max / …) + `account.email`.
 
 ### 6.2 Codex (via Codex CLI)
 
-- **Token source:** `~/.codex/auth.json`, or OS keyring when
-  `cli_auth_credentials_store` is set.
-- **Credential shape**
+- **Token source:** `~/.codex/auth.json` (or OS keyring when
+  `cli_auth_credentials_store` is set).
   ```json
   {
     "auth_mode": "chatgpt",
@@ -148,29 +137,40 @@ React (webview)  ──IPC──▶  Rust core
     "last_refresh": "2026-06-18T12:34:56.789Z"
   }
   ```
-- **Plan/identity:** decode `id_token` JWT payload (no verification of signature;
-  metadata only) for `email`, ChatGPT plan, `chatgpt_account_id`.
-- **Refresh:** `POST` OpenAI OAuth token endpoint with `refresh_token` + Codex's
-  public `client_id` **[confirm endpoint + client_id]**.
-- **Usage endpoint:** `GET https://chatgpt.com/backend-api/codex/usage`
-  with `Authorization: Bearer <access_token>`. May require Codex-CLI-style
-  `User-Agent` / device headers **[confirm]**.
-- **Usage fields → windows:** remaining/used credits + reset window
-  **[confirm exact shape]**; normalize to `LimitWindow`.
+- **Identity/plan:** decode `id_token` JWT payload (metadata only; no signature
+  verification) → `email`, ChatGPT plan, `chatgpt_account_id`.
+- **Usage endpoint:** `GET https://chatgpt.com/backend-api/codex/usage`,
+  `Authorization: Bearer <access_token>`. Exact response shape **[confirm against
+  a live response at implementation]**; parse defensively (capture raw JSON,
+  extract remaining/used credits + reset window where present).
+- **Refresh:** **none in v1** (read-only + hint "run `codex`"). Future enhancement:
+  self-refresh via the `CLIENT_ID` constant in `codex-rs/login/src/auth/` and
+  `https://auth.openai.com/oauth/token` (`grant_type=refresh_token`).
 
-### 6.3 Gemini (via Gemini CLI)
+### 6.3 Gemini (via Gemini CLI) — ported from `gemini-cli-usage` (MIT)
 
-- **Token source:** `~/.gemini/oauth_creds.json` (access/refresh tokens, expiry).
-- **Refresh:** Google OAuth token endpoint with `refresh_token` + Gemini CLI's
-  installed client metadata. Fallback env vars `GEMINI_OAUTH_CLIENT_ID` /
-  `GEMINI_OAUTH_CLIENT_SECRET`.
-- **Usage flow:** mirror Gemini CLI's internal Code Assist API:
-  1. `loadCodeAssist` → resolve internal user/project ID.
-  2. `retrieveUserQuota` → per-model quota: `used_percent`, reset time, optional
-     `remainingAmount`.
-  - Base endpoint **[confirm]** (e.g. `cloudcode-pa.googleapis.com` internal).
-- **Usage fields → windows:** one `LimitWindow` per model
-  (e.g. `gemini-2.5-pro`, `gemini-2.5-flash-lite`) with used % and reset.
+- **Token source:** `~/.gemini/oauth_creds.json`
+  (`{access_token, refresh_token, expiry_date(ms), client_id?, client_secret?, …}`).
+- **Self-refresh** (token is short-lived):
+  1. Resolve client metadata, in priority:
+     env `GEMINI_OAUTH_CLIENT_ID`/`GEMINI_OAUTH_CLIENT_SECRET` → the creds file's
+     `client_id`/`client_secret` → extracted from the installed Gemini CLI's
+     `code_assist/oauth2.js` (`const OAUTH_CLIENT_ID = '…';`).
+  2. `POST https://oauth2.googleapis.com/token` form-encoded
+     `grant_type=refresh_token&refresh_token=…&client_id=…&client_secret=…`.
+  3. Update `access_token`/`expiry_date` in memory (best-effort write-back to the
+     file). Refresh proactively when `now >= expiry_date - 60s`.
+- **Quota flow** (base `https://cloudcode-pa.googleapis.com/v1internal`, headers
+  `Authorization: Bearer <access_token>`, `Content-Type: application/json`):
+  1. `POST …/v1internal:loadCodeAssist`
+     `{cloudaicompanionProject: <project_id?>, metadata:{ideType:"IDE_UNSPECIFIED",platform:"PLATFORM_UNSPECIFIED",pluginType:"GEMINI"}}`
+     → `{cloudaicompanionProject, currentTier, paidTier}`.
+  2. `POST …/v1internal:retrieveUserQuota` `{project: <project_id>}`
+     → `{buckets:[{modelId, remainingFraction, remainingAmount?, resetTime, tokenType}]}`.
+  3. Per bucket → `used_pct = (1 - remainingFraction) * 100`; `limit =
+     remainingAmount / remainingFraction` when both present.
+- **Auth gating:** only `oauth-personal` (Google login) auth supports quota;
+  other Gemini auth types → "unsupported" state.
 
 ## 7. Unified Data Model
 
@@ -181,13 +181,14 @@ pub struct ServiceUsage {
     pub provider: Provider,
     pub connected: bool,
     pub plan: Option<String>,
+    pub account: Option<String>,    // email / account id, for display only
     pub error: Option<String>,
     pub windows: Vec<LimitWindow>,
 }
 
 pub struct LimitWindow {
     pub label: String,             // "5시간" | "7일" | "gemini-2.5-pro" | "Codex credits"
-    pub used_percent: Option<f32>, // only when server provides it
+    pub used_percent: Option<f32>, // only when the server provides it
     pub resets_at: Option<i64>,    // epoch seconds
     pub used: Option<f64>,         // absolute value when available
     pub limit: Option<f64>,
@@ -218,34 +219,37 @@ pub struct UsageSnapshot {
 
 - **Isolation:** each provider runs in its own fallible path; errors are captured
   per-provider and do not abort the scheduler or other providers.
-- **Refresh failure:** mark provider `connected=false`, surface a hint, keep last
-  known snapshot, apply backoff on repeated auth/rate-limit (401/429) responses.
+- **Auth/expiry:** Claude/Codex return a structured "token expired / not logged
+  in" error with an actionable hint (run the CLI). Gemini refreshes; if refresh
+  fails, same hint treatment. Repeated 401/429 → backoff in the scheduler, last
+  snapshot retained.
 - **Secret handling:** tokens read on demand in Rust; never logged, never sent to
   the frontend, never transmitted except to the provider's own endpoints.
 - **No telemetry:** the only outbound network calls are to the three providers'
-  own usage endpoints (and their OAuth token endpoints for refresh).
+  own usage/token endpoints.
 - **Distribution:** code-signed builds per platform; no secret bundling.
 
 ## 10. Testing
 
 - **Rust unit tests (the testable surface):**
-  - Per-provider response parsing from fixture JSON (real shapes captured from
-    reference repos / live responses) → `ServiceUsage` normalization.
-  - Credential file parsing (modern nested + legacy flat Claude shape; Codex
-    shape) and keychain mock.
-  - OAuth refresh request construction (correct endpoint, client_id,
-    grant_type) without network.
+  - Per-provider response parsing from fixture JSON (captured from reference
+    repos / live responses) → `ServiceUsage` normalization.
+  - Claude keychain-blob + file parsing (modern nested shape).
+  - Codex `auth.json` parsing + JWT-claims decode (expiry, plan, email).
+  - Gemini OAuth refresh request construction + `loadCodeAssist`/`retrieveUserQuota`
+    response parsing + bucket math, **without** network.
   - Scheduler backoff / error-isolation behavior with stub providers.
 - **Manual / integration (implementation phase):** validate live fetch with real
-  authenticated accounts for each provider on macOS (keychain path) and at least
-  one file-based path.
+  authenticated accounts per provider on macOS (keychain path) and at least one
+  file-based path.
 
 ## 11. Tech Stack
 
 - **Shell:** Tauri 2 (stable).
 - **Rust:** `reqwest` (rustls), `keyring`, `serde`/`serde_json`, `tokio`,
-  `thiserror`, `tracing`. Optional plugins: `tauri-plugin-autostart` (launch at
-  login), `tauri-plugin-store` (settings).
+  `thiserror`, `tracing`, `jsonwebtoken` (JWT decode, no-verify), `chrono`.
+  Optional plugins: `tauri-plugin-autostart` (launch at login),
+  `tauri-plugin-store` (settings).
 - **Frontend:** React 19, Vite, TypeScript, Tailwind CSS, shadcn/ui.
 
 ## 12. Proposed File Layout
@@ -256,35 +260,37 @@ src-tauri/
     main.rs                 # Tauri app bootstrap, tray, commands registration
     commands.rs             # IPC commands (get_usage, refresh_now, get/set_config)
     scheduler.rs            # tokio interval, parallel fetch, event emission
-    providers/
-      mod.rs                # Provider trait, ServiceUsage/UsageSnapshot types
-      claude.rs
-      codex.rs
-      gemini.rs
-    secrets.rs              # fs + keychain credential reading
-    refresh.rs              # OAuth refresh per provider (official client metadata)
+    model.rs                # Provider/ServiceUsage/UsageSnapshot/LimitWindow
     http.rs                 # shared reqwest client + per-provider header policy
+    secrets.rs              # cross-platform keychain/file credential read
+    providers/
+      mod.rs                # Provider trait
+      claude.rs             # keychain/file read + /api/oauth/usage (no refresh)
+      codex.rs              # auth.json read + id_token decode + codex/usage (no refresh)
+      gemini.rs             # oauth_creds read + self-refresh + Code Assist quota
     config.rs               # settings (poll interval, autostart, enabled providers)
 src/                        # React frontend
   App.tsx
-  components/               # Dashboard, ServiceCard, Gauge, Header, Tray hook
+  components/               # Dashboard, ServiceCard, Gauge, Header
   hooks/                    # useUsage (command + event listener)
   lib/                      # ipc wrappers, types (mirroring Rust model)
 docs/superpowers/specs/     # this spec
+docs/superpowers/plans/     # implementation plan
 ```
 
 ## 13. Open Questions (to resolve during implementation)
 
-1. Exact macOS Keychain service/account name for Claude Code credentials.
-2. Exact OAuth token-refresh endpoints + public `client_id` values for Claude
-   and Codex (extract from official CLI source).
-3. Exact Codex usage response shape and any required device headers.
-4. Exact Gemini Code Assist internal base endpoint + request payloads.
-5. Whether to expose poll-interval + autostart in a Settings UI in v1 or ship
+1. Exact Codex `/backend-api/codex/usage` response shape (parse defensively; pin
+   fields from a live response).
+2. macOS keychain permission UX on first read (expected *Always Allow* prompt);
+   confirm `keyring` crate reads the `Claude Code-credentials` service without
+   issue on macOS.
+3. Whether to expose poll-interval + autostart in a Settings UI in v1 or ship
    defaults first.
 
-## 14. Out of Scope / Future
+## 14. Future Enhancements (explicitly out of v1)
 
+- Codex self-refresh (via codex `CLIENT_ID` + `auth.openai.com/oauth/token`).
 - Historical trends (would add SQLite + snapshotting).
 - Additional providers (Cursor, Copilot, etc.).
 - Notifications on approaching limits.

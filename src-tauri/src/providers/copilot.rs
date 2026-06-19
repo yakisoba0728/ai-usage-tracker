@@ -38,6 +38,8 @@ const USER_AGENT: &str = "GitHubCopilotChat/0.35.0";
 #[derive(Deserialize, Default)]
 struct CopilotUsageResp {
     #[serde(default)]
+    login: Option<String>,
+    #[serde(default)]
     copilot_plan: Option<String>,
     #[serde(default)]
     quota_reset_date: Option<String>,
@@ -137,8 +139,14 @@ fn parse_reset_date(s: &str) -> Option<i64> {
         .and_then(|d| d.and_hms_opt(0, 0, 0).map(|ndt| ndt.and_utc().timestamp()))
 }
 
-/// Pure: quota_snapshots → LimitWindows, sorted by highest usage first.
-fn normalize(resp: &CopilotUsageResp) -> Vec<LimitWindow> {
+/// Pure: quota_snapshots → (headline windows, detail notes).
+///
+/// Metered categories (unlimited=false) become real usage windows sorted by
+/// highest burn; the first one is the card headline. Unlimited categories
+/// (unlimited=true — typically `chat` and `completions` on individual plans)
+/// become labeled notes in `detail_windows` so the user can see what their
+/// plan includes without polluting the usage math.
+fn normalize(resp: &CopilotUsageResp) -> (Vec<LimitWindow>, Vec<LimitWindow>) {
     let reset = resp
         .quota_reset_date
         .as_deref()
@@ -148,36 +156,43 @@ fn normalize(resp: &CopilotUsageResp) -> Vec<LimitWindow> {
         ("Premium requests", &resp.quota_snapshots.premium_interactions),
         ("Completions", &resp.quota_snapshots.completions),
     ];
-    let mut windows: Vec<LimitWindow> = categories
-        .iter()
-        .filter_map(|(label, q)| {
-            let q = q.as_ref()?;
-            if q.unlimited.unwrap_or(false) {
-                return None;
-            }
-            let pct = q.percent_remaining.map(|r| (100.0 - r) as f32);
-            // Reference uses `remaining`; older payloads carry `quota_remaining`.
-            let remaining = q.remaining.or(q.quota_remaining);
-            let used = match (q.entitlement, remaining) {
-                (Some(e), Some(r)) => Some(e - r),
-                _ => None,
-            };
-            Some(LimitWindow {
-                label: (*label).into(),
-                used_percent: pct,
+    let mut windows: Vec<LimitWindow> = Vec::new();
+    let mut detail: Vec<LimitWindow> = Vec::new();
+    for (label, q) in categories {
+        let Some(q) = q.as_ref() else { continue };
+        if q.unlimited.unwrap_or(false) {
+            // Unlimited category — surface as a labeled note in the modal.
+            detail.push(LimitWindow {
+                label: format!("{label} (unlimited)"),
+                used_percent: None,
                 resets_at: reset,
-                used,
-                limit: q.entitlement,
-            })
-        })
-        .collect();
+                used: None,
+                limit: None,
+            });
+            continue;
+        }
+        let pct = q.percent_remaining.map(|r| (100.0 - r) as f32);
+        // Reference uses `remaining`; older payloads carry `quota_remaining`.
+        let remaining = q.remaining.or(q.quota_remaining);
+        let used = match (q.entitlement, remaining) {
+            (Some(e), Some(r)) => Some(e - r),
+            _ => None,
+        };
+        windows.push(LimitWindow {
+            label: (*label).into(),
+            used_percent: pct,
+            resets_at: reset,
+            used,
+            limit: q.entitlement,
+        });
+    }
     windows.sort_by(|a, b| {
         b.used_percent
             .unwrap_or(0.0)
             .partial_cmp(&a.used_percent.unwrap_or(0.0))
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-    windows
+    (windows, detail)
 }
 
 #[async_trait]
@@ -213,15 +228,15 @@ pub(crate) async fn fetch_with(
     let val: Value = http::send_for_json(resp, USAGE_URL).await?;
     let u: CopilotUsageResp =
         serde_json::from_value(val).map_err(|e| ProviderError::Parse(e.to_string()))?;
-    let windows = normalize(&u);
+    let (windows, detail_windows) = normalize(&u);
     Ok(ServiceUsage {
         provider: Provider::Copilot,
         connected: true,
         plan: u.copilot_plan,
-        account: None,
+        account: u.login,
         error: None,
         windows,
-        detail_windows: vec![],
+        detail_windows,
     })
 }
 
@@ -247,8 +262,38 @@ mod tests {
     use super::*;
 
     #[test]
-    fn normalize_quota_snapshots() {
+    fn normalize_live_fixture_shows_metered_and_unlimited_notes() {
+        // Real response captured 2026-06-19 from an individual-plan account:
+        // chat + completions are unlimited; premium_interactions is metered
+        // (200 of 200 remaining → 0% used).
+        let raw = include_str!("../../tests/copilot_internal_fixture.json");
+        let v: Value = serde_json::from_str(raw).unwrap();
+        let u: CopilotUsageResp = serde_json::from_value(v).unwrap();
+        assert_eq!(u.login.as_deref(), Some("yakisoba0728"));
+        assert_eq!(u.copilot_plan.as_deref(), Some("individual"));
+        assert_eq!(u.quota_reset_date.as_deref(), Some("2026-07-01"));
+
+        let (ws, detail) = normalize(&u);
+        // Only the metered category surfaces as a usage window.
+        assert_eq!(ws.len(), 1);
+        assert_eq!(ws[0].label, "Premium requests");
+        assert_eq!(ws[0].used_percent, Some(0.0)); // percent_remaining=100 → 0% used
+        assert_eq!(ws[0].used, Some(0.0)); // entitlement(200) - remaining(200)
+        assert_eq!(ws[0].limit, Some(200.0));
+        assert!(ws[0].resets_at.is_some()); // 2026-07-01 parsed
+
+        // Unlimited categories appear as labeled notes in detail (no percent).
+        assert_eq!(detail.len(), 2);
+        assert!(detail.iter().any(|w| w.label == "Chat (unlimited)"));
+        assert!(detail.iter().any(|w| w.label == "Completions (unlimited)"));
+        assert!(detail.iter().all(|w| w.used_percent.is_none()));
+    }
+
+    #[test]
+    fn normalize_sorts_metered_categories_by_usage_desc() {
+        // Synthetic: two metered categories, one more consumed than the other.
         let resp = CopilotUsageResp {
+            login: None,
             copilot_plan: Some("pro".into()),
             quota_reset_date: Some("2026-07-01T00:00:00Z".into()),
             quota_snapshots: QuotaSnapshots {
@@ -269,8 +314,10 @@ mod tests {
                 completions: None,
             },
         };
-        let ws = normalize(&resp);
+        let (ws, detail) = normalize(&resp);
+        // Both metered categories in windows; none unlimited → detail empty.
         assert_eq!(ws.len(), 2);
+        assert!(detail.is_empty());
         // Higher usage (lower percent_remaining) first.
         assert_eq!(ws[0].label, "Premium requests");
         assert_eq!(ws[0].used_percent, Some(83.33));
@@ -279,27 +326,6 @@ mod tests {
         // Both windows share the parsed reset date.
         assert!(ws[0].resets_at.is_some());
         assert!(ws[1].resets_at.is_some());
-    }
-
-    #[test]
-    fn parses_real_copilot_fixture() {
-        // Shape captured from a live `/copilot_internal/user` response.
-        let raw = include_str!("../../tests/copilot_internal_fixture.json");
-        let v: Value = serde_json::from_str(raw).unwrap();
-        let u: CopilotUsageResp = serde_json::from_value(v).unwrap();
-        assert_eq!(u.copilot_plan.as_deref(), Some("individual"));
-        // Real API field is `quota_reset_date` (plain YYYY-MM-DD).
-        assert_eq!(u.quota_reset_date.as_deref(), Some("2026-07-01"));
-        let ws = normalize(&u);
-        assert_eq!(ws.len(), 1);
-        assert_eq!(ws[0].label, "Premium requests");
-        // entitlement=300, remaining=71 → used=229.
-        assert_eq!(ws[0].used, Some(229.0));
-        assert_eq!(ws[0].limit, Some(300.0));
-        // percent_remaining=24 → used_percent=76.
-        assert_eq!(ws[0].used_percent, Some(76.0));
-        // Reset date parsed from plain YYYY-MM-DD.
-        assert!(ws[0].resets_at.is_some());
     }
 
     #[test]

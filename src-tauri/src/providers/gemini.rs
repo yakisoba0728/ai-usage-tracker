@@ -14,10 +14,16 @@ use crate::providers::ProviderError;
 use crate::secrets;
 
 const CODE_ASSIST_BASE: &str = "https://cloudcode-pa.googleapis.com/v1internal";
+const GEMINI_CLIENT_ID: &str = "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com";
+const GEMINI_CLIENT_SECRET: &str = "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";
+const GEMINI_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 
 #[derive(Deserialize)]
 struct OauthCreds {
     access_token: String,
+    #[serde(default)] refresh_token: Option<String>,
+    #[serde(default)] token_type: Option<String>,
+    #[serde(default)] scope: Option<String>,
     #[serde(default)] expiry_date: i64,
 }
 
@@ -117,44 +123,76 @@ impl crate::providers::ProviderApi for GeminiProvider {
     }
 
     async fn fetch(&self) -> Result<ServiceUsage, ProviderError> {
-        let v = secrets::read_json_file(&secrets::gemini_creds_path())?;
-        let creds: OauthCreds =
-            serde_json::from_value(v).map_err(|e| ProviderError::Parse(format!("gemini creds: {e}")))?;
+        let blob = secrets::read_json_file(&secrets::gemini_creds_path())?;
+        let mut creds: OauthCreds =
+            serde_json::from_value(blob.clone()).map_err(|e| ProviderError::Parse(format!("gemini creds: {e}")))?;
         let now_ms = chrono::Utc::now().timestamp_millis();
-        if creds.expiry_date > 0 && creds.expiry_date < now_ms {
-            return Err(ProviderError::Expired(
-                "Gemini CLI token expired — run `gemini` once to refresh".into(),
-            ));
-        }
-        let token = creds.access_token;
 
+        // Self-refresh on expiry (60s skew buffer) via Google OAuth, reusing the
+        // Gemini CLI's public client_id/secret.
+        if creds.expiry_date > 0 && creds.expiry_date < now_ms + 60_000 {
+            match creds.refresh_token.clone() {
+                Some(rt) => match refresh_gemini_token(&self.http, &rt).await {
+                    Ok(fresh) => {
+                        let new_exp = now_ms + (fresh.expires_in.unwrap_or(3600) as i64) * 1000;
+                        let rt = fresh.refresh_token.as_ref().or(creds.refresh_token.as_ref());
+                        let _ = write_back_creds(&blob, &fresh.access_token, rt, new_exp);
+                        creds.access_token = fresh.access_token;
+                        creds.expiry_date = new_exp;
+                    }
+                    Err(_) => {
+                        return Err(ProviderError::Expired(
+                            "Gemini token expired and refresh failed".into(),
+                        ))
+                    }
+                },
+                None => {
+                    return Err(ProviderError::Expired(
+                        "Gemini CLI token expired — run `gemini` once to refresh".into(),
+                    ))
+                }
+            }
+        }
+        let token = &creds.access_token;
+
+        // Project from env (Standard/Workspace accounts need it in the request).
+        let env_project = std::env::var("GOOGLE_CLOUD_PROJECT")
+            .ok()
+            .or_else(|| std::env::var("GOOGLE_CLOUD_PROJECT_ID").ok());
         let load = self
             .post_internal(
-                &token,
+                token,
                 "loadCodeAssist",
                 json!({
+                    "cloudaicompanionProject": env_project,
                     "metadata": {
                         "ideType": "IDE_UNSPECIFIED",
                         "platform": "PLATFORM_UNSPECIFIED",
-                        "pluginType": "GEMINI"
+                        "pluginType": "GEMINI",
+                        "duetProject": env_project,
                     }
                 }),
             )
             .await?;
+        // Project resolution: response → env, reject all-numeric.
         let project = load
             .get("cloudaicompanionProject")
             .and_then(|v| v.as_str())
             .map(String::from)
+            .or(env_project)
+            .filter(|p| !p.chars().all(|c| c.is_ascii_digit()))
             .ok_or_else(|| ProviderError::Parse("no cloudaicompanionProject".into()))?;
         let quota_val = self
-            .post_internal(&token, "retrieveUserQuota", json!({ "project": project }))
+            .post_internal(token, "retrieveUserQuota", json!({ "project": project }))
             .await?;
         let quota: QuotaResp =
             serde_json::from_value(quota_val).map_err(|e| ProviderError::Parse(e.to_string()))?;
+        // Tier: paidTier → currentTier fallback (free accounts have null paidTier).
         let tier = load
             .get("paidTier")
             .and_then(|t| t.get("name"))
             .and_then(|n| n.as_str())
+            .or_else(|| load.get("currentTier").and_then(|t| t.get("name")).and_then(|n| n.as_str()))
             .map(String::from);
         let (windows, detail_windows) = normalize(&quota);
         Ok(ServiceUsage {
@@ -169,6 +207,72 @@ impl crate::providers::ProviderApi for GeminiProvider {
     }
 }
 
+
+#[derive(serde::Deserialize)]
+struct Refreshed {
+    access_token: String,
+    #[serde(default)] refresh_token: Option<String>,
+    #[serde(default)] expires_in: Option<u64>,
+}
+
+/// Resolve client metadata: env override > Gemini CLI's public constants.
+fn gemini_client_metadata() -> (String, String) {
+    if let (Ok(id), Ok(sec)) = (
+        std::env::var("GEMINI_OAUTH_CLIENT_ID"),
+        std::env::var("GEMINI_OAUTH_CLIENT_SECRET"),
+    ) {
+        if !id.is_empty() && !sec.is_empty() {
+            return (id, sec);
+        }
+    }
+    (GEMINI_CLIENT_ID.to_string(), GEMINI_CLIENT_SECRET.to_string())
+}
+
+async fn refresh_gemini_token(http: &reqwest::Client, rt: &str) -> Result<Refreshed, ProviderError> {
+    let (id, sec) = gemini_client_metadata();
+    let resp = http
+        .post(GEMINI_TOKEN_URL)
+        .form(&[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", rt),
+            ("client_id", id.as_str()),
+            ("client_secret", sec.as_str()),
+        ])
+        .send()
+        .await
+        .map_err(|e| ProviderError::Network(e.to_string()))?;
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(ProviderError::Status {
+            status: status.as_u16(),
+            body: text.chars().take(200).collect(),
+        });
+    }
+    serde_json::from_str::<Refreshed>(&text).map_err(|e| ProviderError::Parse(format!("refresh: {e}")))
+}
+
+/// Write the refreshed access token back to oauth_creds.json (preserves all
+/// other fields; keeps the old refresh_token if the response omits a new one).
+fn write_back_creds(
+    orig: &serde_json::Value,
+    access_token: &str,
+    refresh_token: Option<&String>,
+    expiry_date: i64,
+) -> Result<(), ProviderError> {
+    let mut blob = orig.clone();
+    if let Some(obj) = blob.as_object_mut() {
+        obj.insert("access_token".into(), json!(access_token));
+        if let Some(rt) = refresh_token {
+            obj.insert("refresh_token".into(), json!(rt));
+        }
+        obj.insert("expiry_date".into(), json!(expiry_date));
+        if let Ok(s) = serde_json::to_string_pretty(&blob) {
+            let _ = std::fs::write(secrets::gemini_creds_path(), s);
+        }
+    }
+    Ok(())
+}
 async fn post_code_assist(
     http: &reqwest::Client,
     token: &str,

@@ -2,41 +2,85 @@ import { Loader2 } from "lucide-react";
 
 import { Header } from "@/components/Header";
 import { ServiceCard } from "@/components/ServiceCard";
+import { useNow } from "@/hooks/useNow";
 import { useUsage } from "@/hooks/useUsage";
 
 export function Dashboard() {
   const { snapshot, loading, refresh } = useUsage();
+  const nowMs = useNow(1000);
+
+  const services = snapshot?.services ?? [];
+  const connectedCount = services.filter((s) => s.connected).length;
+
+  // Highest used_percent across every window of every connected service
+  // (primary + detail) — the honest "peak" surfaced in the header.
+  let peak: number | null = null;
+  for (const s of services) {
+    if (!s.connected) continue;
+    for (const w of [...(s.windows ?? []), ...(s.detail_windows ?? [])]) {
+      if (w.used_percent != null && (peak == null || w.used_percent > peak)) {
+        peak = w.used_percent;
+      }
+    }
+  }
 
   return (
-    <div className="flex min-h-dvh flex-col gap-5 bg-background p-5 text-foreground">
-      <Header
-        fetchedAt={snapshot?.fetched_at ?? null}
-        loading={loading}
-        onRefresh={refresh}
-      />
+    <div className="relative min-h-dvh overflow-hidden bg-background text-foreground">
+      <div aria-hidden className="ambient-glow pointer-events-none absolute inset-x-0 top-0 h-72" />
 
-      {snapshot == null ? (
-        <div className="flex flex-1 flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
-          <Loader2 className="size-5 animate-spin" />
-          <span>Loading usage…</span>
-        </div>
-      ) : snapshot.services.length === 0 ? (
-        <div className="flex flex-1 flex-col items-center justify-center gap-1 text-sm text-muted-foreground">
-          <span>No services configured.</span>
-          <span className="text-xs text-muted-foreground/70">
-            Enable providers in settings to see usage.
-          </span>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          {snapshot.services.map((service) => (
-            <ServiceCard
-              key={service.provider}
-              service={service}
-            />
-          ))}
-        </div>
-      )}
+      <div className="relative flex min-h-dvh flex-col">
+        <Header
+          fetchedAt={snapshot?.fetched_at ?? null}
+          loading={loading}
+          onRefresh={refresh}
+          nowMs={nowMs}
+          peak={peak}
+          connectedCount={connectedCount}
+          totalCount={services.length}
+        />
+
+        <main className="mx-auto w-full max-w-6xl flex-1 px-5 py-6 sm:px-6 sm:py-8">
+          {snapshot == null ? (
+            <LoadingState />
+          ) : services.length === 0 ? (
+            <EmptyState />
+          ) : (
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+              {services.map((service) => (
+                <ServiceCard
+                  key={service.provider}
+                  service={service}
+                  nowMs={nowMs}
+                />
+              ))}
+            </div>
+          )}
+        </main>
+      </div>
+    </div>
+  );
+}
+
+function LoadingState() {
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-3 py-24 text-sm text-muted-foreground">
+      <Loader2 className="size-5 animate-spin text-brand" />
+      <span>Loading usage…</span>
+    </div>
+  );
+}
+
+function EmptyState() {
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-1.5 py-24 text-center">
+      <span className="text-sm font-medium text-foreground/90">
+        No services configured
+      </span>
+      <span className="max-w-xs text-xs leading-relaxed text-muted-foreground/70">
+        Sign in to a provider's CLI (e.g.{" "}
+        <span className="font-mono">claude</span>,{" "}
+        <span className="font-mono">codex login</span>) to see live usage here.
+      </span>
     </div>
   );
 }

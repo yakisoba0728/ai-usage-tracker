@@ -1,116 +1,124 @@
-import { useEffect, useState } from "react";
-import { AlertCircle, Wifi, WifiOff } from "lucide-react";
+import type { ReactNode } from "react";
+import { AlertCircle } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
-import {
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { BarGauge } from "@/components/Gauge";
+import { StatusDot } from "@/components/StatusDot";
+import { DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
-import {
-  formatReset,
-  formatUsedLimit,
-  percentBarColor,
-  percentColor,
-} from "@/lib/format";
-import type { LimitWindow, Provider, ServiceUsage } from "@/lib/types";
+import type { Provider, ServiceUsage } from "@/lib/types";
 
 const SOURCE_NOTE: Record<Provider, string> = {
-  claude: "via Claude Code OAuth · api.anthropic.com",
-  codex: "via Codex CLI · chatgpt.com/backend-api/wham/usage",
-  gemini: "via Gemini CLI · Google Code Assist",
-  copilot: "via Copilot CLI · api.github.com/copilot_internal/user",
-  cursor: "via Cursor · api2.cursor.sh (experimental)",
+  claude: "Claude Code OAuth · api.anthropic.com",
+  codex: "Codex CLI · chatgpt.com/backend-api/wham/usage",
+  gemini: "Gemini CLI · Google Code Assist",
+  copilot: "Copilot CLI · api.github.com/copilot_internal/user",
+  cursor: "Cursor · api2.cursor.sh (experimental)",
 };
 
-function DetailRow({ w, nowMs }: { w: LimitWindow; nowMs: number }) {
-  const pct = w.used_percent;
-  const usedLimit = formatUsedLimit(w);
-  const reset = formatReset(w.resets_at, nowMs);
+export interface ServiceDetailProps {
+  service: ServiceUsage;
+  title: string;
+  nowMs: number;
+}
+
+export function ServiceDetail({ service, title, nowMs }: ServiceDetailProps) {
+  const windows = service.windows ?? [];
+  const detail = service.detail_windows ?? [];
+  const hasWindows = service.connected && windows.length > 0;
+
   return (
-    <div className="rounded-md border bg-muted/30 p-3">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-sm font-medium">{w.label}</span>
-        <span className={cn("text-lg font-semibold tabular-nums", percentColor(pct))}>
-          {pct == null ? "—" : `${pct.toFixed(pct < 10 ? 1 : 0)}%`}
-        </span>
-      </div>
-      <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-muted">
-        <div
-          className={cn("h-full rounded-full transition-all", percentBarColor(pct))}
-          style={{ width: `${Math.min(100, pct ?? 0)}%` }}
-        />
-      </div>
-      {(usedLimit || reset) && (
-        <div className="mt-1.5 flex flex-wrap justify-between gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
-          {usedLimit && <span className="tabular-nums">{usedLimit}</span>}
-          {reset && <span>{reset}</span>}
+    <div className="flex flex-col">
+      {/* Header */}
+      <div className="flex items-start justify-between gap-3 border-b border-white/[0.06] px-5 py-4 pr-12">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <StatusDot connected={service.connected} className="mt-1" />
+          <div className="min-w-0">
+            <DialogTitle className="text-base font-semibold leading-tight tracking-tight">
+              {title}
+            </DialogTitle>
+            <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+              {service.plan && (
+                <span className="rounded-md border border-white/10 bg-white/[0.03] px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">
+                  {service.plan}
+                </span>
+              )}
+              <span
+                className={cn(
+                  "text-[11px] font-medium",
+                  service.connected ? "text-ok" : "text-muted-foreground",
+                )}
+              >
+                {service.connected ? "Connected" : "Offline"}
+              </span>
+              {service.account && (
+                <span
+                  className="truncate font-mono text-[11px] text-muted-foreground/70"
+                  title={service.account}
+                >
+                  {service.account}
+                </span>
+              )}
+            </div>
+          </div>
         </div>
-      )}
+      </div>
+
+      {/* Body */}
+      <div className="scroll-area max-h-[60vh] overflow-y-auto px-5 py-4">
+        {hasWindows ? (
+          <div className="space-y-5">
+            <Section title="Usage">
+              <div className="divide-y divide-white/[0.06]">
+                {windows.map((w, i) => (
+                  <div key={`${w.label}-${i}`} className="py-3 first:pt-0 last:pb-0">
+                    <BarGauge window={w} nowMs={nowMs} showMeta />
+                  </div>
+                ))}
+              </div>
+            </Section>
+
+            {detail.length > 0 && (
+              <Section title="More detail">
+                <div className="divide-y divide-white/[0.06]">
+                  {detail.map((w, i) => (
+                    <div key={`${w.label}-${i}`} className="py-3 first:pt-0 last:pb-0">
+                      <BarGauge window={w} nowMs={nowMs} showMeta />
+                    </div>
+                  ))}
+                </div>
+              </Section>
+            )}
+          </div>
+        ) : (
+          <div className="flex items-start gap-2.5 rounded-xl border border-white/[0.05] bg-white/[0.015] px-3.5 py-3">
+            <AlertCircle className="mt-0.5 size-4 shrink-0 text-muted-foreground/50" />
+            <p className="break-words text-sm leading-relaxed text-muted-foreground/80">
+              {service.error?.trim() ??
+                (service.connected
+                  ? "No usage windows reported."
+                  : "Not connected.")}
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* Footer */}
+      <div className="border-t border-white/[0.06] px-5 py-3">
+        <DialogDescription className="text-[11px] leading-relaxed text-muted-foreground/60">
+          {SOURCE_NOTE[service.provider]}
+        </DialogDescription>
+      </div>
     </div>
   );
 }
 
-export function ServiceDetail({
-  service,
-  title,
-}: {
-  service: ServiceUsage;
-  title: string;
-}) {
-  const [nowMs, setNowMs] = useState(() => Date.now());
-  useEffect(() => {
-    const t = setInterval(() => setNowMs(Date.now()), 1000);
-    return () => clearInterval(t);
-  }, []);
-
+function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <>
-      <DialogHeader>
-        <div className="flex items-center justify-between gap-3 pr-8">
-          <DialogTitle>{title}</DialogTitle>
-          <Badge
-            variant={service.connected ? "secondary" : "outline"}
-            className={
-              service.connected
-                ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-500"
-                : "text-muted-foreground"
-            }
-          >
-            {service.connected ? <Wifi /> : <WifiOff />}
-            {service.connected ? "Connected" : "Offline"}
-          </Badge>
-        </div>
-        <div className="flex flex-wrap items-center gap-1.5">
-          {service.plan && (
-            <Badge variant="outline" className="font-normal text-muted-foreground">
-              {service.plan}
-            </Badge>
-          )}
-          {service.account && (
-            <span className="text-xs text-muted-foreground/80">{service.account}</span>
-          )}
-        </div>
-      </DialogHeader>
-
-      <div className="-mx-1 max-h-[55vh] space-y-2 overflow-y-auto px-1">
-        {service.connected && service.windows.length > 0 ? (
-          service.windows.map((w, i) => <DetailRow key={`${w.label}-${i}`} w={w} nowMs={nowMs} />)
-        ) : (
-          <p className="flex items-start gap-1.5 text-sm text-muted-foreground">
-            <AlertCircle className="mt-0.5 shrink-0 text-muted-foreground/60" />
-            <span className="break-words">
-              {service.error?.trim() ??
-                (service.connected ? "No usage windows reported." : "Not connected.")}
-            </span>
-          </p>
-        )}
-      </div>
-
-      <DialogDescription className="pt-1 text-[11px]">
-        {SOURCE_NOTE[service.provider]}
-      </DialogDescription>
-    </>
+    <section>
+      <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">
+        {title}
+      </h3>
+      {children}
+    </section>
   );
 }

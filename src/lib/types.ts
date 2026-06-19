@@ -14,7 +14,10 @@ export interface ServiceUsage {
   plan: string | null;
   account: string | null;
   error: string | null;
+  /** PRIMARY windows — shown on the card as the headline usage. */
   windows: LimitWindow[];
+  /** MODAL-ONLY windows — hidden on the card, shown in the detail modal. */
+  detail_windows: LimitWindow[];
 }
 
 export interface UsageSnapshot {

@@ -1,19 +1,61 @@
 import type { LimitWindow } from "@/lib/types";
 
-/** Color band for a usage percent (text class). Thresholds match the gauges. */
-export function percentColor(p: number | null): string {
-  const v = p ?? 0;
-  if (v >= 90) return "text-red-500";
-  if (v >= 70) return "text-amber-500";
-  return "text-emerald-500";
+export type Severity = "ok" | "warn" | "crit";
+
+/** Severity band for a usage percent; `null` when there is no percent at all. */
+export function percentSeverity(p: number | null): Severity | null {
+  if (p == null) return null;
+  if (p >= 90) return "crit";
+  if (p >= 70) return "warn";
+  return "ok";
 }
 
-/** Color band for a usage percent (background class). */
+/** Text color class for a usage percent (semantic status tokens). */
+export function percentColor(p: number | null): string {
+  switch (percentSeverity(p)) {
+    case "crit":
+      return "text-crit";
+    case "warn":
+      return "text-warn";
+    case "ok":
+      return "text-ok";
+    default:
+      return "text-muted-foreground";
+  }
+}
+
+/** Fill color class for a usage percent (semantic status tokens). */
 export function percentBarColor(p: number | null): string {
-  const v = p ?? 0;
-  if (v >= 90) return "bg-red-500";
-  if (v >= 70) return "bg-amber-500";
-  return "bg-emerald-500";
+  switch (percentSeverity(p)) {
+    case "crit":
+      return "bg-crit";
+    case "warn":
+      return "bg-warn";
+    case "ok":
+      return "bg-ok";
+    default:
+      return "bg-muted-foreground/40";
+  }
+}
+
+/** Stroke color class for a usage percent (SVG ring). */
+export function percentStrokeColor(p: number | null): string {
+  switch (percentSeverity(p)) {
+    case "crit":
+      return "stroke-crit";
+    case "warn":
+      return "stroke-warn";
+    case "ok":
+      return "stroke-ok";
+    default:
+      return "stroke-muted-foreground/30";
+  }
+}
+
+/** "72%" or "—" when there is no value; one decimal under 10 for fidelity. */
+export function formatPercent(p: number | null): string {
+  if (p == null) return "—";
+  return `${p < 10 ? p.toFixed(1) : Math.round(p)}%`;
 }
 
 /** "<used> / <limit>" with `$` when the window label looks monetary. */
@@ -25,19 +67,36 @@ export function formatUsedLimit(w: LimitWindow): string | null {
   return `${fmt(w.used)} / ${fmt(w.limit)}`;
 }
 
-/** Human countdown + absolute time for an epoch-seconds reset, relative to nowMs. */
-export function formatReset(epoch: number | null, nowMs: number): string | null {
+/** Live countdown only (e.g. "resets in 3h 19m"). null when there is no reset. */
+export function formatResetCountdown(
+  epoch: number | null,
+  nowMs: number,
+): string | null {
   if (epoch == null) return null;
-  const ms = epoch * 1000;
-  const diff = ms - nowMs;
-  const abs = new Date(ms).toLocaleString();
-  if (diff <= 0) return `resets soon · ${abs}`;
+  const diff = epoch * 1000 - nowMs;
+  if (diff <= 0) return "resets soon";
   const mins = Math.round(diff / 60000);
-  if (mins < 60) return `resets in ${mins}m · ${abs}`;
+  if (mins < 60) return `resets in ${mins}m`;
   const hours = Math.floor(mins / 60);
   const remM = mins % 60;
-  if (hours < 48) return `resets in ${hours}h ${remM}m · ${abs}`;
+  if (hours < 48) return `resets in ${hours}h ${remM}m`;
   const days = Math.floor(hours / 24);
   const remH = hours % 24;
-  return `resets in ${days}d ${remH}h · ${abs}`;
+  return `resets in ${days}d ${remH}h`;
+}
+
+/**
+ * Live countdown plus a concise absolute time
+ * ("resets in 3h 19m · Jun 19, 14:32").
+ */
+export function formatReset(epoch: number | null, nowMs: number): string | null {
+  const cd = formatResetCountdown(epoch, nowMs);
+  if (cd == null || epoch == null) return null;
+  const abs = new Date(epoch * 1000).toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  return `${cd} · ${abs}`;
 }

@@ -1,88 +1,65 @@
-import { useEffect, useState } from "react";
-
-import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
+import {
+  formatPercent,
+  formatReset,
+  formatUsedLimit,
+  percentBarColor,
+  percentColor,
+} from "@/lib/format";
+import type { LimitWindow } from "@/lib/types";
 
-export interface GaugeProps {
-  label: string;
-  used_percent: number | null;
-  resets_at: number | null;
+export interface BarGaugeProps {
+  window: LimitWindow;
+  nowMs: number;
+  /** Show the used/limit + reset meta line (modal); hide for compact card rows. */
+  showMeta?: boolean;
 }
 
-type Severity = "ok" | "warn" | "crit";
-
-function severityFor(percent: number | null): Severity | null {
-  if (percent == null) return null;
-  if (percent >= 70) return "crit";
-  if (percent >= 40) return "warn";
-  return "ok";
-}
-
-const SEVERITY_BAR: Record<Severity, string> = {
-  ok: "bg-emerald-500",
-  warn: "bg-amber-500",
-  crit: "bg-red-500",
-};
-
-const SEVERITY_TEXT: Record<Severity, string> = {
-  ok: "text-emerald-500",
-  warn: "text-amber-500",
-  crit: "text-red-500",
-};
-
-function formatCountdown(resetsAtSeconds: number, nowSeconds: number): string {
-  const remaining = resetsAtSeconds - nowSeconds;
-  if (remaining <= 0) return "Resets now";
-  const h = Math.floor(remaining / 3600);
-  const m = Math.floor((remaining % 3600) / 60);
-  const s = remaining % 60;
-  if (h > 0) return `Resets in ${h}h ${m}m`;
-  if (m > 0) return `Resets in ${m}m ${s}s`;
-  return `Resets in ${s}s`;
-}
-
-export function Gauge({ label, used_percent, resets_at }: GaugeProps) {
-  // Tick once a second so the countdown stays live without depending on pushes.
-  const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
-  useEffect(() => {
-    const id = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 1000);
-    return () => clearInterval(id);
-  }, []);
-
-  const severity = severityFor(used_percent);
-  const clamped = Math.max(0, Math.min(100, used_percent ?? 0));
+/**
+ * Slim horizontal gauge: label, a big colored percent, a severity bar, and an
+ * optional meta line (used/limit + live reset countdown). Powers both the
+ * detail modal rows and the compact secondary windows on each card.
+ */
+export function BarGauge({ window: w, nowMs, showMeta = true }: BarGaugeProps) {
+  const pct = w.used_percent;
+  const usedLimit = formatUsedLimit(w);
+  const reset = showMeta ? formatReset(w.resets_at, nowMs) : null;
 
   return (
-    <div className="space-y-1.5">
+    <div className="min-w-0">
       <div className="flex items-baseline justify-between gap-2">
-        <span className="truncate text-sm text-muted-foreground" title={label}>
-          {label}
+        <span
+          className="truncate text-[13px] font-medium text-card-foreground/90"
+          title={w.label}
+        >
+          {w.label}
         </span>
         <span
           className={cn(
-            "shrink-0 text-sm font-semibold tabular-nums",
-            severity ? SEVERITY_TEXT[severity] : "text-muted-foreground",
+            "shrink-0 font-mono text-[13px] font-semibold tabular-nums",
+            percentColor(pct),
           )}
         >
-          {used_percent == null ? "?" : `${Math.round(used_percent)}%`}
+          {formatPercent(pct)}
         </span>
       </div>
 
-      <Progress
-        value={clamped}
-        className="h-1.5"
-        indicatorClassName={
-          severity ? SEVERITY_BAR[severity] : "bg-muted-foreground/40"
-        }
-      />
-
-      <div className="h-4 text-xs text-muted-foreground">
-        {resets_at != null && (
-          <span className="tabular-nums">
-            {formatCountdown(resets_at, now)}
-          </span>
-        )}
+      <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-white/[0.06]">
+        <div
+          className={cn(
+            "h-full rounded-full transition-all duration-500 ease-out",
+            percentBarColor(pct),
+          )}
+          style={{ width: `${Math.min(100, Math.max(0, pct ?? 0))}%` }}
+        />
       </div>
+
+      {showMeta && (usedLimit || reset) && (
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+          {usedLimit && <span className="font-mono tabular-nums">{usedLimit}</span>}
+          {reset && <span className="tabular-nums">{reset}</span>}
+        </div>
+      )}
     </div>
   );
 }

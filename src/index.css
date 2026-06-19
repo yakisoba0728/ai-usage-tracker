@@ -3,54 +3,62 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/*
+ * Premium dark-first palette.
+ * Built on a single cool-slate hue axis (≈264) so every surface is cohesive;
+ * status colors (ok / warn / crit) and one restrained brand accent carry all
+ * the chroma. Numbers render in a mono face for an engineered feel.
+ */
 :root {
-  --radius: 0.5rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.141 0.005 285.823);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.141 0.005 285.823);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.141 0.005 285.823);
-  --primary: oklch(0.21 0.006 285.885);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.967 0.001 286.375);
-  --secondary-foreground: oklch(0.21 0.006 285.885);
-  --muted: oklch(0.967 0.001 286.375);
-  --muted-foreground: oklch(0.552 0.016 285.938);
-  --accent: oklch(0.967 0.001 286.375);
-  --accent-foreground: oklch(0.21 0.006 285.885);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.92 0.004 286.32);
-  --input: oklch(0.92 0.004 286.32);
-  --ring: oklch(0.705 0.015 286.067);
-}
+  --radius: 0.75rem;
 
-.dark {
-  --background: oklch(0.141 0.005 285.823);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.18 0.006 285.885);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.21 0.006 285.885);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.92 0.004 286.32);
-  --primary-foreground: oklch(0.21 0.006 285.885);
-  --secondary: oklch(0.274 0.006 286.033);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.274 0.006 286.033);
-  --muted-foreground: oklch(0.705 0.015 286.067);
-  --accent: oklch(0.274 0.006 286.033);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.552 0.016 285.938);
+  --background: oklch(0.16 0.008 264);
+  --foreground: oklch(0.972 0.003 264);
+
+  --card: oklch(0.197 0.008 264);
+  --card-foreground: oklch(0.972 0.003 264);
+
+  --popover: oklch(0.216 0.009 264);
+  --popover-foreground: oklch(0.972 0.003 264);
+
+  --primary: oklch(0.972 0.003 264);
+  --primary-foreground: oklch(0.18 0.008 264);
+
+  --secondary: oklch(0.249 0.008 264);
+  --secondary-foreground: oklch(0.972 0.003 264);
+
+  --muted: oklch(0.249 0.008 264);
+  --muted-foreground: oklch(0.705 0.013 264);
+
+  --accent: oklch(0.272 0.009 264);
+  --accent-foreground: oklch(0.972 0.003 264);
+
+  --destructive: oklch(0.7 0.2 22);
+
+  --border: oklch(1 0 0 / 6%);
+  --input: oklch(1 0 0 / 10%);
+  --ring: oklch(0.7 0.1 275);
+
+  /* Brand + status accents — used sparingly. */
+  --brand: oklch(0.7 0.12 275);
+  --ok: oklch(0.78 0.16 155);
+  --warn: oklch(0.82 0.15 83);
+  --crit: oklch(0.7 0.2 22);
 }
 
 @theme inline {
   --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
+  --radius-md: calc(var(--radius) - 4px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text",
+    "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono:
+    ui-monospace, "SF Mono", "JetBrains Mono", "Fira Code", "Roboto Mono",
+    Menlo, Consolas, monospace;
+
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -69,15 +77,65 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+
+  --color-brand: var(--brand);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-crit: var(--crit);
 }
 
 @layer base {
   * {
     border-color: var(--border);
   }
+
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
   body {
     background-color: var(--background);
     color: var(--foreground);
+    font-family: var(--font-sans);
     font-feature-settings: "rlig" 1, "calt" 1;
+    overflow-x: hidden;
   }
+
+  ::selection {
+    background: color-mix(in oklch, var(--brand) 30%, transparent);
+    color: var(--foreground);
+  }
+}
+
+/* Ambient top glow behind the header — restrained depth, not a gradient wash. */
+.ambient-glow {
+  background: radial-gradient(
+    72% 100% at 50% 0%,
+    oklch(0.7 0.12 275 / 0.1),
+    transparent 70%
+  );
+}
+
+/* Thin, styled scrollbars for scroll regions (modal body, etc.). */
+.scroll-area {
+  scrollbar-width: thin;
+  scrollbar-color: oklch(1 0 0 / 0.12) transparent;
+}
+.scroll-area::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scroll-area::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scroll-area::-webkit-scrollbar-thumb {
+  background-color: oklch(1 0 0 / 0.1);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+.scroll-area::-webkit-scrollbar-thumb:hover {
+  background-color: oklch(1 0 0 / 0.2);
 }

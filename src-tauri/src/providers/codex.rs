@@ -99,9 +99,10 @@ fn push_window(ws: &mut Vec<LimitWindow>, label: &str, w: &Option<RateWindow>) {
     }
 }
 
-/// Pure: main windows + every additional rate limit + credits + resets.
-fn normalize(u: &WhamUsage) -> Vec<LimitWindow> {
+/// Pure: primary windows (5h/Weekly) + detail windows (Spark / code-review / credits / resets).
+fn normalize(u: &WhamUsage) -> (Vec<LimitWindow>, Vec<LimitWindow>) {
     let mut ws = Vec::new();
+    let mut detail = Vec::new();
     if let Some(rl) = &u.rate_limit {
         push_window(&mut ws, "5-hour", &rl.primary_window);
         push_window(&mut ws, "Weekly", &rl.secondary_window);
@@ -112,17 +113,17 @@ fn normalize(u: &WhamUsage) -> Vec<LimitWindow> {
         if name.is_empty() {
             continue;
         }
-        push_window(&mut ws, &format!("{name} · 5-hour"), &rl.primary_window);
-        push_window(&mut ws, &format!("{name} · Weekly"), &rl.secondary_window);
+        push_window(&mut detail, &format!("{name} · 5-hour"), &rl.primary_window);
+        push_window(&mut detail, &format!("{name} · Weekly"), &rl.secondary_window);
     }
     if let Some(rl) = &u.code_review_rate_limit {
-        push_window(&mut ws, "Code review · 5-hour", &rl.primary_window);
-        push_window(&mut ws, "Code review · Weekly", &rl.secondary_window);
+        push_window(&mut detail, "Code review · 5-hour", &rl.primary_window);
+        push_window(&mut detail, "Code review · Weekly", &rl.secondary_window);
     }
     if let Some(c) = &u.credits {
         let bal = c.balance.as_deref().and_then(|b| b.parse::<f64>().ok());
         if c.unlimited == Some(true) {
-            ws.push(LimitWindow {
+            detail.push(LimitWindow {
                 label: "Credits (unlimited)".into(),
                 used_percent: None,
                 resets_at: None,
@@ -131,7 +132,7 @@ fn normalize(u: &WhamUsage) -> Vec<LimitWindow> {
             });
         } else if c.has_credits == Some(true) || matches!(bal, Some(v) if v > 0.0) {
             if let Some(v) = bal {
-                ws.push(LimitWindow {
+                detail.push(LimitWindow {
                     label: "Credits balance".into(),
                     used_percent: None,
                     resets_at: None,
@@ -143,7 +144,7 @@ fn normalize(u: &WhamUsage) -> Vec<LimitWindow> {
     }
     if let Some(r) = &u.rate_limit_reset_credits {
         if let Some(n) = r.available_count {
-            ws.push(LimitWindow {
+            detail.push(LimitWindow {
                 label: "Available rate-limit resets".into(),
                 used_percent: None,
                 resets_at: None,
@@ -152,7 +153,7 @@ fn normalize(u: &WhamUsage) -> Vec<LimitWindow> {
             });
         }
     }
-    ws
+    (ws, detail)
 }
 
 fn capitalize(s: &str) -> String {
@@ -201,13 +202,15 @@ impl crate::providers::ProviderApi for CodexProvider {
             (None, None) => None,
         };
 
+        let (windows, detail_windows) = normalize(&u);
         Ok(ServiceUsage {
             provider: Provider::Codex,
             connected: true,
             plan,
             account,
             error: None,
-            windows: normalize(&u),
+            windows,
+            detail_windows,
         })
     }
 }
@@ -220,13 +223,13 @@ mod tests {
     fn normalize_wham_fixture_includes_spark_and_credits() {
         let u: WhamUsage =
             serde_json::from_str(include_str!("../../tests/codex_wham_fixture.json")).unwrap();
-        let ws = normalize(&u);
+        let (ws, detail) = normalize(&u);
         let labels: Vec<&str> = ws.iter().map(|w| w.label.as_str()).collect();
-        assert!(labels.contains(&"5-hour"));
-        assert!(labels.contains(&"Weekly"));
-        assert!(labels.iter().any(|l| l.contains("Spark") && l.contains("5-hour")));
-        assert!(labels.contains(&"Credits balance"));
-        assert!(labels.contains(&"Available rate-limit resets"));
+        assert_eq!(labels, vec!["5-hour", "Weekly"]); // primary only
+        let dlabels: Vec<&str> = detail.iter().map(|w| w.label.as_str()).collect();
+        assert!(dlabels.iter().any(|l| l.contains("Spark") && l.contains("5-hour")));
+        assert!(dlabels.contains(&"Credits balance"));
+        assert!(dlabels.contains(&"Available rate-limit resets"));
         let five = ws.iter().find(|w| w.label == "5-hour").unwrap();
         assert_eq!(five.used_percent, Some(1.0));
     }

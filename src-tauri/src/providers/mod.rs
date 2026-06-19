@@ -53,6 +53,7 @@ pub async fn fetch_all(providers: Vec<Box<dyn ProviderApi>>) -> Vec<ServiceUsage
                     account: None,
                     error: Some(e.to_string()),
                     windows: vec![],
+                    detail_windows: vec![],
                 },
             }
         });
@@ -77,6 +78,7 @@ mod tests {
                 account: None,
                 error: None,
                 windows: vec![],
+                detail_windows: vec![],
             })
         }
     }

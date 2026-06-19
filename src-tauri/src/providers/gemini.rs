@@ -141,6 +141,7 @@ impl crate::providers::ProviderApi for GeminiProvider {
             account: None,
             error: None,
             windows: normalize(&quota),
+            detail_windows: vec![],
         })
     }
 }

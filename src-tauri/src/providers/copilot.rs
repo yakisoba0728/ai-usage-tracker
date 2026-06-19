@@ -157,6 +157,7 @@ impl crate::providers::ProviderApi for CopilotProvider {
             account: None,
             error: None,
             windows: normalize(&u),
+            detail_windows: vec![],
         })
     }
 }

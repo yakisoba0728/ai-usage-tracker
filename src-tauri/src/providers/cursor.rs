@@ -126,6 +126,7 @@ impl crate::providers::ProviderApi for CursorProvider {
             account: None,
             error: Some("experimental — values may be unstable".into()),
             windows: normalize(&u),
+            detail_windows: vec![],
         })
     }
 }

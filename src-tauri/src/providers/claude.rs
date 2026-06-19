@@ -163,32 +163,35 @@ fn window(label: &str, w: &Window) -> LimitWindow {
 
 /// Pure normalization (unit-testable, no network). utilization is already 0..100;
 /// extra_usage credits are cents → dollars.
-fn normalize(raw: &UsageResponse) -> Vec<LimitWindow> {
+fn normalize(raw: &UsageResponse) -> (Vec<LimitWindow>, Vec<LimitWindow>) {
     let mut ws = Vec::new();
+    let mut detail = Vec::new();
+    // Primary (card): the two headline rolling windows.
     if let Some(w) = &raw.five_hour {
         ws.push(window("5-hour", w));
     }
     if let Some(w) = &raw.seven_day {
         ws.push(window("7-day", w));
     }
+    // Detail (modal only): per-model windows + extra usage.
     if let Some(w) = &raw.seven_day_sonnet {
-        ws.push(window("7-day (Sonnet)", w));
+        detail.push(window("7-day (Sonnet)", w));
     }
     if let Some(w) = &raw.seven_day_opus {
-        ws.push(window("7-day (Opus)", w));
+        detail.push(window("7-day (Opus)", w));
     }
     if let Some(w) = &raw.seven_day_oauth_apps {
-        ws.push(window("7-day (OAuth Apps)", w));
+        detail.push(window("7-day (OAuth Apps)", w));
     }
     if let Some(w) = &raw.seven_day_omelette {
-        ws.push(window("7-day (Omelette)", w));
+        detail.push(window("7-day (Omelette)", w));
     }
     if let Some(w) = &raw.seven_day_cowork {
-        ws.push(window("7-day (Cowork)", w));
+        detail.push(window("7-day (Cowork)", w));
     }
     if let Some(e) = &raw.extra_usage {
         if e.is_enabled.unwrap_or(false) {
-            ws.push(LimitWindow {
+            detail.push(LimitWindow {
                 label: "Extra usage".into(),
                 used_percent: e.utilization.map(|v| v as f32),
                 resets_at: None,
@@ -197,7 +200,7 @@ fn normalize(raw: &UsageResponse) -> Vec<LimitWindow> {
             });
         }
     }
-    ws
+    (ws, detail)
 }
 
 #[async_trait]
@@ -223,13 +226,15 @@ impl crate::providers::ProviderApi for ClaudeProvider {
             http::get_json(&self.http, &creds.access_token, &format!("{API_BASE}/api/oauth/profile"), &h)
                 .await?;
 
+        let (windows, detail_windows) = normalize(&usage);
         Ok(ServiceUsage {
             provider: Provider::Claude,
             connected: true,
             plan: format_plan(&creds.rate_limit_tier, &creds.subscription_type),
             account: profile.account.and_then(|a| a.email),
             error: None,
-            windows: normalize(&usage),
+            windows,
+            detail_windows,
         })
     }
 }
@@ -242,15 +247,16 @@ mod tests {
     fn normalize_fixture() {
         let raw: UsageResponse =
             serde_json::from_str(include_str!("../../tests/claude_fixture.json")).unwrap();
-        let ws = normalize(&raw);
+        let (ws, detail) = normalize(&raw);
         let labels: Vec<&str> = ws.iter().map(|w| w.label.as_str()).collect();
         assert!(labels.contains(&"5-hour"));
         assert!(labels.contains(&"7-day"));
-        assert!(labels.contains(&"Extra usage"));
         let five = ws.iter().find(|w| w.label == "5-hour").unwrap();
         assert_eq!(five.used_percent, Some(23.5)); // utilization is already 0..100
         assert!(five.resets_at.is_some());
-        let extra = ws.iter().find(|w| w.label == "Extra usage").unwrap();
+        let dlabels: Vec<&str> = detail.iter().map(|w| w.label.as_str()).collect();
+        assert!(dlabels.contains(&"Extra usage"));
+        let extra = detail.iter().find(|w| w.label == "Extra usage").unwrap();
         assert_eq!(extra.used, Some(12.5)); // 1250 cents -> $12.50
         assert_eq!(extra.limit, Some(100.0)); // 10000 cents -> $100.00
         assert_eq!(extra.used_percent, Some(12.5));

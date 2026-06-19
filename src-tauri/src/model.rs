@@ -41,6 +41,9 @@ pub struct ServiceUsage {
     pub account: Option<String>,
     pub error: Option<String>,
     pub windows: Vec<LimitWindow>,
+    /// Modal-only windows (Spark / per-model / credits / resets / extra usage).
+    /// Hidden on the card, shown when the card is opened.
+    pub detail_windows: Vec<LimitWindow>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,6 +94,7 @@ mod tests {
                     account: None,
                     error: None,
                     windows: vec![win("5h", Some(40.0))],
+                    detail_windows: vec![],
                 },
                 ServiceUsage {
                     provider: Provider::Gemini,
@@ -99,6 +103,7 @@ mod tests {
                     account: None,
                     error: None,
                     windows: vec![win("pro", Some(72.5))],
+                    detail_windows: vec![],
                 },
                 ServiceUsage {
                     provider: Provider::Codex,
@@ -107,6 +112,7 @@ mod tests {
                     account: None,
                     error: Some("offline".into()),
                     windows: vec![],
+                    detail_windows: vec![],
                 },
             ],
         };
@@ -130,6 +136,7 @@ mod tests {
                 account: None,
                 error: Some("x".into()),
                 windows: vec![],
+                detail_windows: vec![],
             }],
         };
         assert_eq!(snap.max_used_percent(), None);

@@ -1,10 +1,6 @@
-//! Browser OAuth login. Two modes:
-//! - **LocalServer** (Codex): the provider allows a localhost redirect, so we
-//!   run a local callback server and capture the code automatically.
-//! - **ManualCode** (Claude): the provider only allows its own redirect page
-//!   (`platform.claude.com/oauth/code/callback`), so we open the authorize URL
-//!   with `code=true` (the page shows a one-time code), the user pastes it, and
-//!   we exchange it. No localhost server.
+//! Browser OAuth login via a localhost callback server (Codex): the provider
+//! allows a localhost redirect, so we run a local callback server and capture
+//! the code automatically.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex};
@@ -28,8 +24,6 @@ const TIMEOUT_SECS: u64 = 300;
 enum LoginMode {
     /// Localhost callback server; code captured automatically.
     LocalServer,
-    /// Provider-hosted redirect page shows a code the user pastes.
-    ManualCode { redirect_uri: String },
 }
 
 struct OAuthSpec {
@@ -55,25 +49,8 @@ fn spec_for(p: Provider) -> Option<OAuthSpec> {
             ],
             mode: LoginMode::LocalServer,
         }),
-        Provider::Claude => Some(OAuthSpec {
-            authorize_url: "https://claude.com/cai/oauth/authorize".into(),
-            token_url: "https://platform.claude.com/v1/oauth/token".into(),
-            client_id: "9d1c250a-e61b-44d9-88ed-5944d1962f5e".into(),
-            scope:
-                "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
-                    .into(),
-            // code=true makes Anthropic's redirect page display the auth code.
-            extra_params: vec![("code", "true")],
-            mode: LoginMode::ManualCode {
-                redirect_uri: "https://platform.claude.com/oauth/code/callback".into(),
-            },
-        }),
         _ => None,
     }
-}
-
-pub fn supports(p: Provider) -> bool {
-    spec_for(p).is_some()
 }
 
 #[derive(Clone, Serialize)]
@@ -87,17 +64,6 @@ struct LoginResult {
 /// Cancel flag for the active LocalServer login.
 static ACTIVE: LazyLock<Mutex<Option<std::sync::Arc<AtomicBool>>>> =
     LazyLock::new(|| Mutex::new(None));
-
-/// PKCE state retained for the active ManualCode login (between URL open and the
-/// user pasting the code).
-struct Pending {
-    verifier: String,
-    redirect_uri: String,
-    token_url: String,
-    client_id: String,
-    state: String,
-}
-static PENDING: LazyLock<Mutex<Option<(Provider, Pending)>>> = LazyLock::new(|| Mutex::new(None));
 
 pub fn cancel() {
     if let Ok(guard) = ACTIVE.lock() {
@@ -134,66 +100,6 @@ pub fn start(app: AppHandle, provider: Provider) -> Result<String, String> {
                 run_server(app2, provider, server, client_id, token_url, redirect_uri, verifier, state, cancelled);
             });
             Ok(auth_url)
-        }
-        LoginMode::ManualCode { redirect_uri } => {
-            let auth_url = build_authorize_url(&spec, &redirect_uri, &challenge, &state);
-            if let Ok(mut g) = PENDING.lock() {
-                *g = Some((
-                    provider,
-                    Pending {
-                        verifier,
-                        redirect_uri: redirect_uri.clone(),
-                        token_url: spec.token_url.clone(),
-                        client_id: spec.client_id.clone(),
-                        state,
-                    },
-                ));
-            }
-            // clear any stale LocalServer cancel flag
-            if let Ok(mut g) = ACTIVE.lock() {
-                *g = None;
-            }
-            Ok(auth_url)
-        }
-    }
-}
-
-/// Exchange a code the user pasted (ManualCode flow, e.g. Claude).
-pub async fn exchange_code(app: AppHandle, provider: Provider, code: String) -> Result<(), String> {
-    let pending = {
-        let mut g = PENDING.lock().map_err(|e| e.to_string())?;
-        let taken = g.take();
-        match taken {
-            Some((p, pend)) if p == provider => pend,
-            _ => return Err("no pending login for this provider".into()),
-        }
-    };
-    match exchange(
-        &pending.token_url,
-        &pending.client_id,
-        &pending.redirect_uri,
-        &pending.verifier,
-        &code,
-        Some(&pending.state),
-    )
-    .await
-    {
-        Ok(t) => {
-            let cred = build_credential(provider, &t);
-            let label = cred.label.clone();
-            store::add(cred);
-            let _ = app.emit(
-                "login-complete",
-                LoginResult { provider, ok: true, label: Some(label), error: None },
-            );
-            Ok(())
-        }
-        Err(e) => {
-            let _ = app.emit(
-                "login-complete",
-                LoginResult { provider, ok: false, label: None, error: Some(e.clone()) },
-            );
-            Err(e)
         }
     }
 }
@@ -373,15 +279,6 @@ fn build_credential(provider: Provider, tokens: &Value) -> StoredCredential {
                 .map(String::from);
             (email.unwrap_or_else(|| "Codex account".into()), acct)
         }
-        (Provider::Claude, Some(jwt)) => {
-            let claims = jwt_payload(jwt).ok();
-            let email = claims
-                .as_ref()
-                .and_then(|c| c.get("email"))
-                .and_then(|v| v.as_str())
-                .map(String::from);
-            (email.unwrap_or_else(|| "Claude account".into()), None)
-        }
         _ => (format!("{provider:?} account"), None),
     };
 
@@ -465,18 +362,5 @@ mod tests {
         let url = build_authorize_url(&spec, "http://localhost:1455/auth/callback", "chk", "st");
         assert!(url.contains("originator=codex_cli_rs"));
         assert!(url.contains("codex_cli_simplified_flow=true"));
-    }
-
-    #[test]
-    fn claude_uses_platform_redirect() {
-        let spec = spec_for(Provider::Claude).unwrap();
-        match &spec.mode {
-            LoginMode::ManualCode { redirect_uri } => {
-                assert!(redirect_uri.contains("platform.claude.com"));
-            }
-            _ => panic!("claude should be ManualCode"),
-        }
-        let url = build_authorize_url(&spec, "https://platform.claude.com/oauth/code/callback", "c", "s");
-        assert!(url.contains("code=true"));
     }
 }

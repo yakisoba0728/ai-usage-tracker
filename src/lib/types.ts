@@ -55,8 +55,3 @@ export interface LoginResult {
   label: string | null;
   error: string | null;
 }
-
-export interface CliLoginUrl {
-  provider: Provider;
-  url: string;
-}

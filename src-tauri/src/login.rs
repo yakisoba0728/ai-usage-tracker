@@ -40,10 +40,6 @@ struct LoginResult {
     error: Option<String>,
 }
 
-pub fn supports_login(p: Provider) -> bool {
-    matches!(p, Provider::Codex | Provider::Copilot | Provider::Gemini)
-}
-
 /// Request a device code and spawn the background poll. Returns what the UI
 /// needs to show the code + open the browser.
 pub async fn start(app: AppHandle, provider: Provider) -> Result<LoginInfo, String> {

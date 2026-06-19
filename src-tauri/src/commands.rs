@@ -119,21 +119,6 @@ pub async fn remove_account(id: String) -> Result<bool, String> {
     Ok(crate::store::remove(&id))
 }
 
-/// CLI-driven OAuth login (codexbar style): drive the provider's CLI `/login`
-/// in a PTY. Emits `cli-login-url` (frontend opens browser) + `login-complete`.
-#[tauri::command]
-pub async fn login_via_cli(app: AppHandle, provider: crate::model::Provider) -> Result<(), String> {
-    crate::cli_login::start(app, provider);
-    Ok(())
-}
-
-/// Providers that can be added/logged-in from the app.
-#[tauri::command]
-pub fn login_options() -> Vec<crate::model::Provider> {
-    use crate::model::Provider;
-    vec![Provider::Claude, Provider::Codex, Provider::Gemini, Provider::Copilot]
-}
-
 /// Add an account by pasting a raw credential (Claude session key, or any
 /// provider's access/session token). No OAuth flow involved.
 #[tauri::command]
@@ -169,12 +154,3 @@ pub fn cancel_login() {
     crate::oauth_login::cancel();
 }
 
-/// Exchange a code the user pasted (Claude's manual-code flow).
-#[tauri::command]
-pub async fn exchange_code(
-    app: AppHandle,
-    provider: crate::model::Provider,
-    code: String,
-) -> Result<(), String> {
-    crate::oauth_login::exchange_code(app, provider, code).await
-}

@@ -6,7 +6,6 @@ pub mod model;
 pub mod providers;
 pub mod scheduler;
 pub mod secrets;
-pub mod cli_login;
 pub mod login;
 pub mod store;
 pub mod oauth_login;
@@ -32,9 +31,6 @@ pub fn run() {
             commands::list_accounts,
             commands::remove_account,
             commands::login_oauth,
-            commands::login_via_cli,
-            commands::exchange_code,
-            commands::login_options,
             commands::add_session_key,
         ])
         .setup(|app| {

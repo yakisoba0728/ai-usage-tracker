@@ -1,24 +1,17 @@
-//! Claude (via Claude Code) — modeled on claude-meter (MIT), with deeper
-//! parsing for the detail view. Reads the OAuth token Claude Code stores
-//! (macOS Keychain `Claude Code-credentials`, else `~/.claude/.credentials.json`),
-//! checks expiry, then calls `api.anthropic.com/api/oauth/usage` + `/profile`.
-//! Surfaces every rolling window (five_hour, seven_day + per-model + cowork +
-//! omelette) and `extra_usage`, and derives a human plan label like "Max 20x"
-//! from `rateLimitTier`.
-//!
-//! Refresh: self-refreshes the OAuth token (the usage-API 429 is per access
-//! token, see anthropics/claude-code#31021) against console.anthropic.com with
-//! a platform.claude.com fallback, and exposes `refresh_stored` for stored
-//! OAuth accounts. Session-key accounts (`fetch_with_session_key`) carry no
-//! refresh_token, so `refresh_stored` returns None for them.
+//! Claude — session-key-only mode. Local credential parsing (keychain /
+//! ~/.claude/.credentials.json) was removed because Claude Code retired its
+//! old OAuth client_id and the new one uses an undocumented token endpoint.
+//! Claude now works exclusively via a pasted `sessionKey` cookie from
+//! claude.ai (Add Account → Claude → paste the key). The legacy auto-detect
+//! code below is retained for reference.
 
+#![allow(dead_code)]
 use async_trait::async_trait;
 use serde::Deserialize;
 
 use crate::http;
 use crate::model::{LimitWindow, Provider, ServiceUsage};
 use crate::providers::ProviderError;
-use crate::secrets;
 
 const API_BASE: &str = "https://api.anthropic.com";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -419,61 +412,13 @@ impl crate::providers::ProviderApi for ClaudeProvider {
     }
 
     async fn fetch(&self) -> Result<ServiceUsage, ProviderError> {
-        let blob = secrets::read_claude_creds_json()?;
-        let creds = resolve_creds(blob.clone())?;
-        let now_ms = chrono::Utc::now().timestamp_millis();
-
-        // Refresh on expiry — rotates the refresh_token; writes back so the CLI
-        // and app stay in sync.
-        // If the token is expired, we DON'T attempt an in-app refresh — the
-        // old hardcoded client_id (9d1c250a-…) was retired by Anthropic; the
-        // new URL-based client_id (https://claude.ai/oauth/claude-code-
-        // client-metadata) uses an undocumented token endpoint. The user
-        // just needs to run `claude` once and the CLI refreshes into the
-        // same keychain entry we read from. Surface that clearly.
-        if creds.expires_at > 0 && creds.expires_at < now_ms {
-            return Ok(ServiceUsage {
-                provider: Provider::Claude,
-                connected: false,
-                plan: format_plan(&creds.rate_limit_tier, &creds.subscription_type),
-                account: None,
-                error: Some("Claude Code session expired — run `claude` in your terminal to refresh.".into()),
-                windows: vec![],
-                detail_windows: vec![],
-                raw_response: None,
-            });
-        }
-
-        match fetch_with(
-            &self.http,
-            &creds.access_token,
-            format_plan(&creds.rate_limit_tier, &creds.subscription_type),
-            None,
-        )
-        .await
-        {
-            // usage 429 is per-access-token — refresh once for a fresh window, then retry.
-            Err(ProviderError::Status { status: 429, .. }) => {
-                let rt = creds
-                    .refresh_token
-                    .clone()
-                    .ok_or_else(|| ProviderError::Expired("no refresh_token".into()))?;
-                let fresh = refresh_oauth(&self.http, &rt).await?;
-                let exp = fresh
-                    .expires_in
-                    .map(|s| chrono::Utc::now().timestamp_millis() + (s as i64) * 1000)
-                    .unwrap_or(0);
-                let _ = write_back(&blob, &fresh.access_token, &fresh.refresh_token, exp);
-                fetch_with(
-                    &self.http,
-                    &fresh.access_token,
-                    format_plan(&creds.rate_limit_tier, &creds.subscription_type),
-                    None,
-                )
-                .await
-            }
-            other => other,
-        }
+        // Local credential parsing (keychain / ~/.claude/.credentials.json) was
+        // removed — Claude Code retired the old OAuth client_id, and the
+        // claude.ai API is Cloudflare-protected. Claude works via session-key
+        // paste only (Add Account → Claude → paste the sessionKey cookie).
+        Err(ProviderError::NotLoggedIn(
+            "Add a Claude session key via Add Account.".into(),
+        ))
     }
 }
 

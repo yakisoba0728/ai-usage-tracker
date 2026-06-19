@@ -63,8 +63,11 @@ pub async fn refresh_once(app: &AppHandle, cfg: &ConfigStore, snap: &SnapshotSto
         let _ = app.emit("provider-loading", cred.provider);
     }
     let mut services = fetch_all(providers).await;
-    // Manually-added (OAuth / API-key) accounts from the store, in addition
-    // to auto-detected CLI ones.
+    let stored_providers: std::collections::HashSet<Provider> =
+        stored.iter().map(|c| c.provider).collect();
+    // Drop auto-detect entries for any provider that has a stored credential —
+    // the user's explicit Add-account wins, even if it's currently erroring.
+    services.retain(|s| !stored_providers.contains(&s.provider));
     for cred in &stored {
         services.push(crate::providers::fetch_credential(cred).await);
     }

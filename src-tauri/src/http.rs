@@ -51,7 +51,18 @@ async fn decode_json<T: serde::de::DeserializeOwned>(
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
     if !status.is_success() {
-        let snippet = body.chars().take(300).collect::<String>();
+        // Don't leak raw HTML (Cloudflare challenges, error pages) to the UI.
+        let snippet = if body.trim_start().starts_with('<') {
+            match status.as_u16() {
+                401 | 403 => "access denied — token expired or invalid".to_string(),
+                404 => "endpoint not found".to_string(),
+                429 => "rate limited — try again later".to_string(),
+| 500..=599 => "server error".to_string(),
+                _ => "unexpected response".to_string(),
+            }
+        } else {
+            body.chars().take(200).collect()
+        };
         return Err(ProviderError::Status {
             status: status.as_u16(),
             body: format!("{url}: {snippet}"),

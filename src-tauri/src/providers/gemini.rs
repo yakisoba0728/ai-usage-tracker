@@ -1,7 +1,8 @@
-//! Gemini (via Gemini CLI) — ported from gemini-cli-usage (MIT).
-//! Reads `~/.gemini/oauth_creds.json`, self-refreshes the access token via
-//! Google's OAuth endpoint (client metadata from env > creds file), then calls
-//! the internal Code Assist API (`loadCodeAssist` + `retrieveUserQuota`).
+//! Gemini (via Gemini CLI) — token-parsing only.
+//! Reads the OAuth token Gemini CLI stores at `~/.gemini/oauth_creds.json`,
+//! checks expiry, and calls the internal Code Assist API (`loadCodeAssist` +
+//! `retrieveUserQuota`). No OAuth of our own: the token is rotated by the
+//! Gemini CLI; on expiry we surface a hint to run `gemini`.
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -12,16 +13,12 @@ use crate::model::{LimitWindow, Provider, ServiceUsage};
 use crate::providers::ProviderError;
 use crate::secrets;
 
-const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const CODE_ASSIST_BASE: &str = "https://cloudcode-pa.googleapis.com/v1internal";
 
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize)]
 struct OauthCreds {
     access_token: String,
-    refresh_token: String,
     #[serde(default)] expiry_date: i64,
-    #[serde(default)] client_id: Option<String>,
-    #[serde(default)] client_secret: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -48,35 +45,25 @@ impl GeminiProvider {
             http: http::build_client(),
         }
     }
-}
 
-/// Resolve client metadata: env > creds file. We never register our own client.
-fn client_metadata(creds: &OauthCreds) -> Result<(String, String), ProviderError> {
-    if let (Some(id), Some(sec)) = (creds.client_id.clone(), creds.client_secret.clone()) {
-        if !id.is_empty() && !sec.is_empty() {
-            return Ok((id, sec));
-        }
+    async fn post_internal(
+        &self,
+        token: &str,
+        method: &str,
+        payload: Value,
+    ) -> Result<Value, ProviderError> {
+        let url = format!("{CODE_ASSIST_BASE}:{method}");
+        let resp = self
+            .http
+            .post(&url)
+            .header("Authorization", format!("Bearer {token}"))
+            .header("Content-Type", "application/json")
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| ProviderError::Network(e.to_string()))?;
+        http::send_for_json(resp, &url).await
     }
-    if let (Ok(id), Ok(sec)) = (
-        std::env::var("GEMINI_OAUTH_CLIENT_ID"),
-        std::env::var("GEMINI_OAUTH_CLIENT_SECRET"),
-    ) {
-        return Ok((id, sec));
-    }
-    Err(ProviderError::NotLoggedIn(
-        "Gemini client metadata not found (set GEMINI_OAUTH_CLIENT_ID/SECRET or run `gemini`)".into(),
-    ))
-}
-
-/// Build the refresh form (unit-testable, no network).
-fn refresh_form(creds: &OauthCreds) -> Result<Vec<(String, String)>, ProviderError> {
-    let (id, sec) = client_metadata(creds)?;
-    Ok(vec![
-        ("grant_type".into(), "refresh_token".into()),
-        ("refresh_token".into(), creds.refresh_token.clone()),
-        ("client_id".into(), id),
-        ("client_secret".into(), sec),
-    ])
 }
 
 /// Pure: buckets → LimitWindows.
@@ -101,50 +88,6 @@ fn normalize(resp: &QuotaResp) -> Vec<LimitWindow> {
         .collect()
 }
 
-impl GeminiProvider {
-    async fn fresh_token(&self) -> Result<String, ProviderError> {
-        let v = secrets::read_json_file(&secrets::gemini_creds_path())?;
-        let creds: OauthCreds =
-            serde_json::from_value(v).map_err(|e| ProviderError::Parse(format!("gemini creds: {e}")))?;
-        let now_ms = chrono::Utc::now().timestamp_millis();
-        if creds.expiry_date > 0 && now_ms < creds.expiry_date - 60_000 {
-            return Ok(creds.access_token);
-        }
-        let form = refresh_form(&creds)?;
-        let resp = self
-            .http
-            .post(TOKEN_URL)
-            .form(&form)
-            .send()
-            .await
-            .map_err(|e| ProviderError::Network(e.to_string()))?;
-        let val: Value = http::send_for_json(resp, TOKEN_URL).await?;
-        val["access_token"]
-            .as_str()
-            .map(String::from)
-            .ok_or_else(|| ProviderError::Parse("no access_token in refresh response".into()))
-    }
-
-    async fn post_internal(
-        &self,
-        token: &str,
-        method: &str,
-        payload: Value,
-    ) -> Result<Value, ProviderError> {
-        let url = format!("{CODE_ASSIST_BASE}:{method}");
-        let resp = self
-            .http
-            .post(&url)
-            .header("Authorization", format!("Bearer {token}"))
-            .header("Content-Type", "application/json")
-            .json(&payload)
-            .send()
-            .await
-            .map_err(|e| ProviderError::Network(e.to_string()))?;
-        http::send_for_json(resp, &url).await
-    }
-}
-
 #[async_trait]
 impl crate::providers::ProviderApi for GeminiProvider {
     fn key(&self) -> Provider {
@@ -152,7 +95,17 @@ impl crate::providers::ProviderApi for GeminiProvider {
     }
 
     async fn fetch(&self) -> Result<ServiceUsage, ProviderError> {
-        let token = self.fresh_token().await?;
+        let v = secrets::read_json_file(&secrets::gemini_creds_path())?;
+        let creds: OauthCreds =
+            serde_json::from_value(v).map_err(|e| ProviderError::Parse(format!("gemini creds: {e}")))?;
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        if creds.expiry_date > 0 && creds.expiry_date < now_ms {
+            return Err(ProviderError::Expired(
+                "Gemini CLI token expired — run `gemini` once to refresh".into(),
+            ));
+        }
+        let token = creds.access_token;
+
         let load = self
             .post_internal(
                 &token,
@@ -209,17 +162,6 @@ mod tests {
             .iter()
             .find(|w| w.label == "gemini-2.5-flash-lite")
             .unwrap();
-        assert!(flash.limit.is_none()); // no remainingAmount
-    }
-
-    #[test]
-    fn refresh_form_uses_creds_client_metadata() {
-        let c: OauthCreds =
-            serde_json::from_str(include_str!("../../tests/gemini_oauth_fixture.json")).unwrap();
-        let form = refresh_form(&c).unwrap();
-        let map: std::collections::HashMap<String, String> = form.into_iter().collect();
-        assert_eq!(map.get("client_id").unwrap(), "cid");
-        assert_eq!(map.get("grant_type").unwrap(), "refresh_token");
-        assert_eq!(map.get("client_secret").unwrap(), "csec");
+        assert!(flash.limit.is_none());
     }
 }

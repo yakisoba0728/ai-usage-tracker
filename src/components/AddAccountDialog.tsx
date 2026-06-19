@@ -63,8 +63,7 @@ export function AddAccountDialog({ onChanged }: { onChanged: () => void }) {
   }, [open]);
 
   useEffect(() => {
-    let un: UnlistenFn | undefined;
-    onLoginComplete((r) => {
+    const unP = onLoginComplete((r) => {
       setBusy(null);
       if (r.ok) {
         setInfo(null);
@@ -75,11 +74,9 @@ export function AddAccountDialog({ onChanged }: { onChanged: () => void }) {
       } else {
         setError(r.error ?? "login failed");
       }
-    }).then((u) => {
-      un = u;
     });
     return () => {
-      un?.();
+      void unP.then((u) => u());
     };
   }, [onChanged]);
 
@@ -259,4 +256,3 @@ export function AddAccountDialog({ onChanged }: { onChanged: () => void }) {
   );
 }
 
-type UnlistenFn = () => void;

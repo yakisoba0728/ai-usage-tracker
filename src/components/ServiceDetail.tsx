@@ -11,7 +11,7 @@ const SOURCE_NOTE: Record<Provider, string> = {
   claude: "Claude Code OAuth · api.anthropic.com",
   codex: "Codex CLI · chatgpt.com/backend-api/wham/usage",
   gemini: "Gemini CLI · Google Code Assist",
-  copilot: "Copilot CLI · api.github.com/copilot_internal/user",
+  copilot: "Copilot CLI · api.github.com/copilot_internal/v2/token",
   cursor: "Cursor · api2.cursor.sh (experimental)",
 };
 

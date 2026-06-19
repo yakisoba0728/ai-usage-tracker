@@ -44,6 +44,14 @@ export function ServiceCard({ service, nowMs }: ServiceCardProps) {
     <Dialog>
       <DialogTrigger asChild>
         <Card
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              (e.currentTarget as HTMLElement).click();
+            }
+          }}
           className={cn(
             "group relative w-full cursor-pointer gap-0 overflow-hidden rounded-2xl border-white/[0.06] bg-card px-5 py-5",
             "shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03),0_12px_30px_-18px_rgba(0,0,0,0.75)]",

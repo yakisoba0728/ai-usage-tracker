@@ -10,13 +10,13 @@ export function Dashboard() {
   const { snapshot, loading, refresh } = useUsage();
   const nowMs = useNow(1000);
 
-  // Only show connected/detected providers. Not-yet-detected ones stay hidden
-  // and appear automatically once a token is found (local parsing) or an
-  // account is added.
-  const services = (snapshot?.services ?? []).filter((s) => s.connected);
+  // Only show connected providers that actually have usage data. Not-yet-
+  // detected / broken ones stay hidden and appear automatically once a token
+  // is found (local parsing) or an account is added.
+  const services = (snapshot?.services ?? []).filter(
+    (s) => s.connected && (s.windows?.length ?? 0) > 0,
+  );
   const connectedCount = services.length;
-
-  // Highest used_percent across every window of every connected service
   // (primary + detail) — the honest "peak" surfaced in the header.
   let peak: number | null = null;
   for (const s of services) {

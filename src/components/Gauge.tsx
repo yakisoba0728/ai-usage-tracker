@@ -55,7 +55,7 @@ export function BarGauge({ window: w, nowMs, showMeta = true }: BarGaugeProps) {
       </div>
 
       {showMeta && (
-        <div className="mt-2 flex min-h-[16px] flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+        <div className="mt-2 flex min-h-[16px] items-center justify-between gap-x-3 text-[11px] text-muted-foreground">
           {usedLimit && <span className="font-mono tabular-nums">{usedLimit}</span>}
           {reset && <span className="tabular-nums">{reset}</span>}
         </div>

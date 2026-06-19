@@ -67,8 +67,9 @@ impl GeminiProvider {
 }
 
 /// Pure: buckets → LimitWindows.
-fn normalize(resp: &QuotaResp) -> Vec<LimitWindow> {
-    resp.buckets
+fn normalize(resp: &QuotaResp) -> (Vec<LimitWindow>, Vec<LimitWindow>) {
+    let all: Vec<LimitWindow> = resp
+        .buckets
         .iter()
         .filter_map(|b| {
             let label = b.model_id.clone().unwrap_or_else(|| "Gemini".into());
@@ -85,7 +86,28 @@ fn normalize(resp: &QuotaResp) -> Vec<LimitWindow> {
                 limit,
             })
         })
-        .collect()
+        .collect();
+    if all.is_empty() {
+        return (vec![], vec![]);
+    }
+    // Card headline = most-consumed bucket; every other bucket → modal.
+    let mut idx = 0;
+    let mut best = f32::MIN;
+    for (i, w) in all.iter().enumerate() {
+        let p = w.used_percent.unwrap_or(-1.0);
+        if p > best {
+            best = p;
+            idx = i;
+        }
+    }
+    let headline = all[idx].clone();
+    let detail: Vec<LimitWindow> = all
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != idx)
+        .map(|(_, w)| w.clone())
+        .collect();
+    (vec![headline], detail)
 }
 
 #[async_trait]
@@ -134,14 +156,15 @@ impl crate::providers::ProviderApi for GeminiProvider {
             .and_then(|t| t.get("name"))
             .and_then(|n| n.as_str())
             .map(String::from);
+        let (windows, detail_windows) = normalize(&quota);
         Ok(ServiceUsage {
             provider: Provider::Gemini,
             connected: true,
             plan: tier,
             account: None,
             error: None,
-            windows: normalize(&quota),
-            detail_windows: vec![],
+            windows,
+            detail_windows,
         })
     }
 }
@@ -154,15 +177,13 @@ mod tests {
     fn normalize_quota_fixture() {
         let q: QuotaResp =
             serde_json::from_str(include_str!("../../tests/gemini_quota_fixture.json")).unwrap();
-        let ws = normalize(&q);
-        assert_eq!(ws.len(), 2);
+        let (ws, detail) = normalize(&q);
+        // headline = most-consumed bucket (pro 35% > flash-lite ~0.07%)
+        assert_eq!(ws.len(), 1);
         let pro = ws.iter().find(|w| w.label == "gemini-2.5-pro").unwrap();
         assert_eq!(pro.used_percent, Some(35.0));
         assert_eq!(pro.limit, Some(1000.0)); // 650 / 0.65
-        let flash = ws
-            .iter()
-            .find(|w| w.label == "gemini-2.5-flash-lite")
-            .unwrap();
+        let flash = detail.iter().find(|w| w.label == "gemini-2.5-flash-lite").unwrap();
         assert!(flash.limit.is_none());
     }
 }

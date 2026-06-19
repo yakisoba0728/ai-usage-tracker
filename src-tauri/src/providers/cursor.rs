@@ -36,6 +36,12 @@ struct PlanUsage {
 pub struct CursorProvider {
     http: reqwest::Client,
 }
+impl Default for CursorProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CursorProvider {
     pub fn new() -> Self {
         Self {
@@ -77,7 +83,7 @@ fn normalize(u: &CursorUsage) -> Vec<LimitWindow> {
     let used_cents = p
         .included_spend
         .or(p.total_spend)
-        .or_else(|| match (p.limit, p.remaining) {
+        .or(match (p.limit, p.remaining) {
             (Some(l), Some(r)) => Some(l - r),
             _ => None,
         });

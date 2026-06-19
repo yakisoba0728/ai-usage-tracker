@@ -71,6 +71,12 @@ struct ResetCredits {
 pub struct CodexProvider {
     http: reqwest::Client,
 }
+impl Default for CodexProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CodexProvider {
     pub fn new() -> Self {
         Self {

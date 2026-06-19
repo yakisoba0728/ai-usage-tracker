@@ -104,6 +104,7 @@ pub fn start(app: AppHandle, provider: Provider) -> Result<String, String> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_server(
     app: AppHandle,
     provider: Provider,

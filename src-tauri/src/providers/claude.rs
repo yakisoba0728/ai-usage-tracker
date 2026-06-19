@@ -147,6 +147,12 @@ pub struct ClaudeProvider {
     http: reqwest::Client,
 }
 
+impl Default for ClaudeProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ClaudeProvider {
     pub fn new() -> Self {
         Self {
@@ -280,7 +286,7 @@ fn write_creds(s: &str) -> Result<(), ProviderError> {
                 String::from_utf8_lossy(&out.stderr).trim()
             )));
         }
-        return Ok(());
+        Ok(())
     }
     #[cfg(not(target_os = "macos"))]
     {

@@ -46,6 +46,12 @@ pub struct GeminiProvider {
     http: reqwest::Client,
 }
 
+impl Default for GeminiProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GeminiProvider {
     pub fn new() -> Self {
         Self {
@@ -78,20 +84,20 @@ fn normalize(resp: &QuotaResp) -> (Vec<LimitWindow>, Vec<LimitWindow>) {
     let all: Vec<LimitWindow> = resp
         .buckets
         .iter()
-        .filter_map(|b| {
+        .map(|b| {
             let label = b.model_id.clone().unwrap_or_else(|| "Gemini".into());
             let used_percent = b.remaining_fraction.map(|f| ((1.0 - f) * 100.0) as f32);
             let limit = match (&b.remaining_amount, b.remaining_fraction) {
                 (Some(amt), Some(f)) if f > 0.0 => amt.parse::<f64>().ok().map(|r| r / f),
                 _ => None,
             };
-            Some(LimitWindow {
+            LimitWindow {
                 label,
                 used_percent,
                 resets_at: b.reset_time.map(|d| d.timestamp()),
                 used: None,
                 limit,
-            })
+            }
         })
         .collect();
     if all.is_empty() {

@@ -44,6 +44,12 @@ pub struct CopilotProvider {
     http: reqwest::Client,
 }
 
+impl Default for CopilotProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CopilotProvider {
     pub fn new() -> Self {
         Self {

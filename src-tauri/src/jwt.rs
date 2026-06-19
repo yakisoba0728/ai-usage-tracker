@@ -21,12 +21,10 @@ pub fn jwt_payload(token: &str) -> Result<Value, String> {
         STANDARD_NO_PAD.decode(payload),
     ];
     let mut last_err = String::from("no engine decoded");
-    for a in attempts {
-        if let Ok(bytes) = a {
-            match serde_json::from_slice::<Value>(&bytes) {
-                Ok(v) => return Ok(v),
-                Err(e) => last_err = format!("json: {e}"),
-            }
+    for bytes in attempts.into_iter().flatten() {
+        match serde_json::from_slice::<Value>(&bytes) {
+            Ok(v) => return Ok(v),
+            Err(e) => last_err = format!("json: {e}"),
         }
     }
     // Last resort: strip trailing '=' and retry url-safe no-pad.

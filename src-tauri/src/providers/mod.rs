@@ -70,6 +70,7 @@ pub async fn fetch_credential(cred: &crate::store::StoredCredential) -> ServiceU
         )
         .await,
         Provider::Gemini => crate::providers::gemini::fetch_with(&http, &cred.access_token, Some(label)).await,
+        Provider::Claude => crate::providers::claude::fetch_with(&http, &cred.access_token, None, Some(label.to_string())).await,
         Provider::Copilot => Err(ProviderError::NotLoggedIn(
             "Copilot usage needs a fine-grained PAT (Plan:read); the OAuth token lacks billing scope".into(),
         )),

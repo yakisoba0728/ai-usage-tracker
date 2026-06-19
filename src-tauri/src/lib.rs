@@ -9,6 +9,7 @@ pub mod secrets;
 pub mod cli_login;
 pub mod login;
 pub mod store;
+pub mod oauth_login;
 
 use tauri::{
     menu::{Menu, MenuItem},
@@ -30,7 +31,8 @@ pub fn run() {
             commands::start_login,
             commands::list_accounts,
             commands::remove_account,
-            commands::login_via_cli,
+            commands::login_oauth,
+            commands::cancel_login,
             commands::login_options,
         ])
         .setup(|app| {

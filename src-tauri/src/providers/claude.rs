@@ -217,26 +217,38 @@ impl crate::providers::ProviderApi for ClaudeProvider {
                 "Claude Code token expired — run `claude` once to refresh".into(),
             ));
         }
-
-        let h = [("anthropic-version", ANTHROPIC_VERSION)];
-        let usage: UsageResponse =
-            http::get_json(&self.http, &creds.access_token, &format!("{API_BASE}/api/oauth/usage"), &h)
-                .await?;
-        let profile: Profile =
-            http::get_json(&self.http, &creds.access_token, &format!("{API_BASE}/api/oauth/profile"), &h)
-                .await?;
-
-        let (windows, detail_windows) = normalize(&usage);
-        Ok(ServiceUsage {
-            provider: Provider::Claude,
-            connected: true,
-            plan: format_plan(&creds.rate_limit_tier, &creds.subscription_type),
-            account: profile.account.and_then(|a| a.email),
-            error: None,
-            windows,
-            detail_windows,
-        })
+        fetch_with(
+            &self.http,
+            &creds.access_token,
+            format_plan(&creds.rate_limit_tier, &creds.subscription_type),
+            None,
+        )
+        .await
     }
+}
+
+/// Fetch Claude usage given an explicit access token (manually-added account).
+pub(crate) async fn fetch_with(
+    http: &reqwest::Client,
+    access_token: &str,
+    plan: Option<String>,
+    account_override: Option<String>,
+) -> Result<ServiceUsage, ProviderError> {
+    let h = [("anthropic-version", ANTHROPIC_VERSION)];
+    let usage: UsageResponse =
+        http::get_json(http, access_token, &format!("{API_BASE}/api/oauth/usage"), &h).await?;
+    let profile: Profile =
+        http::get_json(http, access_token, &format!("{API_BASE}/api/oauth/profile"), &h).await?;
+    let (windows, detail_windows) = normalize(&usage);
+    Ok(ServiceUsage {
+        provider: Provider::Claude,
+        connected: true,
+        plan,
+        account: account_override.or_else(|| profile.account.and_then(|a| a.email)),
+        error: None,
+        windows,
+        detail_windows,
+    })
 }
 
 #[cfg(test)]

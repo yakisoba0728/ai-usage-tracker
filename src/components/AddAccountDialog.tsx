@@ -11,17 +11,18 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import {
+  cancelLogin,
   listAccounts,
-  loginViaCli,
-  onCliLoginUrl,
+  loginOAuth,
   onLoginComplete,
   removeAccount,
   startLogin,
 } from "@/lib/ipc";
 import type { LoginInfo, Provider, StoredCredential } from "@/lib/types";
 
-/** Providers offered in the dialog. Claude uses CLI-driven login; the rest use
- * device-code. */
+/** Claude/Codex use browser+localhost OAuth; Gemini/Copilot use device-code. */
+const BROWSER_OAUTH: Provider[] = ["claude", "codex"];
+
 const SUPPORTED: { p: Provider; name: string }[] = [
   { p: "claude", name: "Claude" },
   { p: "codex", name: "Codex" },
@@ -56,21 +57,6 @@ export function AddAccountDialog({ onChanged }: { onChanged: () => void }) {
     if (open) load();
   }, [open]);
 
-  // CLI-login URL arrives as an event (Claude): open the browser + show it.
-  useEffect(() => {
-    let un: UnlistenFn | undefined;
-    onCliLoginUrl((u) => {
-      setInfo({ provider: u.provider, verification_url: u.url, user_code: "", expires_in: 900 });
-      void openUrl(u.url);
-    }).then((u) => {
-      un = u;
-    });
-    return () => {
-      un?.();
-    };
-  }, []);
-
-  // Login completion (device-code OR CLI).
   useEffect(() => {
     let un: UnlistenFn | undefined;
     onLoginComplete((r) => {
@@ -97,9 +83,11 @@ export function AddAccountDialog({ onChanged }: { onChanged: () => void }) {
     setBusy(p);
     setInfo(null);
     try {
-      if (p === "claude") {
-        // CLI-driven login (codexbar style): URL arrives via cli-login-url.
-        await loginViaCli(p);
+      if (BROWSER_OAUTH.includes(p)) {
+        // Browser + localhost-callback flow (opens the provider's authorize URL).
+        const url = await loginOAuth(p);
+        setInfo({ provider: p, verification_url: url, user_code: "", expires_in: 300 });
+        await openUrl(url);
       } else {
         const i = await startLogin(p);
         setInfo(i);
@@ -117,32 +105,31 @@ export function AddAccountDialog({ onChanged }: { onChanged: () => void }) {
     onChanged();
   }
 
+  function close() {
+    cancelLogin();
+    setInfo(null);
+    setError(null);
+    setBusy(null);
+    setOpen(false);
+  }
+
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(o) => {
-        setOpen(o);
-        if (!o) {
-          setInfo(null);
-          setError(null);
-        }
-      }}
-    >
+    <Dialog open={open} onOpenChange={(o) => (o ? setOpen(true) : close())}>
       <DialogTrigger asChild>
         <Button variant="outline" size="sm">
           <Plus className="size-4" />
           Add account
         </Button>
       </DialogTrigger>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-md" onEscapeKeyDown={close} onPointerDownOutside={close}>
         <DialogHeader>
           <DialogTitle>Accounts</DialogTitle>
         </DialogHeader>
         <div className="space-y-4 text-sm">
           <section>
             <p className="mb-2 text-xs text-muted-foreground">
-              Sign in via OAuth — Claude drives the official CLI login; others
-              use a device code. No password stored.
+              Sign in via OAuth — opens your browser; we capture the token on a
+              local callback. No password stored.
             </p>
             <div className="flex flex-wrap gap-2">
               {SUPPORTED.map(({ p, name }) => (
@@ -188,7 +175,7 @@ export function AddAccountDialog({ onChanged }: { onChanged: () => void }) {
               )}
               <div className="flex items-center gap-1.5 text-muted-foreground">
                 <Loader2 className="size-3 animate-spin" />
-                Waiting for authorization…
+                Waiting for authorization… (close X to cancel)
               </div>
             </div>
           )}
@@ -209,11 +196,7 @@ export function AddAccountDialog({ onChanged }: { onChanged: () => void }) {
                     <span className="truncate">
                       {TITLES[a.provider]} — {a.label}
                     </span>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => remove(a.id)}
-                    >
+                    <Button variant="ghost" size="sm" onClick={() => remove(a.id)}>
                       <Trash2 className="size-3.5" />
                     </Button>
                   </div>

@@ -134,3 +134,17 @@ pub fn login_options() -> Vec<crate::model::Provider> {
         .filter(|p| crate::cli_login::supports_cli_login(*p) || crate::login::supports_login(*p))
         .collect()
 }
+
+/// Browser + localhost-callback OAuth login (codex-switcher pattern). Returns
+/// the authorize URL for the frontend to open in the browser; emits
+/// `login-complete` when tokens are captured.
+#[tauri::command]
+pub async fn login_oauth(app: AppHandle, provider: crate::model::Provider) -> Result<String, String> {
+    crate::oauth_login::start(app, provider)
+}
+
+/// Cancel the in-progress OAuth login (closes the local callback server).
+#[tauri::command]
+pub fn cancel_login() {
+    crate::oauth_login::cancel();
+}

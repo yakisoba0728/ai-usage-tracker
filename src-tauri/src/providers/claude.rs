@@ -32,6 +32,7 @@ struct CredBlob {
 #[derive(Deserialize)]
 struct OAuthCreds {
     #[serde(rename = "accessToken")] access_token: String,
+    #[serde(rename = "refreshToken", default)] refresh_token: Option<String>,
     #[serde(rename = "expiresAt", default)] expires_at: i64,
     #[serde(rename = "subscriptionType", default)] subscription_type: Option<String>,
     #[serde(rename = "rateLimitTier", default)] rate_limit_tier: Option<String>,
@@ -39,6 +40,7 @@ struct OAuthCreds {
 
 struct ResolvedCreds {
     access_token: String,
+    refresh_token: Option<String>,
     expires_at: i64,
     subscription_type: Option<String>,
     rate_limit_tier: Option<String>,
@@ -50,6 +52,7 @@ fn resolve_creds(blob: serde_json::Value) -> Result<ResolvedCreds, ProviderError
     if let Some(o) = parsed.oauth {
         return Ok(ResolvedCreds {
             access_token: o.access_token,
+            refresh_token: o.refresh_token,
             expires_at: o.expires_at,
             subscription_type: o.subscription_type,
             rate_limit_tier: o.rate_limit_tier,
@@ -59,6 +62,7 @@ fn resolve_creds(blob: serde_json::Value) -> Result<ResolvedCreds, ProviderError
         .flat_access
         .map(|access_token| ResolvedCreds {
             access_token,
+            refresh_token: None,
             expires_at: parsed.flat_expires,
             subscription_type: parsed.flat_sub,
             rate_limit_tier: parsed.flat_tier,
@@ -203,6 +207,89 @@ fn normalize(raw: &UsageResponse) -> (Vec<LimitWindow>, Vec<LimitWindow>) {
     (ws, detail)
 }
 
+const CLAUDE_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+const CLAUDE_TOKEN_URL: &str = "https://console.anthropic.com/v1/oauth/token";
+
+#[derive(serde::Deserialize)]
+struct Refreshed {
+    access_token: String,
+    refresh_token: String,
+    #[serde(default)] expires_in: Option<u64>,
+}
+
+/// Refresh the OAuth token using the public Claude Code client_id. The 429 on
+/// the usage API is per-access-token (see anthropics/claude-code#31021), so a
+/// fresh token reopens the rate-limit window. Refresh tokens rotate — we write
+/// the new pair back so the CLI and app stay in sync.
+async fn refresh_oauth(http: &reqwest::Client, rt: &str) -> Result<Refreshed, ProviderError> {
+    let body = serde_json::json!({
+        "grant_type": "refresh_token",
+        "refresh_token": rt,
+        "client_id": CLAUDE_CLIENT_ID,
+    });
+    let resp = http
+        .post(CLAUDE_TOKEN_URL)
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| ProviderError::Network(e.to_string()))?;
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(ProviderError::Status {
+            status: status.as_u16(),
+            body: text.chars().take(200).collect(),
+        });
+    }
+    serde_json::from_str::<Refreshed>(&text).map_err(|e| ProviderError::Parse(format!("refresh: {e}")))
+}
+
+fn write_back(
+    orig: &serde_json::Value,
+    access_token: &str,
+    refresh_token: &str,
+    expires_at: i64,
+) -> Result<(), ProviderError> {
+    let mut blob = orig.clone();
+    let target = if let Some(o) = blob.get_mut("claudeAiOauth").and_then(|v| v.as_object_mut()) {
+        o
+    } else if let Some(obj) = blob.as_object_mut() {
+        obj
+    } else {
+        return Err(ProviderError::Parse("claude creds: cannot write back".into()));
+    };
+    target.insert("accessToken".into(), serde_json::json!(access_token));
+    target.insert("refreshToken".into(), serde_json::json!(refresh_token));
+    target.insert("expiresAt".into(), serde_json::json!(expires_at));
+    let s = serde_json::to_string(&blob).map_err(|e| ProviderError::Parse(e.to_string()))?;
+    write_creds(&s)
+}
+
+fn write_creds(s: &str) -> Result<(), ProviderError> {
+    #[cfg(target_os = "macos")]
+    {
+        let acct = std::env::var("USER").unwrap_or_default();
+        let out = std::process::Command::new("/usr/bin/security")
+            .args(["add-generic-password", "-s", "Claude Code-credentials", "-a", &acct, "-w", s, "-U"])
+            .output()
+            .map_err(|e| ProviderError::Network(format!("security write: {e}")))?;
+        if !out.status.success() {
+            return Err(ProviderError::Network(format!(
+                "security write: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            )));
+        }
+        return Ok(());
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let p = crate::secrets::claude_token_path();
+        std::fs::write(&p, s).map_err(|e| ProviderError::Network(format!("write {}: {e}", p.display())))?;
+        Ok(())
+    }
+}
+
 #[async_trait]
 impl crate::providers::ProviderApi for ClaudeProvider {
     fn key(&self) -> Provider {
@@ -210,20 +297,65 @@ impl crate::providers::ProviderApi for ClaudeProvider {
     }
 
     async fn fetch(&self) -> Result<ServiceUsage, ProviderError> {
-        let creds = resolve_creds(secrets::read_claude_creds_json()?)?;
+        let blob = secrets::read_claude_creds_json()?;
+        let mut creds = resolve_creds(blob.clone())?;
         let now_ms = chrono::Utc::now().timestamp_millis();
+
+        // Refresh on expiry — rotates the refresh_token; writes back so the CLI
+        // and app stay in sync.
         if creds.expires_at > 0 && creds.expires_at < now_ms {
-            return Err(ProviderError::Expired(
-                "Claude Code token expired — run `claude` once to refresh".into(),
-            ));
+            match creds.refresh_token.clone() {
+                Some(rt) => match refresh_oauth(&self.http, &rt).await {
+                    Ok(fresh) => {
+                        let exp = fresh.expires_in.map(|s| now_ms + (s as i64) * 1000).unwrap_or(0);
+                        let _ = write_back(&blob, &fresh.access_token, &fresh.refresh_token, exp);
+                        creds.access_token = fresh.access_token;
+                        creds.refresh_token = Some(fresh.refresh_token);
+                    }
+                    Err(_) => {
+                        return Err(ProviderError::Expired(
+                            "Claude token expired and refresh failed (rate-limited?)".into(),
+                        ))
+                    }
+                },
+                None => {
+                    return Err(ProviderError::Expired(
+                        "Claude Code token expired — no refresh_token; run `claude` once".into(),
+                    ))
+                }
+            }
         }
-        fetch_with(
+
+        match fetch_with(
             &self.http,
             &creds.access_token,
             format_plan(&creds.rate_limit_tier, &creds.subscription_type),
             None,
         )
         .await
+        {
+            // usage 429 is per-access-token — refresh once for a fresh window, then retry.
+            Err(ProviderError::Status { status: 429, .. }) => {
+                let rt = creds
+                    .refresh_token
+                    .clone()
+                    .ok_or_else(|| ProviderError::Expired("no refresh_token".into()))?;
+                let fresh = refresh_oauth(&self.http, &rt).await?;
+                let exp = fresh
+                    .expires_in
+                    .map(|s| chrono::Utc::now().timestamp_millis() + (s as i64) * 1000)
+                    .unwrap_or(0);
+                let _ = write_back(&blob, &fresh.access_token, &fresh.refresh_token, exp);
+                fetch_with(
+                    &self.http,
+                    &fresh.access_token,
+                    format_plan(&creds.rate_limit_tier, &creds.subscription_type),
+                    None,
+                )
+                .await
+            }
+            other => other,
+        }
     }
 }
 

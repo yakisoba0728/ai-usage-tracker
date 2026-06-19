@@ -280,20 +280,40 @@ async fn exchange(
     verifier: &str,
     code: &str,
 ) -> Result<Value, String> {
-    let body = format!(
-        "grant_type=authorization_code&code={}&redirect_uri={}&client_id={}&code_verifier={}",
-        urlencoding::encode(code),
-        urlencoding::encode(redirect_uri),
-        urlencoding::encode(client_id),
-        urlencoding::encode(verifier)
-    );
-    let resp = reqwest::Client::new()
-        .post(token_url)
-        .header("Content-Type", "application/x-www-form-urlencoded")
-        .body(body)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+    let client = reqwest::Client::new();
+    // Anthropic's token endpoint rejects form-encoding ("Invalid request
+    // format"); it wants JSON. OpenAI accepts form-encoding.
+    let resp = if token_url.contains("anthropic.com") {
+        let body = serde_json::json!({
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": redirect_uri,
+            "client_id": client_id,
+            "code_verifier": verifier,
+        });
+        client
+            .post(token_url)
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?
+    } else {
+        let body = format!(
+            "grant_type=authorization_code&code={}&redirect_uri={}&client_id={}&code_verifier={}",
+            urlencoding::encode(code),
+            urlencoding::encode(redirect_uri),
+            urlencoding::encode(client_id),
+            urlencoding::encode(verifier),
+        );
+        client
+            .post(token_url)
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(body)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?
+    };
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
     if !status.is_success() {

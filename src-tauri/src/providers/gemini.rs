@@ -228,6 +228,10 @@ impl crate::providers::ProviderApi for GeminiProvider {
         let quota_val = self
             .post_internal(token, "retrieveUserQuota", json!({ "project": project }))
             .await?;
+        let raw_json = serde_json::to_string_pretty(&serde_json::json!({
+            "loadCodeAssist": &load,
+            "retrieveUserQuota": &quota_val,
+        })).ok();
         let quota: QuotaResp =
             serde_json::from_value(quota_val).map_err(|e| ProviderError::Parse(e.to_string()))?;
         // Tier: paidTier → currentTier fallback (free accounts have null paidTier).
@@ -246,6 +250,7 @@ impl crate::providers::ProviderApi for GeminiProvider {
             error: None,
             windows,
             detail_windows,
+            raw_response: raw_json,
         })
     }
 }
@@ -353,6 +358,10 @@ pub(crate) async fn fetch_with(
         .map(String::from)
         .ok_or_else(|| ProviderError::Parse("no cloudaicompanionProject".into()))?;
     let quota_val = post_code_assist(http, token, "retrieveUserQuota", json!({ "project": project })).await?;
+    let raw_json = serde_json::to_string_pretty(&serde_json::json!({
+        "loadCodeAssist": &load,
+        "retrieveUserQuota": &quota_val,
+    })).ok();
     let quota: QuotaResp =
         serde_json::from_value(quota_val).map_err(|e| ProviderError::Parse(e.to_string()))?;
     let tier = load
@@ -369,6 +378,7 @@ pub(crate) async fn fetch_with(
         error: None,
         windows,
         detail_windows,
+        raw_response: raw_json,
     })
 }
 

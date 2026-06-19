@@ -48,14 +48,15 @@ pub async fn fetch_all(providers: Vec<Box<dyn ProviderApi>>) -> Vec<ServiceUsage
             match p.fetch().await {
                 Ok(u) => u,
                 Err(e) => ServiceUsage {
-                    provider: key,
-                    connected: false,
-                    plan: None,
-                    account: None,
-                    error: Some(e.to_string()),
-                    windows: vec![],
-                    detail_windows: vec![],
-                },
+                        provider: key,
+                        connected: false,
+                        plan: None,
+                        account: None,
+                        error: Some(e.to_string()),
+                        windows: vec![],
+                        detail_windows: vec![],
+                        raw_response: None,
+                    },
             }
         });
     join_all(futs).await
@@ -99,14 +100,15 @@ pub async fn fetch_credential(cred: &crate::store::StoredCredential) -> ServiceU
     match res {
         Ok(u) => u,
         Err(e) => ServiceUsage {
-            provider: active.provider,
-            connected: false,
-            plan: None,
-            account: Some(active.label.clone()),
-            error: Some(e.to_string()),
-            windows: vec![],
-            detail_windows: vec![],
-        },
+                provider: active.provider,
+                connected: false,
+                plan: None,
+                account: Some(active.label.clone()),
+                error: Some(e.to_string()),
+                windows: vec![],
+                detail_windows: vec![],
+                raw_response: None,
+            },
     }
 }
 
@@ -145,6 +147,7 @@ mod tests {
                 error: None,
                 windows: vec![],
                 detail_windows: vec![],
+                raw_response: None,
             })
         }
     }

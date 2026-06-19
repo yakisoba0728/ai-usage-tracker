@@ -29,6 +29,8 @@ export interface ServiceUsage {
   windows: LimitWindow[];
   /** MODAL-ONLY windows — hidden on the card, shown in the detail modal. */
   detail_windows: LimitWindow[];
+  /** Pretty-printed raw API response JSON for the "Raw Response" tab. */
+  raw_response?: string;
 }
 
 export interface UsageSnapshot {

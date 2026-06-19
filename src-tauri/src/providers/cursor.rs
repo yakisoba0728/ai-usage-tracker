@@ -130,6 +130,7 @@ impl crate::providers::ProviderApi for CursorProvider {
             .await
             .map_err(|e| ProviderError::Network(e.to_string()))?;
         let val: Value = http::send_for_json(resp, USAGE_URL).await?;
+        let raw_json = serde_json::to_string_pretty(&val).ok();
         let u: CursorUsage =
             serde_json::from_value(val).map_err(|e| ProviderError::Parse(e.to_string()))?;
         Ok(ServiceUsage {
@@ -140,6 +141,7 @@ impl crate::providers::ProviderApi for CursorProvider {
             error: None,
             windows: normalize(&u),
             detail_windows: vec![],
+            raw_response: raw_json,
         })
     }
 }

@@ -343,6 +343,8 @@ pub(crate) async fn fetch_with(
     // Capture as Value first — the endpoint is undocumented and the exhausted
     // path needs `code` / `data.next_flush_time` before struct conversion.
     let raw: Value = http::send_for_json(resp, USAGE_URL).await?;
+    let raw_json = serde_json::to_string_pretty(&raw).ok();
+
 
     let code = raw.get("code").and_then(|v| v.as_i64());
     let exhausted_code = code.filter(|&c| c == CODE_USAGE_EXHAUSTED || c == CODE_PERIOD_EXHAUSTED);
@@ -360,6 +362,7 @@ pub(crate) async fn fetch_with(
             error: None,
             windows: vec![exhausted_window(c, raw.get("data"))],
             detail_windows: vec![],
+            raw_response: raw_json.clone(),
         });
     }
 
@@ -386,6 +389,7 @@ pub(crate) async fn fetch_with(
         error: None,
         windows,
         detail_windows,
+        raw_response: raw_json,
     })
 }
 

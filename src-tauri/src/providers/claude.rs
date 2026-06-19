@@ -502,6 +502,7 @@ pub(crate) async fn fetch_with(
         error: None,
         windows,
         detail_windows,
+        raw_response: None,
     })
 }
 
@@ -611,6 +612,7 @@ pub(crate) async fn fetch_with_session_key(
         error: None,
         windows,
         detail_windows: detail,
+        raw_response: None,
     })
 }
 

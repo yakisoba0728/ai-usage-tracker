@@ -183,14 +183,15 @@ mod tests {
 
     fn svc(provider: Provider, connected: bool, err: Option<&str>) -> ServiceUsage {
         ServiceUsage {
-            provider,
-            connected,
-            plan: None,
-            account: None,
-            error: err.map(String::from),
-            windows: vec![],
-            detail_windows: vec![],
-        }
+                    provider,
+                    connected,
+                    plan: None,
+                    account: None,
+                    error: err.map(String::from),
+                    windows: vec![],
+                    detail_windows: vec![],
+                    raw_response: None,
+                }
     }
 
     #[test]

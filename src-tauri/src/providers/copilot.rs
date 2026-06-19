@@ -226,6 +226,7 @@ pub(crate) async fn fetch_with(
         .await
         .map_err(|e| ProviderError::Network(e.to_string()))?;
     let val: Value = http::send_for_json(resp, USAGE_URL).await?;
+    let raw_json = serde_json::to_string_pretty(&val).ok();
     let u: CopilotUsageResp =
         serde_json::from_value(val).map_err(|e| ProviderError::Parse(e.to_string()))?;
     let (windows, detail_windows) = normalize(&u);
@@ -237,6 +238,7 @@ pub(crate) async fn fetch_with(
         error: None,
         windows,
         detail_windows,
+        raw_response: raw_json,
     })
 }
 

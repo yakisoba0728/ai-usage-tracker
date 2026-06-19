@@ -46,6 +46,12 @@ pub struct ServiceUsage {
     /// Modal-only windows (Spark / per-model / credits / resets / extra usage).
     /// Hidden on the card, shown when the card is opened.
     pub detail_windows: Vec<LimitWindow>,
+    /// Pretty-printed raw API response JSON for the "Raw Response" tab in the
+    /// detail modal. None if the provider didn't make an HTTP call (e.g.,
+    /// file-based credential reads that failed before reaching the API) or
+    /// the response couldn't be serialized back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_response: Option<String>,
 }
 
 /// Display-only projection of a stored credential — what `list_accounts`
@@ -106,6 +112,7 @@ mod tests {
                     error: None,
                     windows: vec![win("5h", Some(40.0))],
                     detail_windows: vec![],
+                    raw_response: None,
                 },
                 ServiceUsage {
                     provider: Provider::Gemini,
@@ -115,6 +122,7 @@ mod tests {
                     error: None,
                     windows: vec![win("pro", Some(72.5))],
                     detail_windows: vec![],
+                    raw_response: None,
                 },
                 ServiceUsage {
                     provider: Provider::Codex,
@@ -124,6 +132,7 @@ mod tests {
                     error: Some("offline".into()),
                     windows: vec![],
                     detail_windows: vec![],
+                    raw_response: None,
                 },
             ],
         };
@@ -148,6 +157,7 @@ mod tests {
                 error: Some("x".into()),
                 windows: vec![],
                 detail_windows: vec![],
+                raw_response: None,
             }],
         };
         assert_eq!(snap.max_used_percent(), None);

@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Trash2 } from "lucide-react";
 
 import { BarGauge } from "@/components/BarGauge";
@@ -38,8 +38,10 @@ export function ProviderDetail({
   accountId,
   onRemoved,
 }: ProviderDetailProps) {
+  const [tab, setTab] = useState<"usage" | "raw">("usage");
   const windows = service.windows ?? [];
   const detail = service.detail_windows ?? [];
+  const hasRaw = Boolean(service.raw_response);
   const hasWindows = service.connected && windows.length > 0;
   const title = PROVIDER_LABEL[service.provider];
   const source = SOURCE_NOTE[service.provider] ?? `${title} usage`;
@@ -93,9 +95,38 @@ export function ProviderDetail({
         </div>
       </div>
 
+      {/* Tab bar — only when raw response is available */}
+      {hasRaw && (
+        <div className="flex gap-1 border-b border-border px-5 pt-2">
+          {(["usage", "raw"] as const).map((t) => (
+            <button
+              key={t}
+              type="button"
+              onClick={() => setTab(t)}
+              className={cn(
+                "rounded-t-md border-b-2 px-3 py-2 transition-colors",
+                tab === t
+                  ? "border-signal text-text"
+                  : "border-transparent text-text-faint hover:text-text-dim",
+              )}
+              style={{ fontSize: 12, fontWeight: 500 }}
+            >
+              {t === "usage" ? "Usage" : "Raw Response"}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Body */}
       <div className="scroll-area max-h-[60vh] overflow-y-auto px-5 py-4">
-        {hasWindows ? (
+        {tab === "raw" && hasRaw ? (
+          <pre
+            className="num overflow-x-auto whitespace-pre-wrap break-words rounded-lg border border-border bg-canvas p-3 text-text-dim"
+            style={{ fontSize: 11, lineHeight: 1.6 }}
+          >
+            {service.raw_response}
+          </pre>
+        ) : hasWindows ? (
           <div className="space-y-5">
             <Section title="Usage">
               <div className="divide-y divide-border">

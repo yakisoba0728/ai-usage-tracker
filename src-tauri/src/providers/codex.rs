@@ -220,6 +220,7 @@ pub(crate) async fn fetch_with(
         extra.push(("ChatGPT-Account-Id", acc_holder.as_str()));
     }
     let raw: Value = http::get_json(http, access_token, USAGE_URL, &extra).await?;
+    let raw_json = serde_json::to_string_pretty(&raw).ok();
     let u: WhamUsage =
         serde_json::from_value(raw).map_err(|e| ProviderError::Parse(format!("codex usage: {e}")))?;
     let plan = u.plan_type.as_deref().map(capitalize);
@@ -241,6 +242,7 @@ pub(crate) async fn fetch_with(
         error: None,
         windows,
         detail_windows,
+        raw_response: raw_json,
     })
 }
 

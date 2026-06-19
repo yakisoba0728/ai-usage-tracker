@@ -412,13 +412,26 @@ impl crate::providers::ProviderApi for ClaudeProvider {
     }
 
     async fn fetch(&self) -> Result<ServiceUsage, ProviderError> {
-        // Local credential parsing (keychain / ~/.claude/.credentials.json) was
-        // removed — Claude Code retired the old OAuth client_id, and the
-        // claude.ai API is Cloudflare-protected. Claude works via session-key
-        // paste only (Add Account → Claude → paste the sessionKey cookie).
-        Err(ProviderError::NotLoggedIn(
-            "Add a Claude session key via Add Account.".into(),
-        ))
+        // Read the Claude Code OAuth token from the keychain (macOS) or
+        // ~/.claude/.credentials.json. NO in-app refresh — the old client_id
+        // was retired by Anthropic and the new one has an undocumented token
+        // endpoint. The user must run `claude` to refresh; the CLI writes the
+        // fresh token back to the same keychain entry we read from.
+        let blob = crate::secrets::read_claude_creds_json()?;
+        let creds = resolve_creds(blob)?;
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        if creds.expires_at > 0 && creds.expires_at < now_ms {
+            return Err(ProviderError::Expired(
+                "Claude Code token expired — run `claude` in your terminal to refresh.".into(),
+            ));
+        }
+        fetch_with(
+            &self.http,
+            &creds.access_token,
+            format_plan(&creds.rate_limit_tier, &creds.subscription_type),
+            None,
+        )
+        .await
     }
 }
 

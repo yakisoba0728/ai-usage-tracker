@@ -9,7 +9,7 @@ directly — **no estimation, no separate login, no self-issued OAuth app**.
 
 | Provider | Source of token | Usage API | Notes |
 |---|---|---|---|
-| **Claude** | Claude Code — macOS Keychain (`Claude Code-credentials`) / `~/.claude/.credentials.json` | `api.anthropic.com/api/oauth/usage` (+ `/profile`) | Token rotated by the CLI; on expiry the card says "run `claude`". |
+| **Claude** | Claude Code — macOS Keychain (`Claude Code-credentials`) / `~/.claude/.credentials.json` | `api.anthropic.com/api/oauth/usage` (+ `/profile`) | Reads the CLI-maintained token — active Claude Code users see usage **automatically**. Self-refresh via the public client_id is implemented, but Cloudflare bot-management blocks `console.anthropic.com` (429 + JS challenge); same wall `claude-meter` sidesteps by delegating to the CLI. Long-idle expiry needs `claude` once. |
 | **Codex** | Codex CLI — `~/.codex/auth.json` (`$CODEX_HOME` honored) | `chatgpt.com/backend-api/codex/usage` | Endpoint is WAF-protected; when blocked the card still shows your plan/account (from the `id_token`) with an honest note. No Cloudflare circumvention. |
 | **Gemini** | Gemini CLI — `~/.gemini/oauth_creds.json` | Google Code Assist `loadCodeAssist` / `retrieveUserQuota` | Self-refreshes via Google OAuth + the CLI's stored client metadata. |
 | **GitHub Copilot** | `gh` CLI token (`gh auth token`) + user from `~/.config/gh/hosts.yml` | `api.github.com/.../billing/ai_credit/usage` (official) | Needs the `user` billing scope; if missing the card says "run `gh auth refresh -h github.com -s user`". |
@@ -88,6 +88,7 @@ order `[Claude, Codex, Gemini, Copilot, Cursor]`).
 ## Status / limitations
 
 - v1 ships live current values only (no history/trends).
+- **Claude token refresh** is implemented but Cloudflare-blocked on `console.anthropic.com` (HTTP 429, `__cf_bm` JS challenge); the impersonation tool `rquest` is currently unavailable on crates.io. Practical effect: the app reads the token the Claude Code CLI keeps fresh, so active users get usage with no manual step — only long-idle expiry needs `claude` once. This is an Anthropic/Cloudflare constraint, not an app bug (same as `claude-meter`).
 - Codex/Cursor usage availability depends on each provider's WAF; the app degrades
   honestly (shows account/plan + a note) rather than circumventing bot protection.
 - macOS is the primary dev/test platform; Linux/Windows file paths are handled but

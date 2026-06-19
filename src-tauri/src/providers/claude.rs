@@ -420,32 +420,28 @@ impl crate::providers::ProviderApi for ClaudeProvider {
 
     async fn fetch(&self) -> Result<ServiceUsage, ProviderError> {
         let blob = secrets::read_claude_creds_json()?;
-        let mut creds = resolve_creds(blob.clone())?;
+        let creds = resolve_creds(blob.clone())?;
         let now_ms = chrono::Utc::now().timestamp_millis();
 
         // Refresh on expiry — rotates the refresh_token; writes back so the CLI
         // and app stay in sync.
+        // If the token is expired, we DON'T attempt an in-app refresh — the
+        // old hardcoded client_id (9d1c250a-…) was retired by Anthropic; the
+        // new URL-based client_id (https://claude.ai/oauth/claude-code-
+        // client-metadata) uses an undocumented token endpoint. The user
+        // just needs to run `claude` once and the CLI refreshes into the
+        // same keychain entry we read from. Surface that clearly.
         if creds.expires_at > 0 && creds.expires_at < now_ms {
-            match creds.refresh_token.clone() {
-                Some(rt) => match refresh_oauth(&self.http, &rt).await {
-                    Ok(fresh) => {
-                        let exp = fresh.expires_in.map(|s| now_ms + (s as i64) * 1000).unwrap_or(0);
-                        let _ = write_back(&blob, &fresh.access_token, &fresh.refresh_token, exp);
-                        creds.access_token = fresh.access_token;
-                        creds.refresh_token = Some(fresh.refresh_token);
-                    }
-                    Err(_) => {
-                        return Err(ProviderError::Expired(
-                            "Claude token expired and refresh failed (rate-limited?)".into(),
-                        ))
-                    }
-                },
-                None => {
-                    return Err(ProviderError::Expired(
-                        "Claude Code token expired — no refresh_token; run `claude` once".into(),
-                    ))
-                }
-            }
+            return Ok(ServiceUsage {
+                provider: Provider::Claude,
+                connected: false,
+                plan: format_plan(&creds.rate_limit_tier, &creds.subscription_type),
+                account: None,
+                error: Some("Claude Code session expired — run `claude` in your terminal to refresh.".into()),
+                windows: vec![],
+                detail_windows: vec![],
+                raw_response: None,
+            });
         }
 
         match fetch_with(

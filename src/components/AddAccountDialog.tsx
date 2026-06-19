@@ -12,19 +12,21 @@ import {
 } from "@/components/ui/dialog";
 import {
   cancelLogin,
-  exchangeCode,
   listAccounts,
   loginOAuth,
+  loginViaCli,
+  onCliLoginUrl,
   onLoginComplete,
   removeAccount,
   startLogin,
 } from "@/lib/ipc";
 import type { LoginInfo, Provider, StoredCredential } from "@/lib/types";
 
-/** Claude/Codex use browser OAuth; Gemini/Copilot use device-code. */
-const BROWSER_OAUTH: Provider[] = ["claude", "codex"];
-/** Claude only allows the provider-hosted redirect, so the user pastes a code. */
-const MANUAL_CODE: Provider[] = ["claude"];
+/** Claude: codexbar-style CLI login (`claude /login` in a PTY) — Anthropic
+ * blocks third-party direct token exchange, so we drive the official CLI. */
+const CLI_LOGIN: Provider[] = ["claude"];
+/** Codex: browser + localhost-callback OAuth (works). */
+const BROWSER_OAUTH: Provider[] = ["codex"];
 
 const SUPPORTED: { p: Provider; name: string }[] = [
   { p: "claude", name: "Claude" },
@@ -47,8 +49,6 @@ export function AddAccountDialog({ onChanged }: { onChanged: () => void }) {
   const [busy, setBusy] = useState<Provider | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [accounts, setAccounts] = useState<StoredCredential[]>([]);
-  const [manualFor, setManualFor] = useState<Provider | null>(null);
-  const [codeInput, setCodeInput] = useState("");
 
   async function load() {
     try {
@@ -62,6 +62,20 @@ export function AddAccountDialog({ onChanged }: { onChanged: () => void }) {
     if (open) load();
   }, [open]);
 
+  // CLI login (Claude): the PTY runner emits the OAuth URL to open.
+  useEffect(() => {
+    let un: UnlistenFn | undefined;
+    onCliLoginUrl((u) => {
+      setInfo({ provider: u.provider, verification_url: u.url, user_code: "", expires_in: 300 });
+      void openUrl(u.url);
+    }).then((u) => {
+      un = u;
+    });
+    return () => {
+      un?.();
+    };
+  }, []);
+
   useEffect(() => {
     let un: UnlistenFn | undefined;
     onLoginComplete((r) => {
@@ -69,8 +83,6 @@ export function AddAccountDialog({ onChanged }: { onChanged: () => void }) {
       if (r.ok) {
         setInfo(null);
         setError(null);
-        setManualFor(null);
-        setCodeInput("");
         void load();
         onChanged();
         setOpen(false);
@@ -89,33 +101,19 @@ export function AddAccountDialog({ onChanged }: { onChanged: () => void }) {
     setError(null);
     setBusy(p);
     setInfo(null);
-    setManualFor(null);
-    setCodeInput("");
     try {
-      if (BROWSER_OAUTH.includes(p)) {
+      if (CLI_LOGIN.includes(p)) {
+        // Claude: drives `claude /login` in a PTY; URL arrives via cli-login-url.
+        await loginViaCli(p);
+      } else if (BROWSER_OAUTH.includes(p)) {
         const url = await loginOAuth(p);
         setInfo({ provider: p, verification_url: url, user_code: "", expires_in: 300 });
-        if (MANUAL_CODE.includes(p)) setManualFor(p);
         await openUrl(url);
       } else {
         const i = await startLogin(p);
         setInfo(i);
         await openUrl(i.verification_url);
       }
-    } catch (e) {
-      setError(String(e));
-      setBusy(null);
-    }
-  }
-
-  async function submitCode() {
-    const provider = manualFor;
-    if (!provider || !codeInput.trim()) return;
-    setError(null);
-    setBusy(provider);
-    try {
-      await exchangeCode(provider, codeInput.trim());
-      // `login-complete` will close + refresh on success.
     } catch (e) {
       setError(String(e));
       setBusy(null);
@@ -133,8 +131,6 @@ export function AddAccountDialog({ onChanged }: { onChanged: () => void }) {
     setInfo(null);
     setError(null);
     setBusy(null);
-    setManualFor(null);
-    setCodeInput("");
     setOpen(false);
   }
 
@@ -153,7 +149,9 @@ export function AddAccountDialog({ onChanged }: { onChanged: () => void }) {
         <div className="space-y-4 text-sm">
           <section>
             <p className="mb-2 text-xs text-muted-foreground">
-              Sign in via OAuth — opens your browser. No password stored.
+              Sign in via OAuth — opens your browser. Claude drives the official
+              CLI login (Anthropic blocks direct third-party exchange); Codex uses
+              a local callback. No password stored.
             </p>
             <div className="flex flex-wrap gap-2">
               {SUPPORTED.map(({ p, name }) => (
@@ -174,7 +172,7 @@ export function AddAccountDialog({ onChanged }: { onChanged: () => void }) {
               ))}
             </div>
             <p className="mt-2 text-[11px] text-muted-foreground/70">
-              Cursor is auto-detect only (no public OAuth client).
+              Cursor is auto-detect only.
             </p>
           </section>
 
@@ -187,23 +185,7 @@ export function AddAccountDialog({ onChanged }: { onChanged: () => void }) {
                 {info.verification_url}
                 <ExternalLink className="size-3 shrink-0" />
               </button>
-              {manualFor ? (
-                <div className="space-y-1.5">
-                  <div>Authorize, then paste the code shown on the page:</div>
-                  <div className="flex gap-2">
-                    <input
-                      className="flex-1 rounded-md border bg-background px-2 py-1 font-mono text-sm"
-                      placeholder="paste code"
-                      value={codeInput}
-                      onChange={(e) => setCodeInput(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && submitCode()}
-                    />
-                    <Button size="sm" onClick={submitCode} disabled={!codeInput.trim()}>
-                      Submit
-                    </Button>
-                  </div>
-                </div>
-              ) : info.user_code ? (
+              {info.user_code ? (
                 <div>
                   Enter code:{" "}
                   <span className="font-mono text-base tracking-widest">

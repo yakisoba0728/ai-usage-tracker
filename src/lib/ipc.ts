@@ -36,7 +36,13 @@ export function startLogin(provider: Provider): Promise<LoginInfo> {
   return invoke<LoginInfo>("start_login", { provider });
 }
 
-/** Browser + localhost-callback OAuth (Codex/Claude). Returns the authorize URL
+/** CLI-driven OAuth login for Claude (codexbar style: drives `claude /login` in
+ * a PTY). Emits `cli-login-url` then `login-complete`. */
+export function loginViaCli(provider: Provider): Promise<void> {
+  return invoke<void>("login_via_cli", { provider });
+}
+
+/** Browser + localhost-callback OAuth (Codex). Returns the authorize URL
  * to open in the browser; emits `login-complete` when done. */
 export function loginOAuth(provider: Provider): Promise<string> {
   return invoke<string>("login_oauth", { provider });

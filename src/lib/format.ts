@@ -52,10 +52,10 @@ export function percentStrokeColor(p: number | null): string {
   }
 }
 
-/** "72%" or "—" when there is no value; one decimal under 10 for fidelity. */
+/** "72%" or "—" when there is no value; whole-number percent. */
 export function formatPercent(p: number | null): string {
   if (p == null) return "—";
-  return `${p < 10 ? p.toFixed(1) : Math.round(p)}%`;
+  return `${Math.round(p)}%`;
 }
 
 /** "<used> / <limit>" with `$` when the window label looks monetary. */

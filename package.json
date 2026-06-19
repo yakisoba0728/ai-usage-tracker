@@ -10,6 +10,7 @@
     "tauri": "env -u CI tauri"
   },
   "dependencies": {
+    "@fontsource-variable/inter": "^5.2.8",
     "@radix-ui/react-dialog": "^1.1.17",
     "@radix-ui/react-progress": "^1.1.10",
     "@radix-ui/react-slot": "^1.3.0",

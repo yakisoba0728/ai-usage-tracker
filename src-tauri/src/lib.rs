@@ -32,6 +32,7 @@ pub fn run() {
             commands::remove_account,
             commands::login_oauth,
             commands::add_session_key,
+            commands::cancel_login,
         ])
         .setup(|app| {
             // --- Tray ---
@@ -39,9 +40,12 @@ pub fn run() {
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &quit])?;
 
-            TrayIconBuilder::with_id("main")
-                .icon(app.default_window_icon().unwrap().clone())
-                .tooltip("AI Usage Tracker")
+            let mut builder = TrayIconBuilder::with_id("main")
+                .tooltip("AI Usage Tracker");
+            if let Some(ic) = app.default_window_icon() {
+                builder = builder.icon(ic.clone());
+            }
+            builder
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "show" => {

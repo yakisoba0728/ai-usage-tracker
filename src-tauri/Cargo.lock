@@ -50,7 +50,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tiny_http",
  "tokio",
- "tracing",
  "url",
  "urlencoding",
 ]

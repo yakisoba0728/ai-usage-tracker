@@ -117,10 +117,6 @@ fn run_server(
     cancelled: std::sync::Arc<AtomicBool>,
 ) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(TIMEOUT_SECS);
-    let rt = match tokio::runtime::Runtime::new() {
-        Ok(r) => r,
-        Err(e) => return emit_err(&app, provider, format!("runtime: {e}")),
-    };
 
     let mut got_code: Option<String> = None;
     while got_code.is_none() {
@@ -177,7 +173,7 @@ fn run_server(
     let Some(code) = got_code else {
         return emit_err(&app, provider, "no code".into());
     };
-    match rt.block_on(exchange(&token_url, &client_id, &redirect_uri, &verifier, &code, None)) {
+    match tauri::async_runtime::block_on(exchange(&token_url, &client_id, &redirect_uri, &verifier, &code, None)) {
         Ok(t) => {
             let cred = build_credential(provider, &t);
             let label = cred.label.clone();
@@ -197,43 +193,23 @@ async fn exchange(
     redirect_uri: &str,
     verifier: &str,
     code: &str,
-    state: Option<&str>,
+    _state: Option<&str>,
 ) -> Result<Value, String> {
-    let client = reqwest::Client::new();
-    // Anthropic's token endpoint rejects form-encoding ("Invalid request
-    // format"); it wants JSON. OpenAI accepts form-encoding.
-    let resp = if !token_url.contains("openai.com") {
-        let body = serde_json::json!({
-            "grant_type": "authorization_code",
-            "code": code,
-            "redirect_uri": redirect_uri,
-            "client_id": client_id,
-            "code_verifier": verifier,
-            "state": state.unwrap_or(""),
-        });
-        client
-            .post(token_url)
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| e.to_string())?
-    } else {
-        let body = format!(
-            "grant_type=authorization_code&code={}&redirect_uri={}&client_id={}&code_verifier={}",
-            urlencoding::encode(code),
-            urlencoding::encode(redirect_uri),
-            urlencoding::encode(client_id),
-            urlencoding::encode(verifier),
-        );
-        client
-            .post(token_url)
-            .header("Content-Type", "application/x-www-form-urlencoded")
-            .body(body)
-            .send()
-            .await
-            .map_err(|e| e.to_string())?
-    };
+    let client = crate::http::build_client();
+    let body = format!(
+        "grant_type=authorization_code&code={}&redirect_uri={}&client_id={}&code_verifier={}",
+        urlencoding::encode(code),
+        urlencoding::encode(redirect_uri),
+        urlencoding::encode(client_id),
+        urlencoding::encode(verifier),
+    );
+    let resp = client
+        .post(token_url)
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
     if !status.is_success() {

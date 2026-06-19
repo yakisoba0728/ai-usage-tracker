@@ -11,21 +11,19 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import {
+  addSessionKey,
   cancelLogin,
   listAccounts,
   loginOAuth,
-  loginViaCli,
-  onCliLoginUrl,
   onLoginComplete,
   removeAccount,
   startLogin,
 } from "@/lib/ipc";
 import type { LoginInfo, Provider, StoredCredential } from "@/lib/types";
 
-/** Claude: codexbar-style CLI login (`claude /login` in a PTY) — Anthropic
- * blocks third-party direct token exchange, so we drive the official CLI. */
-const CLI_LOGIN: Provider[] = ["claude"];
-/** Codex: browser + localhost-callback OAuth (works). */
+/** Claude: paste a session key (from claude.ai cookies). */
+const SESSION_KEY: Provider[] = ["claude"];
+/** Codex: browser + localhost-callback OAuth. */
 const BROWSER_OAUTH: Provider[] = ["codex"];
 
 const SUPPORTED: { p: Provider; name: string }[] = [
@@ -49,6 +47,8 @@ export function AddAccountDialog({ onChanged }: { onChanged: () => void }) {
   const [busy, setBusy] = useState<Provider | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [accounts, setAccounts] = useState<StoredCredential[]>([]);
+  const [sessionFor, setSessionFor] = useState<Provider | null>(null);
+  const [sessionInput, setSessionInput] = useState("");
 
   async function load() {
     try {
@@ -61,20 +61,6 @@ export function AddAccountDialog({ onChanged }: { onChanged: () => void }) {
   useEffect(() => {
     if (open) load();
   }, [open]);
-
-  // CLI login (Claude): the PTY runner emits the OAuth URL to open.
-  useEffect(() => {
-    let un: UnlistenFn | undefined;
-    onCliLoginUrl((u) => {
-      setInfo({ provider: u.provider, verification_url: u.url, user_code: "", expires_in: 300 });
-      void openUrl(u.url);
-    }).then((u) => {
-      un = u;
-    });
-    return () => {
-      un?.();
-    };
-  }, []);
 
   useEffect(() => {
     let un: UnlistenFn | undefined;
@@ -101,10 +87,13 @@ export function AddAccountDialog({ onChanged }: { onChanged: () => void }) {
     setError(null);
     setBusy(p);
     setInfo(null);
+    setSessionFor(null);
+    setSessionInput("");
     try {
-      if (CLI_LOGIN.includes(p)) {
-        // Claude: drives `claude /login` in a PTY; URL arrives via cli-login-url.
-        await loginViaCli(p);
+      if (SESSION_KEY.includes(p)) {
+        // Show the session-key input (no OAuth/CLI).
+        setSessionFor(p);
+        setBusy(null);
       } else if (BROWSER_OAUTH.includes(p)) {
         const url = await loginOAuth(p);
         setInfo({ provider: p, verification_url: url, user_code: "", expires_in: 300 });
@@ -120,6 +109,24 @@ export function AddAccountDialog({ onChanged }: { onChanged: () => void }) {
     }
   }
 
+  async function submitSession() {
+    const provider = sessionFor;
+    if (!provider || !sessionInput.trim()) return;
+    setError(null);
+    setBusy(provider);
+    try {
+      await addSessionKey(provider, sessionInput.trim());
+      setSessionFor(null);
+      setSessionInput("");
+      void load();
+      onChanged();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function remove(id: string) {
     await removeAccount(id);
     await load();
@@ -131,6 +138,8 @@ export function AddAccountDialog({ onChanged }: { onChanged: () => void }) {
     setInfo(null);
     setError(null);
     setBusy(null);
+    setSessionFor(null);
+    setSessionInput("");
     setOpen(false);
   }
 
@@ -149,9 +158,8 @@ export function AddAccountDialog({ onChanged }: { onChanged: () => void }) {
         <div className="space-y-4 text-sm">
           <section>
             <p className="mb-2 text-xs text-muted-foreground">
-              Sign in via OAuth — opens your browser. Claude drives the official
-              CLI login (Anthropic blocks direct third-party exchange); Codex uses
-              a local callback. No password stored.
+              Claude: paste a session key. Codex: browser OAuth. Gemini/Copilot:
+              device code. No password stored.
             </p>
             <div className="flex flex-wrap gap-2">
               {SUPPORTED.map(({ p, name }) => (
@@ -172,9 +180,28 @@ export function AddAccountDialog({ onChanged }: { onChanged: () => void }) {
               ))}
             </div>
             <p className="mt-2 text-[11px] text-muted-foreground/70">
-              Cursor is auto-detect only.
+              Claude session key: claude.ai → DevTools → Application → Cookies →
+              "sessionKey" value (starts with sk-ant-).
             </p>
           </section>
+
+          {sessionFor && (
+            <div className="space-y-1.5 rounded-md border bg-muted/30 p-3 text-xs">
+              <div>Paste the {TITLES[sessionFor]} session key:</div>
+              <div className="flex gap-2">
+                <input
+                  className="flex-1 rounded-md border bg-background px-2 py-1 font-mono text-xs"
+                  placeholder="sk-ant-..."
+                  value={sessionInput}
+                  onChange={(e) => setSessionInput(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && submitSession()}
+                />
+                <Button size="sm" onClick={submitSession} disabled={!sessionInput.trim()}>
+                  Add
+                </Button>
+              </div>
+            </div>
+          )}
 
           {info && (
             <div className="space-y-1.5 rounded-md border bg-muted/30 p-3 text-xs">

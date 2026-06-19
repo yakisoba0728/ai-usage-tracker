@@ -58,6 +58,11 @@ export function cancelLogin(): Promise<void> {
   return invoke<void>("cancel_login");
 }
 
+/** Add an account by pasting a raw credential (Claude session key). */
+export function addSessionKey(provider: Provider, key: string, label?: string): Promise<string> {
+  return invoke<string>("add_session_key", { provider, key, label });
+}
+
 /** Providers that can be logged in from the app. */
 export function loginOptions(): Promise<Provider[]> {
   return invoke<Provider[]>("login_options");

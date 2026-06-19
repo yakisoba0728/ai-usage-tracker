@@ -383,6 +383,93 @@ pub(crate) async fn fetch_with(
     })
 }
 
+/// Fetch Claude usage via the claude.ai web API using a `sessionKey` cookie
+/// (manually-added session-key account). No OAuth / CLI involved.
+#[derive(Deserialize)]
+struct WebOrg {
+    id: String,
+    #[serde(default)] name: Option<String>,
+}
+#[derive(Deserialize)]
+struct WebWindow {
+    #[serde(default)] utilization: Option<f64>, // claude.ai returns int percent 0-100
+    #[serde(default)] resets_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+struct WebUsage {
+    #[serde(default)] five_hour: Option<WebWindow>,
+    #[serde(default)] seven_day: Option<WebWindow>,
+    #[serde(default)] seven_day_sonnet: Option<WebWindow>,
+    #[serde(default)] seven_day_opus: Option<WebWindow>,
+}
+
+pub(crate) async fn fetch_with_session_key(
+    http: &reqwest::Client,
+    session_key: &str,
+) -> Result<ServiceUsage, ProviderError> {
+    let cookie = format!("sessionKey={session_key}");
+
+    let resp = http
+        .get("https://claude.ai/api/organizations")
+        .header("Cookie", &cookie)
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| ProviderError::Network(e.to_string()))?;
+    let v: serde_json::Value = crate::http::send_for_json(resp, "claude.ai/organizations").await?;
+    let orgs: Vec<WebOrg> =
+        serde_json::from_value(v).map_err(|e| ProviderError::Parse(format!("orgs: {e}")))?;
+    let org = orgs
+        .into_iter()
+        .next()
+        .ok_or_else(|| ProviderError::Parse("no claude organization".into()))?;
+
+    let resp = http
+        .get(format!("https://claude.ai/api/organizations/{}/usage", org.id))
+        .header("Cookie", &cookie)
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| ProviderError::Network(e.to_string()))?;
+    let v: serde_json::Value = crate::http::send_for_json(resp, "claude.ai/usage").await?;
+    let u: WebUsage =
+        serde_json::from_value(v).map_err(|e| ProviderError::Parse(format!("usage: {e}")))?;
+
+    let win = |label: &str, w: &Option<WebWindow>| -> Option<LimitWindow> {
+        w.as_ref().map(|w| LimitWindow {
+            label: label.into(),
+            used_percent: w.utilization.map(|v| v as f32),
+            resets_at: w.resets_at.map(|d| d.timestamp()),
+            used: None,
+            limit: None,
+        })
+    };
+    let mut windows = vec![];
+    let mut detail = vec![];
+    if let Some(x) = win("5-hour", &u.five_hour) {
+        windows.push(x);
+    }
+    if let Some(x) = win("7-day", &u.seven_day) {
+        windows.push(x);
+    }
+    if let Some(x) = win("7-day (Sonnet)", &u.seven_day_sonnet) {
+        detail.push(x);
+    }
+    if let Some(x) = win("7-day (Opus)", &u.seven_day_opus) {
+        detail.push(x);
+    }
+    Ok(ServiceUsage {
+        provider: Provider::Claude,
+        connected: true,
+        plan: org.name,
+        account: None,
+        error: None,
+        windows,
+        detail_windows: detail,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

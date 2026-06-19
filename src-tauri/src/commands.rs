@@ -26,9 +26,8 @@ pub fn default_config_store() -> ConfigStore {
 pub fn build_providers(cfg: &AppConfig) -> Vec<Box<dyn ProviderApi>> {
     let mut v: Vec<Box<dyn ProviderApi>> = Vec::new();
     // Order MUST match [Claude, Codex, Gemini, Copilot, Cursor].
-    if cfg.enabled[0] {
-        v.push(Box::new(crate::providers::claude::ClaudeProvider::new()));
-    }
+    // Claude is NOT auto-built — it uses a manually-added session key (OAuth
+    // token exchange is blocked/rate-limited by Anthropic).
     if cfg.enabled[1] {
         v.push(Box::new(crate::providers::codex::CodexProvider::new()));
     }
@@ -125,14 +124,32 @@ pub async fn login_via_cli(app: AppHandle, provider: crate::model::Provider) -> 
     Ok(())
 }
 
-/// Providers that can be logged in from the app (CLI-PTY or device-code).
+/// Providers that can be added/logged-in from the app.
 #[tauri::command]
 pub fn login_options() -> Vec<crate::model::Provider> {
     use crate::model::Provider;
-    [Provider::Claude, Provider::Codex, Provider::Gemini, Provider::Copilot]
-        .into_iter()
-        .filter(|p| crate::cli_login::supports_cli_login(*p) || crate::login::supports_login(*p))
-        .collect()
+    vec![Provider::Claude, Provider::Codex, Provider::Gemini, Provider::Copilot]
+}
+
+/// Add an account by pasting a raw credential (Claude session key, or any
+/// provider's access/session token). No OAuth flow involved.
+#[tauri::command]
+pub async fn add_session_key(
+    provider: crate::model::Provider,
+    key: String,
+    label: Option<String>,
+) -> Result<String, String> {
+    let cred = crate::store::StoredCredential {
+        id: String::new(),
+        provider,
+        label: label.unwrap_or_else(|| format!("{provider:?}")),
+        access_token: key,
+        refresh_token: None,
+        expires_at: 0,
+        id_token: None,
+        account_id: None,
+    };
+    Ok(crate::store::add(cred))
 }
 
 /// Browser + localhost-callback OAuth login (codex-switcher pattern). Returns

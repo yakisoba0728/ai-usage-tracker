@@ -34,8 +34,8 @@ pub fn run() {
             commands::login_oauth,
             commands::login_via_cli,
             commands::exchange_code,
-            commands::cancel_login,
             commands::login_options,
+            commands::add_session_key,
         ])
         .setup(|app| {
             // --- Tray ---

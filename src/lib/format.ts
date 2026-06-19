@@ -5,8 +5,8 @@ export type Severity = "ok" | "warn" | "crit";
 /** Severity band for a usage percent. `null` when there is no percent at all. */
 export function percentSeverity(p: number | null): Severity | null {
   if (p == null) return null;
-  if (p >= 90) return "crit";
-  if (p >= 70) return "warn";
+  if (p > 85) return "crit";
+  if (p >= 60) return "warn";
   return "ok";
 }
 

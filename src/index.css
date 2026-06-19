@@ -4,52 +4,41 @@
 @plugin "tailwindcss-animate";
 
 /*
- * "Mission control for AI spend" — a telemetry-inspired dark dashboard.
- *
- * One signal color (cyan/teal), a disciplined neutral canvas, GitHub-style
- * severity for usage. Everything else stays quiet so the numbers do the work.
+ * "Quiet monitor" — a grayscale resource monitor that happens to track AI
+ * usage. Every surface is a flat gray. The only color is severity coloring on
+ * usage bar fills. No accent, no gradients, no glow, no ring gauge.
  */
 
 :root {
-  /* ── Canvas / surfaces (tinted neutrals, never pure black) ─────────────── */
-  --canvas: #0a0e14;
-  --surface: #11161f;
-  --surface-2: #1a212c;
-  --surface-3: #232c39;
+  /* ── Canvas / surfaces (neutral grays, never pure black) ──────────────── */
+  --canvas: #161618;
+  --surface: #1e1e20;
+  --surface-2: #28282b;
 
   /* ── Hairlines ─────────────────────────────────────────────────────────── */
-  --border: rgba(255, 255, 255, 0.06);
-  --border-strong: rgba(255, 255, 255, 0.12);
+  --border: rgba(255, 255, 255, 0.07);
+  --border-strong: rgba(255, 255, 255, 0.14);
 
   /* ── Text ──────────────────────────────────────────────────────────────── */
-  --text: #e6edf3;
-  --text-dim: #8b949e;
-  --text-faint: #6e7681;
+  --text: #e8e8ea;
+  --text-dim: #8e8e93;
+  --text-faint: #5a5a5e;
 
-  /* ── The ONE signal color — used sparingly ─────────────────────────────── */
-  --accent: #39d0d8;
-  --accent-soft: rgba(57, 208, 216, 0.14);
-  --accent-line: rgba(57, 208, 216, 0.4);
-
-  /* ── Severity (usage burn-down, GitHub-style) ──────────────────────────── */
-  --ok: #3fb950;
-  --warn: #d29922;
-  --crit: #f85149;
-  --ok-soft: rgba(63, 185, 80, 0.14);
-  --warn-soft: rgba(210, 153, 34, 0.14);
-  --crit-soft: rgba(248, 81, 73, 0.14);
+  /* ── Severity (usage bar fills ONLY — muted green/amber/red) ───────────── */
+  --ok: #6b9e72;
+  --warn: #c4944a;
+  --crit: #c45a5a;
 
   --radius: 0.625rem;
 
   /* ── Type scale ────────────────────────────────────────────────────────── */
   --text-xs: 11px;
   --text-sm: 12px;
-  --text-md: 13px;
-  --text-base: 14px;
+  --text-base: 13px;
+  --text-md: 14px;
   --text-lg: 16px;
   --text-xl: 20px;
-  --text-2xl: 28px;
-  --text-3xl: 40px;
+  --text-2xl: 24px;
 }
 
 /*
@@ -57,9 +46,8 @@
  * into utility classes. shadcn primitives resolve through the *-background /
  * *-foreground aliases below.
  *
- * Note: the shadcn `accent` hover-bg token is deliberately a NEUTRAL surface
- * (so ghost buttons hover quietly). The committed signal cyan lives under the
- * `signal` namespace (`bg-signal`, `text-signal`, `ring-signal`, …).
+ * White (--text) is the single "active" signal for interactive elements.
+ * Severity colors live under ok/warn/crit and appear ONLY on usage bar fills.
  */
 @theme inline {
   --font-sans:
@@ -72,7 +60,6 @@
   --color-canvas: var(--canvas);
   --color-surface: var(--surface);
   --color-surface-2: var(--surface-2);
-  --color-surface-3: var(--surface-3);
 
   --color-border: var(--border);
   --color-border-strong: var(--border-strong);
@@ -81,25 +68,19 @@
   --color-text-dim: var(--text-dim);
   --color-text-faint: var(--text-faint);
 
-  --color-signal: var(--accent);
-  --color-signal-soft: var(--accent-soft);
-
   --color-ok: var(--ok);
   --color-warn: var(--warn);
   --color-crit: var(--crit);
-  --color-ok-soft: var(--ok-soft);
-  --color-warn-soft: var(--warn-soft);
-  --color-crit-soft: var(--crit-soft);
 
   /* shadcn aliases ───────────────────────────────────────────────────────── */
   --color-background: var(--canvas);
   --color-foreground: var(--text);
   --color-card: var(--surface);
   --color-card-foreground: var(--text);
-  --color-popover: var(--surface-2);
+  --color-popover: var(--surface);
   --color-popover-foreground: var(--text);
-  --color-primary: var(--accent);
-  --color-primary-foreground: #062329;
+  --color-primary: var(--text);
+  --color-primary-foreground: var(--canvas);
   --color-secondary: var(--surface-2);
   --color-secondary-foreground: var(--text);
   --color-muted: var(--surface-2);
@@ -108,25 +89,23 @@
   --color-accent-foreground: var(--text);
   --color-destructive: var(--crit);
   --color-input: var(--border-strong);
-  --color-ring: var(--accent);
+  --color-ring: var(--text);
 
-  /* font-size scale (line-heights tuned for the telemetry density) ───────── */
+  /* font-size scale (line-heights tuned for monitor density) ─────────────── */
   --text-xs: 11px;
   --text-xs--line-height: 16px;
   --text-sm: 12px;
   --text-sm--line-height: 16px;
-  --text-md: 13px;
-  --text-md--line-height: 18px;
-  --text-base: 14px;
-  --text-base--line-height: 20px;
+  --text-base: 13px;
+  --text-base--line-height: 18px;
+  --text-md: 14px;
+  --text-md--line-height: 20px;
   --text-lg: 16px;
   --text-lg--line-height: 22px;
   --text-xl: 20px;
   --text-xl--line-height: 26px;
-  --text-2xl: 28px;
-  --text-2xl--line-height: 32px;
-  --text-3xl: 40px;
-  --text-3xl--line-height: 42px;
+  --text-2xl: 24px;
+  --text-2xl--line-height: 30px;
 
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
@@ -149,6 +128,7 @@
     background-color: var(--canvas);
     color: var(--text);
     font-family: var(--font-sans);
+    font-size: var(--text-base);
     font-feature-settings: "rlig" 1, "calt" 1, "ss01" 1;
     letter-spacing: -0.01em;
     overflow-x: hidden;
@@ -160,14 +140,14 @@
   }
 
   ::selection {
-    background: var(--accent-soft);
+    background: rgba(255, 255, 255, 0.16);
     color: var(--text);
   }
 
-  /* Universal focus ring — accent at 60%. Color is never the only signal. */
+  /* Universal focus ring — white at 55%. Color is never the only signal. */
   :focus-visible {
     outline: none;
-    box-shadow: 0 0 0 2px var(--canvas), 0 0 0 4px rgba(57, 208, 216, 0.6);
+    box-shadow: 0 0 0 2px var(--canvas), 0 0 0 4px rgba(232, 232, 234, 0.55);
     border-radius: inherit;
   }
 }
@@ -177,21 +157,6 @@
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   font-feature-settings: "tnum" 1, "zero" 1;
-}
-
-/* ── Ambient top glow (signal cyan at ~4%) ─────────────────────────────────── */
-.ambient {
-  background: radial-gradient(
-    90% 130% at 50% -8%,
-    rgba(57, 208, 216, 0.06),
-    transparent 60%
-  );
-}
-
-/* ── Signature ring arc fill (animated on data change) ─────────────────────── */
-.ring-arc {
-  transition: stroke-dashoffset 320ms cubic-bezier(0.22, 1, 0.36, 1),
-    stroke 200ms ease-out;
 }
 
 /* ── Thin scrollbars for scroll regions ────────────────────────────────────── */
@@ -216,12 +181,13 @@
   background-color: rgba(255, 255, 255, 0.22);
 }
 
-/* ── Respect reduced motion: kill ring fill + hover lift ───────────────────── */
+/* ── Respect reduced motion: disable every transition & animation ──────────── */
 @media (prefers-reduced-motion: reduce) {
-  .ring-arc {
-    transition: none;
-  }
-  .lift-on-hover {
-    transform: none !important;
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0ms !important;
+    animation-duration: 0ms !important;
+    animation-iteration-count: 1 !important;
   }
 }

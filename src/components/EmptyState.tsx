@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 export function EmptyState({ onAddAccount }: { onAddAccount: () => void }) {
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-4 py-24 text-center">
-      <div className="flex size-12 items-center justify-center rounded-xl border border-border bg-surface text-text-faint">
+      <div className="flex size-12 items-center justify-center rounded-lg border border-border bg-surface text-text-faint">
         <Plus className="size-5" />
       </div>
       <div className="space-y-1.5">
@@ -22,7 +22,7 @@ export function EmptyState({ onAddAccount }: { onAddAccount: () => void }) {
         </p>
       </div>
       <Button variant="outline" size="default" onClick={onAddAccount} className="gap-1.5">
-        <Plus className="size-4 text-signal" />
+        <Plus className="size-4 text-text-dim" />
         Add account
       </Button>
     </div>

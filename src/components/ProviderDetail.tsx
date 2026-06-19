@@ -5,10 +5,7 @@ import { BarGauge } from "@/components/BarGauge";
 import { ProviderMark, PROVIDER_LABEL } from "@/components/ProviderMark";
 import { removeAccount } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
-import {
-  DialogDescription,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import type { Provider, ServiceUsage } from "@/lib/types";
 
 /**
@@ -66,17 +63,23 @@ export function ProviderDetail({
             <ProviderMark provider={service.provider} className="size-[18px]" />
           </span>
           <div className="min-w-0 leading-tight">
-            <DialogTitle className="font-semibold tracking-tight text-text" style={{ fontSize: 16 }}>
+            <DialogTitle className="text-lg font-semibold tracking-tight text-text">
               {title}
             </DialogTitle>
             <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
               {service.plan && (
-                <span className="rounded-md border border-border-strong bg-surface-2 px-1.5 py-0.5 font-medium text-text-dim" style={{ fontSize: 11 }}>
+                <span
+                  className="rounded border border-border-strong bg-surface-2 px-1.5 py-0.5 font-medium text-text-dim"
+                  style={{ fontSize: 11 }}
+                >
                   {service.plan}
                 </span>
               )}
               <span
-                className={cn("font-medium", service.connected ? "text-ok" : "text-text-faint")}
+                className={cn(
+                  "font-medium",
+                  service.connected ? "text-text-dim" : "text-text-faint",
+                )}
                 style={{ fontSize: 11 }}
               >
                 {service.connected ? "Connected" : "Offline"}
@@ -95,7 +98,7 @@ export function ProviderDetail({
         </div>
       </div>
 
-      {/* Tab bar — only when raw response is available */}
+      {/* Tab bar — only when a raw response is available */}
       {hasRaw && (
         <div className="flex gap-1 border-b border-border px-5 pt-2">
           {(["usage", "raw"] as const).map((t) => (
@@ -104,9 +107,9 @@ export function ProviderDetail({
               type="button"
               onClick={() => setTab(t)}
               className={cn(
-                "rounded-t-md border-b-2 px-3 py-2 transition-colors",
+                "border-b-2 px-3 py-2 transition-colors",
                 tab === t
-                  ? "border-signal text-text"
+                  ? "border-text text-text"
                   : "border-transparent text-text-faint hover:text-text-dim",
               )}
               style={{ fontSize: 12, fontWeight: 500 }}
@@ -121,7 +124,7 @@ export function ProviderDetail({
       <div className="scroll-area max-h-[60vh] overflow-y-auto px-5 py-4">
         {tab === "raw" && hasRaw ? (
           <pre
-            className="num overflow-x-auto whitespace-pre-wrap break-words rounded-lg border border-border bg-canvas p-3 text-text-dim"
+            className="num overflow-x-auto whitespace-pre-wrap break-words rounded-md border border-border bg-canvas p-3 text-text-dim"
             style={{ fontSize: 11, lineHeight: 1.6 }}
           >
             {service.raw_response}
@@ -132,7 +135,7 @@ export function ProviderDetail({
               <div className="divide-y divide-border">
                 {windows.map((w, i) => (
                   <div key={`${w.label}-${i}`} className="py-3 first:pt-0 last:pb-0">
-                    <BarGauge window={w} nowMs={nowMs} showMeta />
+                    <BarGauge window={w} nowMs={nowMs} variant="primary" showUsedLimit />
                   </div>
                 ))}
               </div>
@@ -143,7 +146,7 @@ export function ProviderDetail({
                 <div className="divide-y divide-border">
                   {detail.map((w, i) => (
                     <div key={`${w.label}-${i}`} className="py-3 first:pt-0 last:pb-0">
-                      <BarGauge window={w} nowMs={nowMs} showMeta />
+                      <BarGauge window={w} nowMs={nowMs} variant="primary" showUsedLimit />
                     </div>
                   ))}
                 </div>
@@ -151,7 +154,10 @@ export function ProviderDetail({
             )}
           </div>
         ) : (
-          <div className="rounded-lg border border-border bg-surface-2/60 px-3.5 py-3 text-text-dim" style={{ fontSize: 13 }}>
+          <div
+            className="rounded-md border border-border bg-surface-2 px-3.5 py-3 text-text-dim"
+            style={{ fontSize: 13 }}
+          >
             {service.error?.trim() ??
               (service.connected ? "No usage windows reported." : "Not connected.")}
           </div>
@@ -167,7 +173,7 @@ export function ProviderDetail({
           <button
             type="button"
             onClick={handleRemove}
-            className="flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-crit transition-colors hover:bg-crit/12"
+            className="flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-text-dim transition-colors hover:bg-surface-2 hover:text-text"
             style={{ fontSize: 12, fontWeight: 500 }}
           >
             <Trash2 className="size-3.5" />
@@ -182,7 +188,10 @@ export function ProviderDetail({
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section>
-      <h4 className="mb-2 uppercase tracking-[0.06em] text-text-faint" style={{ fontSize: 10, fontWeight: 600 }}>
+      <h4
+        className="mb-2 uppercase tracking-[0.08em] text-text-faint"
+        style={{ fontSize: 10, fontWeight: 600 }}
+      >
         {title}
       </h4>
       {children}

@@ -179,7 +179,7 @@ export function AddAccountDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="gap-0 overflow-hidden rounded-xl border-border bg-surface p-0 sm:max-w-[440px]">
+      <DialogContent className="gap-0 overflow-hidden rounded-lg border-border bg-surface p-0 sm:max-w-[440px]">
         <DialogHeader className="border-b border-border px-5 py-4 pr-12">
           <DialogTitle className="font-semibold tracking-tight text-text" style={{ fontSize: 16 }}>
             Add account
@@ -205,7 +205,7 @@ export function AddAccountDialog({
                   className={cn(
                     "flex items-center gap-2 rounded-lg border border-border bg-surface-2 px-2.5 py-2 text-left",
                     "transition-[background-color,border-color] duration-150",
-                    "hover:border-border-strong hover:bg-surface-3",
+                    "hover:border-border-strong hover:bg-surface-2",
                     "disabled:opacity-50",
                   )}
                 >
@@ -213,7 +213,7 @@ export function AddAccountDialog({
                   <span className="min-w-0 truncate text-text" style={{ fontSize: 12, fontWeight: 500 }}>
                     {PROVIDER_LABEL[p]}
                   </span>
-                  {busy === p && <Loader2 className="ml-auto size-3.5 shrink-0 animate-spin text-signal" />}
+                  {busy === p && <Loader2 className="ml-auto size-3.5 shrink-0 animate-spin text-text-dim" />}
                 </button>
               ))}
             </div>
@@ -227,7 +227,7 @@ export function AddAccountDialog({
               </div>
               <div className="mt-2 flex gap-2">
                 <input
-                  className="num min-w-0 flex-1 rounded-md border border-border-strong bg-canvas px-2.5 py-1.5 text-text placeholder:text-text-faint focus:border-signal"
+                  className="num min-w-0 flex-1 rounded-md border border-border-strong bg-canvas px-2.5 py-1.5 text-text placeholder:text-text-faint focus:border-border-strong"
                   style={{ fontSize: 12 }}
                   placeholder="sk-ant-… / token"
                   value={sessionInput}
@@ -249,7 +249,7 @@ export function AddAccountDialog({
                   type="button"
                   disabled={busy !== null}
                   onClick={() => startDeviceCode(sessionFor)}
-                  className="-mx-0.5 mt-2 cursor-pointer rounded-sm px-0.5 text-signal underline decoration-signal/40 underline-offset-2 transition-colors hover:decoration-signal disabled:cursor-not-allowed disabled:opacity-50"
+                  className="-mx-0.5 mt-2 cursor-pointer rounded-sm px-0.5 text-text underline decoration-text-faint underline-offset-2 transition-colors hover:decoration-text disabled:cursor-not-allowed disabled:opacity-50"
                   style={{ fontSize: 11, fontWeight: 500 }}
                 >
                   Or sign in with {PROVIDER_LABEL[sessionFor]} instead →
@@ -264,7 +264,7 @@ export function AddAccountDialog({
               <button
                 type="button"
                 onClick={() => openUrl(info.verification_url)}
-                className="num flex items-center gap-1 break-all text-signal underline-offset-2 hover:underline"
+                className="num flex items-center gap-1 break-all text-text underline-offset-2 hover:underline"
                 style={{ fontSize: 12 }}
               >
                 {info.verification_url}
@@ -283,14 +283,14 @@ export function AddAccountDialog({
                 </div>
               )}
               <div className="mt-2 flex items-center gap-1.5 text-text-faint" style={{ fontSize: 11 }}>
-                <Loader2 className="size-3 animate-spin text-signal" />
+                <Loader2 className="size-3 animate-spin text-text-dim" />
                 Waiting for authorization…
               </div>
             </Panel>
           )}
 
           {error && (
-            <div className="rounded-md border border-crit/30 bg-crit/12 px-3 py-2 text-crit" style={{ fontSize: 12 }}>
+            <div className="rounded-md border border-border-strong bg-surface-2 px-3 py-2 text-text" style={{ fontSize: 12 }}>
               {error}
             </div>
           )}
@@ -322,7 +322,7 @@ export function AddAccountDialog({
                       size="icon-sm"
                       onClick={() => remove(a.id)}
                       aria-label={`Remove ${PROVIDER_LABEL[a.provider]} account`}
-                      className="text-text-faint hover:text-crit"
+                      className="text-text-faint hover:text-text"
                     >
                       <Trash2 className="size-3.5" />
                     </Button>

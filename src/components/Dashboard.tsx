@@ -2,19 +2,17 @@ import { useEffect, useMemo, useState } from "react";
 import { Loader2 } from "lucide-react";
 
 import { Header } from "@/components/Header";
-import { FleetBar } from "@/components/FleetBar";
 import { ProviderCard } from "@/components/ProviderCard";
 import { ProviderDetail } from "@/components/ProviderDetail";
 import { AddAccountDialog } from "@/components/AddAccountDialog";
+import { SettingsDialog, type SortBy } from "@/components/SettingsDialog";
 import { EmptyState } from "@/components/EmptyState";
 import { ErrorState } from "@/components/ErrorState";
-import {
-  Dialog,
-  DialogContent,
-} from "@/components/ui/dialog";
+import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { useSnapshot } from "@/hooks/useSnapshot";
 import { useNow } from "@/hooks/useNow";
 import { listAccounts } from "@/lib/ipc";
+import { PROVIDER_LABEL } from "@/components/ProviderMark";
 import type { Provider, ServiceUsage } from "@/lib/types";
 
 export function Dashboard() {
@@ -22,30 +20,34 @@ export function Dashboard() {
   const nowMs = useNow(1000);
 
   const [addOpen, setAddOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [openProvider, setOpenProvider] = useState<Provider | null>(null);
   const [openAccountId, setOpenAccountId] = useState<string | null>(null);
 
-  // Connected providers get cards (connected-but-errored still shows a card).
-  const services = useMemo<ServiceUsage[]>(
-    () => (snapshot?.services ?? []).filter((s) => s.connected),
-    [snapshot],
-  );
-  const totalCount = snapshot?.services?.length ?? 0;
+  // Display preferences (local — not persisted to the backend).
+  const [sortBy, setSortBy] = useState<SortBy>("usage");
+  const [showOffline, setShowOffline] = useState(false);
 
-  // Peak burn + which provider — across card-visible windows (not detail-only).
-  const { peak, peakProvider } = useMemo(() => {
-    let pk: number | null = null;
-    let who: Provider | null = null;
-    for (const s of services) {
-      for (const w of s.windows ?? []) {
-        if (w.used_percent != null && (pk == null || w.used_percent > pk)) {
-          pk = w.used_percent;
-          who = s.provider;
-        }
+  const allServices = snapshot?.services ?? [];
+
+  // Show connected cards (plus offline ones when "Show offline" is on), in the
+  // chosen order: by primary-window usage desc, or alphabetical by label.
+  const services = useMemo<ServiceUsage[]>(() => {
+    const list = (
+      showOffline ? allServices : allServices.filter((s) => s.connected)
+    ).slice();
+    list.sort((a, b) => {
+      if (sortBy === "name") {
+        return PROVIDER_LABEL[a.provider].localeCompare(
+          PROVIDER_LABEL[b.provider],
+        );
       }
-    }
-    return { peak: pk, peakProvider: who };
-  }, [services]);
+      const pa = a.windows?.[0]?.used_percent ?? -1;
+      const pb = b.windows?.[0]?.used_percent ?? -1;
+      return pb - pa;
+    });
+    return list;
+  }, [allServices, showOffline, sortBy]);
 
   // When a detail modal opens, look up whether that provider has a stored
   // (user-added) credential — drives the Remove affordance.
@@ -74,55 +76,52 @@ export function Dashboard() {
     [snapshot, openProvider],
   );
 
+  const hasConfigured = allServices.length > 0;
+
   return (
-    <div className="relative min-h-dvh overflow-hidden bg-canvas text-text">
-      <div aria-hidden className="ambient pointer-events-none absolute inset-x-0 top-0 h-64" />
+    <div className="relative flex min-h-dvh flex-col bg-canvas text-text">
+      <Header
+        refreshing={refreshing}
+        onRefresh={refresh}
+        onOpenSettings={() => setSettingsOpen(true)}
+      />
 
-      <div className="relative flex min-h-dvh flex-col">
-        <Header
-          fetchedAt={snapshot?.fetched_at ?? null}
-          refreshing={refreshing}
-          onRefresh={refresh}
-          onAddAccount={() => setAddOpen(true)}
-          nowMs={nowMs}
-          peak={peak}
-          peakProvider={peakProvider}
-          connectedCount={services.length}
-          totalCount={totalCount}
-        />
-
-        <main className="mx-auto w-full max-w-[1100px] flex-1 px-5 py-6">
-          {services.length > 0 && (
-            <FleetBar services={services} onSelect={setOpenProvider} />
-          )}
-
-          {loading && snapshot == null ? (
-            <LoadingState />
-          ) : snapshot == null ? (
-            <ErrorState error="Couldn't reach the tracker backend." />
-          ) : services.length === 0 ? (
-            <EmptyState onAddAccount={() => setAddOpen(true)} />
-          ) : (
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
-              {services.map((service) => (
-                <ProviderCard
-                  key={service.provider}
-                  service={service}
-                  nowMs={nowMs}
-                  onOpen={setOpenProvider}
-                />
-              ))}
-            </div>
-          )}
-        </main>
-      </div>
+      <main className="mx-auto w-full max-w-[1100px] flex-1 px-5 py-6">
+        {loading && snapshot == null ? (
+          <LoadingState />
+        ) : snapshot == null ? (
+          <ErrorState error="Couldn't reach the tracker backend." />
+        ) : !hasConfigured ? (
+          <EmptyState onAddAccount={() => setAddOpen(true)} />
+        ) : services.length === 0 ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-2 py-24 text-center">
+            <p className="text-text-dim" style={{ fontSize: 13 }}>
+              No connected providers right now.
+            </p>
+            <p className="text-text-faint" style={{ fontSize: 12 }}>
+              Enable “Show offline” in Settings to see all configured providers.
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {services.map((service) => (
+              <ProviderCard
+                key={service.provider}
+                service={service}
+                nowMs={nowMs}
+                onOpen={setOpenProvider}
+              />
+            ))}
+          </div>
+        )}
+      </main>
 
       {/* Detail modal — one instance, controlled by openProvider. */}
       <Dialog
         open={openProvider != null && openService != null}
         onOpenChange={(o) => !o && setOpenProvider(null)}
       >
-        <DialogContent className="gap-0 overflow-hidden rounded-xl border-border bg-surface p-0 sm:max-w-lg">
+        <DialogContent className="gap-0 overflow-hidden rounded-lg border-border bg-surface p-0 sm:max-w-lg">
           {openService && (
             <ProviderDetail
               service={openService}
@@ -142,6 +141,19 @@ export function Dashboard() {
         onOpenChange={setAddOpen}
         onChanged={refresh}
       />
+
+      <SettingsDialog
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        sortBy={sortBy}
+        onSortByChange={setSortBy}
+        showOffline={showOffline}
+        onShowOfflineChange={setShowOffline}
+        onAddAccount={() => {
+          setSettingsOpen(false);
+          setAddOpen(true);
+        }}
+      />
     </div>
   );
 }
@@ -149,7 +161,7 @@ export function Dashboard() {
 function LoadingState() {
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-3 py-24 text-text-dim">
-      <Loader2 className="size-5 animate-spin text-signal" />
+      <Loader2 className="size-5 animate-spin" />
       <span style={{ fontSize: 13 }}>Loading usage…</span>
     </div>
   );

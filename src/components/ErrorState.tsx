@@ -16,17 +16,6 @@ const HINT: Partial<Record<Provider, string>> = {
   zai: "Re-add the z.ai account with a fresh session key.",
 };
 
-function hintFor(provider: Provider): string {
-  return HINT[provider] ?? "Re-add the account, or refresh its credential.";
-}
-
-/** Plain-language summary of a service state, never inventing numbers. */
-function summary(error: string | null, connected: boolean): string {
-  const e = error?.trim();
-  if (e) return e;
-  return connected ? "Couldn't read usage right now." : "Not connected.";
-}
-
 /** Compact inline error block — rendered inside a provider card body. */
 export function CardError({
   error,
@@ -37,15 +26,16 @@ export function CardError({
   connected: boolean;
   provider: Provider;
 }) {
+  const message = error?.trim() || (connected ? "Couldn't read usage right now." : "Not connected.");
   return (
-    <div className="flex items-start gap-2.5 rounded-lg border border-border bg-surface-2/60 px-3 py-3">
-      <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warn" />
+    <div className="flex items-start gap-2.5 rounded-md border border-border bg-surface-2 px-3 py-3">
+      <AlertTriangle className="mt-0.5 size-4 shrink-0 text-text-faint" />
       <div className="min-w-0">
-        <p className="text-text" style={{ fontSize: 13 }}>
-          {summary(error, connected)}
+        <p className="text-text-dim" style={{ fontSize: 13 }}>
+          {message}
         </p>
         <p className="mt-1 leading-relaxed text-text-faint" style={{ fontSize: 11 }}>
-          {hintFor(provider)}
+          {HINT[provider] ?? "Re-add the account, or refresh its credential."}
         </p>
       </div>
     </div>
@@ -62,16 +52,17 @@ export function ErrorState({
 }) {
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-3 py-24 text-center">
-      <AlertTriangle className="size-6 text-warn" />
+      <AlertTriangle className="size-6 text-text-faint" />
       <div className="space-y-1">
         <p className="text-text" style={{ fontSize: 14, fontWeight: 500 }}>
           {error?.trim() || "Couldn't load usage."}
         </p>
         <p className="mx-auto max-w-xs leading-relaxed text-text-faint" style={{ fontSize: 12 }}>
-          {provider ? hintFor(provider) : "Check the connection and try Refresh."}
+          {provider
+            ? HINT[provider] ?? "Re-add the account, or refresh its credential."
+            : "Check the connection and try Refresh."}
         </p>
       </div>
     </div>
   );
 }
-

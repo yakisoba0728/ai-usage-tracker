@@ -387,7 +387,7 @@ pub(crate) async fn fetch_with(
 /// (manually-added session-key account). No OAuth / CLI involved.
 #[derive(Deserialize)]
 struct WebOrg {
-    id: String,
+    uuid: String, // the identifier the usage endpoint expects
     #[serde(default)] name: Option<String>,
 }
 #[derive(Deserialize)]
@@ -426,7 +426,7 @@ pub(crate) async fn fetch_with_session_key(
         .ok_or_else(|| ProviderError::Parse("no claude organization".into()))?;
 
     let resp = http
-        .get(format!("https://claude.ai/api/organizations/{}/usage", org.id))
+        .get(format!("https://claude.ai/api/organizations/{}/usage", org.uuid))
         .header("Cookie", &cookie)
         .header("Accept", "application/json")
         .send()

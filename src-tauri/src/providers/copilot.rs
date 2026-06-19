@@ -52,10 +52,6 @@ impl CopilotProvider {
     }
 }
 
-fn copilot_config_path() -> PathBuf {
-    crate::secrets::codex_home() // not codex — but dirs_home is private. Use a direct path.
-        .join("../.copilot/config.json") // Hacky; let me fix.
-}
 
 /// Reuse the Copilot CLI's stored OAuth token. macOS: Keychain `copilot-cli`;
 /// elsewhere: `~/.copilot/config.json` → `github.com.oauth_token`.

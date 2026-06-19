@@ -19,6 +19,7 @@ const GEMINI_CLIENT_SECRET: &str = "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";
 const GEMINI_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct OauthCreds {
     access_token: String,
     #[serde(default)] refresh_token: Option<String>,

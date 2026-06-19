@@ -116,7 +116,6 @@ struct ExtraUsage {
     #[serde(default)] monthly_limit: Option<f64>,
     #[serde(default)] used_credits: Option<f64>,
     #[serde(default)] utilization: Option<f64>,
-    #[serde(default)] currency: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -131,18 +130,13 @@ struct UsageResponse {
     #[serde(default)] extra_usage: Option<ExtraUsage>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 struct Profile {
     #[serde(default)] account: Option<ProfileAccount>,
-    #[serde(default)] organization: Option<Org>,
 }
 #[derive(Deserialize, Default)]
 struct ProfileAccount {
     #[serde(default)] email: Option<String>,
-}
-#[derive(Deserialize, Default)]
-struct Org {
-    #[serde(default)] uuid: Option<String>,
 }
 
 pub struct ClaudeProvider {

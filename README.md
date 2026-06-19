@@ -63,11 +63,12 @@ cd src-tauri && cargo test --lib
 ## Build
 
 ```bash
-CI= pnpm tauri build     # produces src-tauri/target/release/bundle/macos/AI Usage Tracker.app
+pnpm tauri build        # -> src-tauri/target/release/bundle/{macos/AI Usage Tracker.app, dmg/AI Usage Tracker_0.1.0_aarch64.dmg}
 ```
 
-(The `.app` is the runnable deliverable. The `.dmg` step uses `hdiutil` and may
-fail in some sandboxes; if so, distribute the `.app` directly.)
+The `tauri` npm script strips the ambient `CI` env var (which otherwise makes
+the Tauri CLI reject `--ci`). If `.dmg` creation fails in some sandboxes
+(`hdiutil`), distribute the `.app` directly.
 
 ## Architecture
 

@@ -1,47 +1,38 @@
 {
   "code": 200,
-  "msg": "操作成功",
+  "msg": "Operation successful",
   "success": true,
   "data": {
-    "level": "pro",
+    "level": "max",
     "limits": [
       {
-        "type": "5h Token",
-        "rawType": "TOKENS_LIMIT",
-        "unit": 3,
-        "number": 5,
-        "usage": 1000000,
-        "currentValue": 72000,
-        "remaining": 928000,
-        "percentage": 7,
-        "nextResetTime": 1712956800000,
-        "total": 1000000
-      },
-      {
-        "type": "Weekly Token",
-        "rawType": "TOKENS_LIMIT",
-        "unit": 6,
-        "number": 7,
-        "usage": 5000000,
-        "currentValue": 2650000,
-        "remaining": 2350000,
-        "percentage": 53,
-        "nextResetTime": 1713388800000
-      },
-      {
-        "type": "MCP usage(1 Month)",
-        "rawType": "TIME_LIMIT",
+        "type": "TIME_LIMIT",
         "unit": 5,
         "number": 1,
-        "usage": 1000,
-        "currentValue": 42,
-        "remaining": 958,
-        "percentage": 4,
+        "usage": 4000,
+        "currentValue": 7,
+        "remaining": 3993,
+        "percentage": 1,
+        "nextResetTime": 1783852228997,
         "usageDetails": [
-          { "modelCode": "search-prime", "usage": 20 },
-          { "modelCode": "web-reader", "usage": 15 },
-          { "modelCode": "zread", "usage": 7 }
+          { "modelCode": "search-prime", "usage": 1 },
+          { "modelCode": "web-reader", "usage": 0 },
+          { "modelCode": "zread", "usage": 6 }
         ]
+      },
+      {
+        "type": "TOKENS_LIMIT",
+        "unit": 3,
+        "number": 5,
+        "percentage": 9,
+        "nextResetTime": 1781897705337
+      },
+      {
+        "type": "TOKENS_LIMIT",
+        "unit": 6,
+        "number": 1,
+        "percentage": 60,
+        "nextResetTime": 1782210628998
       }
     ]
   }

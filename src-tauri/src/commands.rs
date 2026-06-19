@@ -6,7 +6,7 @@ use tauri::{AppHandle, Emitter, State};
 use tokio::sync::RwLock;
 
 use crate::config::AppConfig;
-use crate::model::UsageSnapshot;
+use crate::model::{Provider, UsageSnapshot};
 use crate::providers::{fetch_all, ProviderApi};
 
 pub type SnapshotStore = Arc<RwLock<UsageSnapshot>>;
@@ -54,10 +54,15 @@ pub fn build_providers(cfg: &AppConfig) -> Vec<Box<dyn ProviderApi>> {
 pub async fn refresh_once(app: &AppHandle, cfg: &ConfigStore, snap: &SnapshotStore) -> UsageSnapshot {
     let providers = build_providers(&*cfg.read().await);
     let mut services = fetch_all(providers).await;
-    // Manually-added (OAuth) accounts from the store, in addition to auto-detected CLI ones.
+    // Manually-added (OAuth / API-key) accounts from the store, in addition
+    // to auto-detected CLI ones.
     for cred in crate::store::list() {
         services.push(crate::providers::fetch_credential(&cred).await);
     }
+    // If a stored account connected for a provider, drop the auto-detect
+    // failure for the same provider (the user's explicit Add-account wins).
+    dedupe_services(&mut services);
+
     let snapshot = UsageSnapshot {
         fetched_at: chrono::Utc::now().timestamp(),
         services,
@@ -73,6 +78,15 @@ pub async fn refresh_once(app: &AppHandle, cfg: &ConfigStore, snap: &SnapshotSto
         let _ = tray.set_title(Some(&title));
     }
     snapshot
+}
+
+/// Drop disconnected entries for any provider that also has a connected entry.
+/// Keeps all connected entries (multi-account support); only suppresses the
+/// redundant "auto-detect failed" error when a stored account succeeded.
+fn dedupe_services(services: &mut Vec<crate::model::ServiceUsage>) {
+    use std::collections::HashSet;
+    let connected: HashSet<Provider> = services.iter().filter(|s| s.connected).map(|s| s.provider).collect();
+    services.retain(|s| s.connected || !connected.contains(&s.provider));
 }
 
 #[tauri::command]
@@ -161,3 +175,75 @@ pub fn cancel_login() {
     crate::oauth_login::cancel();
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{LimitWindow, ServiceUsage};
+
+    fn svc(provider: Provider, connected: bool, err: Option<&str>) -> ServiceUsage {
+        ServiceUsage {
+            provider,
+            connected,
+            plan: None,
+            account: None,
+            error: err.map(String::from),
+            windows: vec![],
+            detail_windows: vec![],
+        }
+    }
+
+    #[test]
+    fn dedupe_drops_failed_autodetect_when_stored_succeeds() {
+        // z.ai: auto-detect (env) failed + stored account succeeded → keep only
+        // the stored success. (The classic "key not set" bug.)
+        let mut services = vec![
+            svc(Provider::Zai, false, Some("credentials not found: z.ai API key not set")),
+            svc(Provider::Zai, true, None),
+        ];
+        dedupe_services(&mut services);
+        assert_eq!(services.len(), 1);
+        assert!(services[0].connected);
+        assert_eq!(services[0].provider, Provider::Zai);
+    }
+
+    #[test]
+    fn dedupe_keeps_all_connected_for_multi_account() {
+        // Two distinct connected Claude accounts (CLI + pasted session) both stay.
+        // An UNRELATED provider's failure (no success for it) also stays so the
+        // user still sees the actionable error.
+        let mut services = vec![
+            svc(Provider::Claude, true, None),
+            svc(Provider::Claude, true, None),
+            svc(Provider::Codex, false, Some("not logged in")),
+        ];
+        dedupe_services(&mut services);
+        // Both Claudes stay; Codex failure stays (no Codex success to mask it).
+        assert_eq!(services.len(), 3);
+        let claude_count = services.iter().filter(|s| s.provider == Provider::Claude).count();
+        assert_eq!(claude_count, 2);
+        assert!(services.iter().filter(|s| s.provider == Provider::Claude).all(|s| s.connected));
+    }
+
+    #[test]
+    fn dedupe_keeps_pure_failure_when_no_success() {
+        // Pure failure path (no stored account) — keep the actionable error.
+        let mut services = vec![svc(Provider::Gemini, false, Some("no oauth_creds.json"))];
+        dedupe_services(&mut services);
+        assert_eq!(services.len(), 1);
+        assert!(!services[0].connected);
+    }
+
+    // Silence unused-field warning (LimitWindow is required by the struct but
+    // the test helper doesn't use it directly).
+    #[test]
+    fn _limitwindow_type_is_used() {
+        let _ = LimitWindow {
+            label: String::new(),
+            used_percent: None,
+            resets_at: None,
+            used: None,
+            limit: None,
+        };
+    }
+}

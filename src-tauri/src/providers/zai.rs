@@ -133,9 +133,19 @@ fn window_label(e: &LimitEntry, slot: Slot) -> Option<String> {
         Slot::FiveHour => Some("5-hour".into()),
         Slot::Weekly => Some("Weekly".into()),
         Slot::Detail => {
-            let typ = e.limit_type.as_deref().filter(|s| !s.is_empty());
-            let raw = e.raw_type.as_deref().filter(|s| !s.is_empty());
-            Some(typ.or(raw)?.to_string())
+            // The live API emits raw enum values (`TIME_LIMIT`, `TOKENS_LIMIT`)
+            // rather than human labels — derive a friendly name from the period
+            // unit when possible, else fall back to the type string.
+            match e.unit.unwrap_or(0) {
+                3 => Some("5-hour".into()),
+                5 => Some("Monthly".into()),
+                6 => Some("Weekly".into()),
+                _ => {
+                    let typ = e.limit_type.as_deref().filter(|s| !s.is_empty());
+                    let raw = e.raw_type.as_deref().filter(|s| !s.is_empty());
+                    Some(typ.or(raw)?.to_string())
+                }
+            }
         }
     }
 }
@@ -392,47 +402,48 @@ mod tests {
     use super::*;
 
     #[test]
-    fn normalize_fixture_headline_is_weekly() {
+    fn normalize_live_fixture_headline_is_weekly_60pct() {
+        // Real response captured 2026-06-18 from GET /api/monitor/usage/quota/limit.
         let v: ZaiResponse =
             serde_json::from_str(include_str!("../../tests/zai_quota_fixture.json")).unwrap();
         let data = v.data.expect("fixture has data");
         let (ws, _detail) = normalize(&data);
 
-        // Higher-burn token window (53% > 7%) is the sole headline.
+        // Higher-burn token window (60% > 9%) is the sole headline.
         assert_eq!(ws.len(), 1);
         let headline = &ws[0];
         assert_eq!(headline.label, "Weekly");
-        assert_eq!(headline.used_percent, Some(53.0));
-        assert_eq!(headline.used, Some(2_650_000.0));
-        assert_eq!(headline.limit, Some(5_000_000.0));
-        assert_eq!(headline.resets_at, Some(1_713_388_800)); // ms → s
+        assert_eq!(headline.used_percent, Some(60.0));
+        // Live TOKENS_LIMIT entries carry percentage only — no usage/currentValue.
+        assert_eq!(headline.used, None);
+        assert_eq!(headline.limit, None);
+        assert_eq!(headline.resets_at, Some(1_782_210_628)); // 1782210628998 ms → s
     }
 
     #[test]
-    fn normalize_fixture_detail_has_5h_mcp_and_models() {
+    fn normalize_live_fixture_detail_has_5h_monthly_and_models() {
         let v: ZaiResponse =
             serde_json::from_str(include_str!("../../tests/zai_quota_fixture.json")).unwrap();
         let (_, detail) = normalize(v.data.as_ref().unwrap());
 
+        // 5-hour window (TOKENS_LIMIT unit 3, percentage only).
         let five = detail.iter().find(|w| w.label == "5-hour").unwrap();
-        assert_eq!(five.used_percent, Some(7.0));
-        assert_eq!(five.used, Some(72_000.0));
-        assert_eq!(five.limit, Some(1_000_000.0));
-        assert_eq!(five.resets_at, Some(1_712_956_800));
+        assert_eq!(five.used_percent, Some(9.0));
+        assert_eq!(five.used, None);
+        assert_eq!(five.limit, None);
+        assert_eq!(five.resets_at, Some(1_781_897_705));
 
-        let mcp = detail
-            .iter()
-            .find(|w| w.label == "MCP usage(1 Month)")
-            .unwrap();
-        assert_eq!(mcp.used_percent, Some(4.0));
-        assert_eq!(mcp.used, Some(42.0));
-        assert_eq!(mcp.limit, Some(1000.0));
+        // Monthly window (TIME_LIMIT unit 5) — full detail present.
+        let monthly = detail.iter().find(|w| w.label == "Monthly").unwrap();
+        assert_eq!(monthly.used_percent, Some(1.0));
+        assert_eq!(monthly.used, Some(7.0));
+        assert_eq!(monthly.limit, Some(4000.0));
+        assert_eq!(monthly.resets_at, Some(1_783_852_228));
 
-        // Per-MCP-tool breakdown.
-        let search = detail.iter().find(|w| w.label == "search-prime").unwrap();
-        assert_eq!(search.used, Some(20.0));
-        assert!(detail.iter().any(|w| w.label == "web-reader" && w.used == Some(15.0)));
-        assert!(detail.iter().any(|w| w.label == "zread" && w.used == Some(7.0)));
+        // Per-tool breakdown.
+        assert!(detail.iter().any(|w| w.label == "search-prime" && w.used == Some(1.0)));
+        assert!(detail.iter().any(|w| w.label == "web-reader" && w.used == Some(0.0)));
+        assert!(detail.iter().any(|w| w.label == "zread" && w.used == Some(6.0)));
     }
 
     #[test]

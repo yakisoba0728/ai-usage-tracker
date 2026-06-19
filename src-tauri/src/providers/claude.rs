@@ -1,10 +1,10 @@
-//! Claude (via Claude Code) — modeled on claude-meter (MIT).
-//! Reads the OAuth token Claude Code stores (macOS Keychain service
-//! `Claude Code-credentials`, else `~/.claude/.credentials.json`), checks expiry,
-//! and calls `api.anthropic.com/api/oauth/usage` + `/api/oauth/profile`.
-//! Token-parsing only: the token is rotated by the Claude Code CLI; if it is
-//! expired we surface a hint to run `claude` rather than doing any OAuth
-//! ourselves.
+//! Claude (via Claude Code) — modeled on claude-meter (MIT), with deeper
+//! parsing for the detail view. Reads the OAuth token Claude Code stores
+//! (macOS Keychain `Claude Code-credentials`, else `~/.claude/.credentials.json`),
+//! checks expiry, then calls `api.anthropic.com/api/oauth/usage` + `/profile`.
+//! Surfaces every rolling window (five_hour, seven_day + per-model + cowork +
+//! omelette) and `extra_usage`, and derives a human plan label like "Max 20x"
+//! from `rateLimitTier`. Token-parsing only.
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -26,6 +26,7 @@ struct CredBlob {
     #[serde(rename = "accessToken", default)] flat_access: Option<String>,
     #[serde(rename = "expiresAt", default)] flat_expires: i64,
     #[serde(rename = "subscriptionType", default)] flat_sub: Option<String>,
+    #[serde(rename = "rateLimitTier", default)] flat_tier: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -33,12 +34,14 @@ struct OAuthCreds {
     #[serde(rename = "accessToken")] access_token: String,
     #[serde(rename = "expiresAt", default)] expires_at: i64,
     #[serde(rename = "subscriptionType", default)] subscription_type: Option<String>,
+    #[serde(rename = "rateLimitTier", default)] rate_limit_tier: Option<String>,
 }
 
 struct ResolvedCreds {
     access_token: String,
     expires_at: i64,
     subscription_type: Option<String>,
+    rate_limit_tier: Option<String>,
 }
 
 fn resolve_creds(blob: serde_json::Value) -> Result<ResolvedCreds, ProviderError> {
@@ -49,17 +52,56 @@ fn resolve_creds(blob: serde_json::Value) -> Result<ResolvedCreds, ProviderError
             access_token: o.access_token,
             expires_at: o.expires_at,
             subscription_type: o.subscription_type,
+            rate_limit_tier: o.rate_limit_tier,
         });
     }
-    // legacy flat
     parsed
         .flat_access
         .map(|access_token| ResolvedCreds {
             access_token,
             expires_at: parsed.flat_expires,
             subscription_type: parsed.flat_sub,
+            rate_limit_tier: parsed.flat_tier,
         })
         .ok_or_else(|| ProviderError::Parse("claude creds: no accessToken".into()))
+}
+
+/// Build a human plan label like "Max 20x" from `rateLimitTier`
+/// (e.g. "default_claude_max_20x" → "Max 20x"). Falls back to the subscription
+/// type capitalized.
+fn format_plan(tier: &Option<String>, sub: &Option<String>) -> Option<String> {
+    fn cap(s: &str) -> String {
+        let mut c = s.chars();
+        match c.next() {
+            Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+            None => String::new(),
+        }
+    }
+    if let Some(t) = tier {
+        let lower = t.to_lowercase();
+        let toks: Vec<&str> = lower.split('_').collect();
+        let base = if toks.iter().any(|x| x.contains("max")) {
+            "Max"
+        } else if toks.iter().any(|x| *x == "pro" || x.contains("pro")) {
+            "Pro"
+        } else if toks.iter().any(|x| x.contains("team")) {
+            "Team"
+        } else if toks.iter().any(|x| x.contains("enterprise")) {
+            "Enterprise"
+        } else {
+            return sub.as_deref().map(cap);
+        };
+        let mult = toks.iter().rev().find(|x| {
+            x.ends_with('x')
+                && x[..x.len() - 1].chars().all(|c| c.is_ascii_digit())
+                && x.len() > 1
+        });
+        return Some(match mult {
+            Some(m) => format!("{base} {m}"),
+            None => base.to_string(),
+        });
+    }
+    sub.as_deref().map(cap)
 }
 
 #[derive(Deserialize)]
@@ -71,9 +113,10 @@ struct Window {
 #[derive(Deserialize)]
 struct ExtraUsage {
     #[serde(default)] is_enabled: Option<bool>,
-    #[serde(default)] used_credits: Option<f64>,
     #[serde(default)] monthly_limit: Option<f64>,
+    #[serde(default)] used_credits: Option<f64>,
     #[serde(default)] utilization: Option<f64>,
+    #[serde(default)] currency: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -83,16 +126,23 @@ struct UsageResponse {
     #[serde(default)] seven_day_sonnet: Option<Window>,
     #[serde(default)] seven_day_opus: Option<Window>,
     #[serde(default)] seven_day_oauth_apps: Option<Window>,
+    #[serde(default)] seven_day_omelette: Option<Window>,
+    #[serde(default)] seven_day_cowork: Option<Window>,
     #[serde(default)] extra_usage: Option<ExtraUsage>,
 }
 
 #[derive(Deserialize)]
 struct Profile {
     #[serde(default)] account: Option<ProfileAccount>,
+    #[serde(default)] organization: Option<Org>,
 }
 #[derive(Deserialize, Default)]
 struct ProfileAccount {
     #[serde(default)] email: Option<String>,
+}
+#[derive(Deserialize, Default)]
+struct Org {
+    #[serde(default)] uuid: Option<String>,
 }
 
 pub struct ClaudeProvider {
@@ -117,7 +167,8 @@ fn window(label: &str, w: &Window) -> LimitWindow {
     }
 }
 
-/// Pure normalization (unit-testable, no network).
+/// Pure normalization (unit-testable, no network). utilization is already 0..100;
+/// extra_usage credits are cents → dollars.
 fn normalize(raw: &UsageResponse) -> Vec<LimitWindow> {
     let mut ws = Vec::new();
     if let Some(w) = &raw.five_hour {
@@ -134,6 +185,12 @@ fn normalize(raw: &UsageResponse) -> Vec<LimitWindow> {
     }
     if let Some(w) = &raw.seven_day_oauth_apps {
         ws.push(window("7-day (OAuth Apps)", w));
+    }
+    if let Some(w) = &raw.seven_day_omelette {
+        ws.push(window("7-day (Omelette)", w));
+    }
+    if let Some(w) = &raw.seven_day_cowork {
+        ws.push(window("7-day (Cowork)", w));
     }
     if let Some(e) = &raw.extra_usage {
         if e.is_enabled.unwrap_or(false) {
@@ -175,7 +232,7 @@ impl crate::providers::ProviderApi for ClaudeProvider {
         Ok(ServiceUsage {
             provider: Provider::Claude,
             connected: true,
-            plan: creds.subscription_type,
+            plan: format_plan(&creds.rate_limit_tier, &creds.subscription_type),
             account: profile.account.and_then(|a| a.email),
             error: None,
             windows: normalize(&usage),
@@ -206,14 +263,33 @@ mod tests {
     }
 
     #[test]
+    fn format_plan_from_tier() {
+        assert_eq!(
+            format_plan(&Some("default_claude_max_20x".into()), &Some("max".into())).as_deref(),
+            Some("Max 20x")
+        );
+        assert_eq!(
+            format_plan(&Some("default_claude_max_5x".into()), &Some("max".into())).as_deref(),
+            Some("Max 5x")
+        );
+        assert_eq!(
+            format_plan(&Some("default_claude_pro".into()), &Some("pro".into())).as_deref(),
+            Some("Pro")
+        );
+        assert_eq!(format_plan(&None, &Some("max".into())).as_deref(), Some("Max"));
+        assert_eq!(format_plan(&None, &None), None);
+    }
+
+    #[test]
     fn resolve_nested_and_flat() {
-        let nested = serde_json::json!({"claudeAiOauth":{"accessToken":"a","expiresAt":0,"subscriptionType":"max"}});
+        let nested = serde_json::json!({"claudeAiOauth":{"accessToken":"a","expiresAt":0,"subscriptionType":"max","rateLimitTier":"default_claude_max_20x"}});
         let r = resolve_creds(nested).unwrap();
         assert_eq!(r.access_token, "a");
-        assert_eq!(r.subscription_type.as_deref(), Some("max"));
+        assert_eq!(r.rate_limit_tier.as_deref(), Some("default_claude_max_20x"));
 
         let flat = serde_json::json!({"accessToken":"b","expiresAt":0});
         let r2 = resolve_creds(flat).unwrap();
         assert_eq!(r2.access_token, "b");
+        assert!(r2.rate_limit_tier.is_none());
     }
 }

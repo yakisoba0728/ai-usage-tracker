@@ -2,7 +2,7 @@ import type { LimitWindow } from "@/lib/types";
 
 export type Severity = "ok" | "warn" | "crit";
 
-/** Severity band for a usage percent; `null` when there is no percent at all. */
+/** Severity band for a usage percent. `null` when there is no percent at all. */
 export function percentSeverity(p: number | null): Severity | null {
   if (p == null) return null;
   if (p >= 90) return "crit";
@@ -10,9 +10,23 @@ export function percentSeverity(p: number | null): Severity | null {
   return "ok";
 }
 
-/** Text color class for a usage percent (semantic status tokens). */
-export function percentColor(p: number | null): string {
-  switch (percentSeverity(p)) {
+/** Raw CSS color value for an SVG stroke (ring arc). Faint when unknown. */
+export function severityColor(sev: Severity | null): string {
+  switch (sev) {
+    case "crit":
+      return "var(--crit)";
+    case "warn":
+      return "var(--warn)";
+    case "ok":
+      return "var(--ok)";
+    default:
+      return "var(--text-faint)";
+  }
+}
+
+/** Text color utility for a usage percent (semantic status tokens). */
+export function severityTextClass(sev: Severity | null): string {
+  switch (sev) {
     case "crit":
       return "text-crit";
     case "warn":
@@ -20,13 +34,13 @@ export function percentColor(p: number | null): string {
     case "ok":
       return "text-ok";
     default:
-      return "text-muted-foreground";
+      return "text-text-faint";
   }
 }
 
-/** Fill color class for a usage percent (semantic status tokens). */
-export function percentBarColor(p: number | null): string {
-  switch (percentSeverity(p)) {
+/** Solid fill utility for a usage percent (bars, dots). */
+export function severityBarClass(sev: Severity | null): string {
+  switch (sev) {
     case "crit":
       return "bg-crit";
     case "warn":
@@ -34,10 +48,9 @@ export function percentBarColor(p: number | null): string {
     case "ok":
       return "bg-ok";
     default:
-      return "bg-muted-foreground/40";
+      return "bg-text-faint/40";
   }
 }
-
 
 /** "72%" or "—" when there is no value; whole-number percent. */
 export function formatPercent(p: number | null): string {
@@ -86,4 +99,30 @@ export function formatReset(epoch: number | null, nowMs: number): string | null 
     minute: "2-digit",
   });
   return `${cd} · ${abs}`;
+}
+
+/** "Updated just now" / "Updated 3m 12s ago" / "Updated 1h 4m ago". */
+export function formatUpdatedAgo(
+  fetchedAtSec: number | null,
+  nowMs: number,
+): string {
+  if (fetchedAtSec == null) return "Awaiting first update…";
+  const elapsed = Math.max(0, Math.floor(nowMs / 1000) - fetchedAtSec);
+  if (elapsed < 5) return "Updated just now";
+  if (elapsed < 60) return `Updated ${elapsed}s ago`;
+  const mins = Math.floor(elapsed / 60);
+  const secs = elapsed % 60;
+  if (mins < 60) return `Updated ${mins}m ${secs}s ago`;
+  const hours = Math.floor(mins / 60);
+  const remM = mins % 60;
+  return `Updated ${hours}h ${remM}m ago`;
+}
+
+/** Concise absolute clock, e.g. "14:32:07" — for the timestamp tooltip. */
+export function formatClock(epochSec: number): string {
+  return new Date(epochSec * 1000).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
 }

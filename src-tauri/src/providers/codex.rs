@@ -4,7 +4,9 @@
 //! `Authorization: Bearer <access_token>`, `ChatGPT-Account-Id`, and a
 //! `codex_cli_rs/` User-Agent. Surfaces the main 5h/weekly rate limits, every
 //! additional rate limit (e.g. `GPT-5.3-Codex-Spark`), credits, and available
-//! rate-limit resets. Token-parsing only.
+//! rate-limit resets. Stored manual accounts self-refresh via `refresh_stored`
+//! (POST `auth.openai.com/oauth/token`, public CLI client_id from codex-rs/login).
+//! Token-parsing only.
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -16,10 +18,19 @@ use crate::model::{LimitWindow, Provider, ServiceUsage};
 use crate::providers::ProviderError;
 use crate::secrets;
 
-/// The real endpoint, per openai/codex `backend-client` (PathStyle::ChatGptApi).
+/// Usage endpoint, per openai/codex `backend-client/rate_limit_resets.rs`
+/// (`PathStyle::ChatGptApi` → `/wham/usage` under `/backend-api`).
 const USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
-/// `codex_cli_rs/` is the UA prefix Cloudflare allow-lists for the CLI.
-const CODEX_UA: &str = "codex_cli_rs/0.1.0 (ai-usage-tracker)";
+/// User-Agent. Cloudflare's allow-list keys on the `codex_cli_rs/` prefix
+/// (stable identifier in codex-rs/login `DEFAULT_ORIGINATOR`); the version
+/// mirrors the current CLI build so the UA looks like a real client.
+/// `ai-usage-tracker` is appended for transparency (allowed UA suffix).
+const CODEX_UA: &str = "codex_cli_rs/0.141.0 (ai-usage-tracker)";
+/// Public OAuth client_id shipped in codex-rs/login (`auth/manager.rs::CLIENT_ID`).
+/// Used for both the device-code login and `refresh_token` grant.
+const CODEX_OAUTH_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
+/// OAuth token endpoint (codex-rs/login `REFRESH_TOKEN_URL`).
+const CODEX_REFRESH_URL: &str = "https://auth.openai.com/oauth/token";
 
 #[derive(Deserialize)]
 struct AuthDotJson {
@@ -233,6 +244,81 @@ pub(crate) async fn fetch_with(
     })
 }
 
+/// Successful OAuth refresh response from `auth.openai.com/oauth/token`
+/// (matches codex-rs/login `RefreshResponse`). `id_token`/`refresh_token`
+/// may be omitted; `access_token` is always present on a successful refresh.
+#[derive(serde::Deserialize)]
+struct Refreshed {
+    #[serde(default)] id_token: Option<String>,
+    #[serde(default)] access_token: Option<String>,
+    #[serde(default)] refresh_token: Option<String>,
+}
+
+/// Pure: build the OAuth `refresh_token` grant request body. Body shape and
+/// client_id mirror codex-rs/login `RefreshRequest` (JSON, not form-encoded).
+fn build_refresh_body(refresh_token: &str) -> serde_json::Value {
+    serde_json::json!({
+        "client_id": CODEX_OAUTH_CLIENT_ID,
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+    })
+}
+
+/// Pure: build a refreshed `StoredCredential`. Derives `expires_at` (epoch ms)
+/// from the new access_token's JWT `exp`, falling back to the new id_token's
+/// `exp`, then to 0 (unknown). Preserves `id`/`provider`/`label`/`account_id`;
+/// takes the new `id_token` when supplied, else keeps the old one; keeps the
+/// old refresh_token when the response omits a fresh one (OpenAI rotates per
+/// refresh, but tolerate omission).
+fn build_refreshed_cred(
+    cred: &crate::store::StoredCredential,
+    fresh: &Refreshed,
+) -> crate::store::StoredCredential {
+    let new_access = fresh.access_token.clone().unwrap_or_default();
+    let new_id_token = fresh.id_token.clone().or_else(|| cred.id_token.clone());
+    let expires_at = crate::jwt::jwt_exp(&new_access)
+        .or_else(|| new_id_token.as_deref().and_then(crate::jwt::jwt_exp))
+        .map(|s| s * 1000)
+        .unwrap_or(0);
+    crate::store::StoredCredential {
+        id: cred.id.clone(),
+        provider: cred.provider,
+        label: cred.label.clone(),
+        access_token: new_access,
+        refresh_token: fresh.refresh_token.clone().or_else(|| cred.refresh_token.clone()),
+        expires_at,
+        id_token: new_id_token,
+        account_id: cred.account_id.clone(),
+    }
+}
+
+/// Refresh a stored Codex OAuth credential via `auth.openai.com/oauth/token`
+/// using the public CLI client_id (`app_EMoamEEZ73f0CkXaXp7hrann`) and a
+/// `refresh_token` grant. Returns `Some(updated_cred)` when a refresh happened
+/// (caller persists); `None` if there is no refresh_token, the network call
+/// fails, the server returns non-2xx, or the response lacks an access_token
+/// (caller falls back to the existing token).
+pub(crate) async fn refresh_stored(
+    http: &reqwest::Client,
+    cred: &crate::store::StoredCredential,
+) -> Option<crate::store::StoredCredential> {
+    let rt = cred.refresh_token.as_ref().filter(|s| !s.is_empty())?;
+    let resp = http
+        .post(CODEX_REFRESH_URL)
+        .header("Accept", "application/json")
+        .header("Content-Type", "application/json")
+        .json(&build_refresh_body(rt))
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let fresh: Refreshed = resp.json().await.ok()?;
+    let _ = fresh.access_token.as_ref()?;
+    Some(build_refreshed_cred(cred, &fresh))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -258,5 +344,82 @@ mod tests {
             serde_json::from_str(include_str!("../../tests/codex_auth_fixture.json")).unwrap();
         let a: AuthDotJson = serde_json::from_value(v).unwrap();
         assert!(a.tokens.is_some());
+    }
+
+    use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+
+    fn jwt_with_exp(exp: i64) -> String {
+        let payload = URL_SAFE_NO_PAD.encode(format!(r#"{{"exp":{exp}}}"#));
+        format!("hdr.{payload}.sig")
+    }
+
+    fn stored(id: &str) -> crate::store::StoredCredential {
+        crate::store::StoredCredential {
+            id: id.into(),
+            provider: Provider::Codex,
+            label: "me@x.com".into(),
+            access_token: "old.at".into(),
+            refresh_token: Some("old.rt".into()),
+            expires_at: 0,
+            id_token: Some("old.id".into()),
+            account_id: Some("acct-1".into()),
+        }
+    }
+
+    #[test]
+    fn refresh_body_uses_public_cli_client_id() {
+        assert_eq!(CODEX_OAUTH_CLIENT_ID, "app_EMoamEEZ73f0CkXaXp7hrann");
+        let body = build_refresh_body("rt-abc");
+        assert_eq!(body["client_id"], CODEX_OAUTH_CLIENT_ID);
+        assert_eq!(body["grant_type"], "refresh_token");
+        assert_eq!(body["refresh_token"], "rt-abc");
+    }
+
+    #[test]
+    fn build_refreshed_cred_rotates_tokens_and_extracts_exp() {
+        let access_token = jwt_with_exp(1_700_000_000);
+        let fresh = Refreshed {
+            id_token: Some("new.id".into()),
+            access_token: Some(access_token.clone()),
+            refresh_token: Some("new.rt".into()),
+        };
+        let out = build_refreshed_cred(&stored("acc-1"), &fresh);
+        assert_eq!(out.id, "acc-1");
+        assert_eq!(out.provider, Provider::Codex);
+        assert_eq!(out.label, "me@x.com");
+        assert_eq!(out.account_id.as_deref(), Some("acct-1"));
+        assert_eq!(out.access_token, access_token);
+        assert_eq!(out.refresh_token.as_deref(), Some("new.rt"));
+        assert_eq!(out.id_token.as_deref(), Some("new.id"));
+        assert_eq!(out.expires_at, 1_700_000_000_000); // exp → epoch ms
+    }
+
+    #[test]
+    fn build_refreshed_cred_keeps_old_refresh_and_zero_exp_when_omitted() {
+        // Non-JWT access token: exp falls back to id_token (also absent) → 0.
+        let fresh = Refreshed {
+            id_token: None,
+            access_token: Some("plain.string.token".into()),
+            refresh_token: None,
+        };
+        let out = build_refreshed_cred(&stored("acc-1"), &fresh);
+        assert_eq!(out.access_token, "plain.string.token");
+        assert_eq!(out.refresh_token.as_deref(), Some("old.rt"));
+        assert_eq!(out.id_token.as_deref(), Some("old.id")); // preserved
+        assert_eq!(out.expires_at, 0);
+    }
+
+    #[test]
+    fn build_refreshed_cred_falls_back_to_id_token_exp() {
+        // access_token is opaque; exp comes from the new id_token.
+        let id_token = jwt_with_exp(2_000_000_000);
+        let fresh = Refreshed {
+            id_token: Some(id_token),
+            access_token: Some("opaque".into()),
+            refresh_token: Some("new.rt".into()),
+        };
+        let out = build_refreshed_cred(&stored("acc-1"), &fresh);
+        assert_eq!(out.expires_at, 2_000_000_000_000);
     }
 }

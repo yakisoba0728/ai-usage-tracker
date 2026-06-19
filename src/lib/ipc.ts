@@ -2,11 +2,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import type {
+  AccountInfo,
   AppConfig,
   LoginInfo,
   LoginResult,
   Provider,
-  StoredCredential,
   UsageSnapshot,
 } from "@/lib/types";
 
@@ -45,13 +45,17 @@ export function cancelLogin(): Promise<void> {
   return invoke<void>("cancel_login");
 }
 
-/** Add an account by pasting a raw credential (Claude session key). */
-export function addSessionKey(provider: Provider, key: string, label?: string): Promise<string> {
+/** Add an account by pasting a raw credential (Claude/Copilot/z.ai). */
+export function addSessionKey(
+  provider: Provider,
+  key: string,
+  label?: string,
+): Promise<string> {
   return invoke<string>("add_session_key", { provider, key, label });
 }
 
-export function listAccounts(): Promise<StoredCredential[]> {
-  return invoke<StoredCredential[]>("list_accounts");
+export function listAccounts(): Promise<AccountInfo[]> {
+  return invoke<AccountInfo[]>("list_accounts");
 }
 
 export function removeAccount(id: string): Promise<boolean> {
@@ -66,7 +70,9 @@ export function onUsageUpdated(
   });
 }
 
-export function onLoginComplete(cb: (r: LoginResult) => void): Promise<UnlistenFn> {
+export function onLoginComplete(
+  cb: (r: LoginResult) => void,
+): Promise<UnlistenFn> {
   return listen<LoginResult>(LOGIN_COMPLETE_EVENT, (event) => {
     cb(event.payload);
   });

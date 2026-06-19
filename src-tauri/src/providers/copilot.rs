@@ -1,9 +1,16 @@
 //! GitHub Copilot — reads the Copilot CLI's stored token (macOS Keychain
 //! `copilot-cli`, else `~/.copilot/config.json`) and calls the internal
-//! `GET /copilot_internal/v2/token` endpoint, which returns the real
-//! `quota_snapshots` gauge (chat / premium_interactions / completions).
-//! Token-parsing only; for manual accounts use a fine-grained PAT with
-//! "Copilot Requests: Read" permission (paste via Add account).
+//! `GET /copilot_internal/user` endpoint, which returns the `quota_snapshots`
+//! gauge (chat / premium_interactions / completions) plus `quota_reset_date`.
+//!
+//! Verified against `vbgate/opencode-mystatus` (MIT, the reference cited in the
+//! README): `/copilot_internal/v2/token` is a *token-exchange* endpoint that
+//! returns `{token, expires_at, refresh_in, endpoints}` — NOT the quota source.
+//! The quota lives at `/copilot_internal/user`. (The previous code hit the
+//! token endpoint and would never have parsed `quota_snapshots` from a live
+//! response.) For manual accounts use a fine-grained PAT with "Copilot
+//! Requests: Read" permission (paste via Add account); `Authorization: token
+//! <key>` works for both Copilot CLI OAuth tokens and PATs on this endpoint.
 
 use std::path::PathBuf;
 
@@ -16,28 +23,52 @@ use crate::model::{LimitWindow, Provider, ServiceUsage};
 use crate::providers::ProviderError;
 use crate::secrets;
 
-const USAGE_URL: &str = "https://api.github.com/copilot_internal/v2/token";
+/// Quota source per `vbgate/opencode-mystatus` `plugin/lib/copilot.ts`
+/// (Strategy 2 — direct call with the OAuth/PAT token using the legacy
+/// `Authorization: token <t>` scheme).
+const USAGE_URL: &str = "https://api.github.com/copilot_internal/user";
+
+/// Header values mirror the current VS Code Copilot extension (Jan 2026),
+/// per `vbgate/opencode-mystatus` `plugin/lib/copilot.ts`. These identify the
+/// client as VS Code Copilot Chat, which `/copilot_internal/user` expects.
+const EDITOR_VERSION: &str = "vscode/1.107.0";
+const EDITOR_PLUGIN_VERSION: &str = "copilot-chat/0.35.0";
+const USER_AGENT: &str = "GitHubCopilotChat/0.35.0";
 
 #[derive(Deserialize, Default)]
-struct CopilotTokenResp {
-    #[serde(default)] copilot_plan: Option<String>,
-    #[serde(default)] quota_reset_date_utc: Option<String>,
-    #[serde(default)] quota_snapshots: QuotaSnapshots,
+struct CopilotUsageResp {
+    #[serde(default)]
+    copilot_plan: Option<String>,
+    #[serde(default)]
+    quota_reset_date: Option<String>,
+    #[serde(default)]
+    quota_snapshots: QuotaSnapshots,
 }
 
 #[derive(Deserialize, Default)]
 struct QuotaSnapshots {
-    #[serde(default)] chat: Option<QuotaSnapshot>,
-    #[serde(default)] premium_interactions: Option<QuotaSnapshot>,
-    #[serde(default)] completions: Option<QuotaSnapshot>,
+    #[serde(default)]
+    chat: Option<QuotaSnapshot>,
+    #[serde(default)]
+    premium_interactions: Option<QuotaSnapshot>,
+    #[serde(default)]
+    completions: Option<QuotaSnapshot>,
 }
 
 #[derive(Deserialize, Default)]
 struct QuotaSnapshot {
-    #[serde(default)] entitlement: Option<f64>,
-    #[serde(default)] quota_remaining: Option<f64>,
-    #[serde(default)] percent_remaining: Option<f64>,
-    #[serde(default)] unlimited: Option<bool>,
+    #[serde(default)]
+    entitlement: Option<f64>,
+    /// Canonical field per `opencode-mystatus` (`used = entitlement - remaining`).
+    #[serde(default)]
+    remaining: Option<f64>,
+    /// Older payloads carry this alias; we accept either.
+    #[serde(default)]
+    quota_remaining: Option<f64>,
+    #[serde(default)]
+    percent_remaining: Option<f64>,
+    #[serde(default)]
+    unlimited: Option<bool>,
 }
 
 pub struct CopilotProvider {
@@ -58,8 +89,8 @@ impl CopilotProvider {
     }
 }
 
-
-/// Reuse the Copilot CLI's stored OAuth token. macOS: Keychain `copilot-cli`;
+/// Reuse the Copilot CLI's stored OAuth token. macOS: Keychain `copilot-cli`
+/// (value may be either the raw token or JSON `{github.com: {oauth_token}}`);
 /// elsewhere: `~/.copilot/config.json` → `github.com.oauth_token`.
 fn read_copilot_token() -> Result<String, ProviderError> {
     #[cfg(target_os = "macos")]
@@ -95,15 +126,23 @@ fn read_copilot_token() -> Result<String, ProviderError> {
         })
 }
 
+/// Parse the `quota_reset_date` field. The real API returns a plain `YYYY-MM-DD`
+/// date (e.g. `"2026-07-01"`); tolerate full RFC-3339 too.
 fn parse_reset_date(s: &str) -> Option<i64> {
-    chrono::DateTime::parse_from_rfc3339(s)
+    if let Ok(d) = chrono::DateTime::parse_from_rfc3339(s) {
+        return Some(d.timestamp());
+    }
+    chrono::NaiveDate::parse_from_str(s.trim(), "%Y-%m-%d")
         .ok()
-        .map(|d| d.timestamp())
+        .and_then(|d| d.and_hms_opt(0, 0, 0).map(|ndt| ndt.and_utc().timestamp()))
 }
 
 /// Pure: quota_snapshots → LimitWindows, sorted by highest usage first.
-fn normalize(resp: &CopilotTokenResp) -> Vec<LimitWindow> {
-    let reset = resp.quota_reset_date_utc.as_deref().and_then(parse_reset_date);
+fn normalize(resp: &CopilotUsageResp) -> Vec<LimitWindow> {
+    let reset = resp
+        .quota_reset_date
+        .as_deref()
+        .and_then(parse_reset_date);
     let categories: [(&str, &Option<QuotaSnapshot>); 3] = [
         ("Chat", &resp.quota_snapshots.chat),
         ("Premium requests", &resp.quota_snapshots.premium_interactions),
@@ -117,7 +156,9 @@ fn normalize(resp: &CopilotTokenResp) -> Vec<LimitWindow> {
                 return None;
             }
             let pct = q.percent_remaining.map(|r| (100.0 - r) as f32);
-            let used = match (q.entitlement, q.quota_remaining) {
+            // Reference uses `remaining`; older payloads carry `quota_remaining`.
+            let remaining = q.remaining.or(q.quota_remaining);
+            let used = match (q.entitlement, remaining) {
                 (Some(e), Some(r)) => Some(e - r),
                 _ => None,
             };
@@ -152,7 +193,7 @@ impl crate::providers::ProviderApi for CopilotProvider {
 }
 
 /// Fetch Copilot usage given an explicit token (auto-detected Copilot CLI token
-/// or a manually-pasted PAT). Calls `/copilot_internal/v2/token`.
+/// or a manually-pasted PAT). Calls `GET /copilot_internal/user`.
 pub(crate) async fn fetch_with(
     http: &reqwest::Client,
     token: &str,
@@ -161,15 +202,16 @@ pub(crate) async fn fetch_with(
         .get(USAGE_URL)
         .header("Authorization", format!("token {token}"))
         .header("Accept", "application/json")
-        .header("Editor-Version", "vscode/1.96.2")
-        .header("Editor-Plugin-Version", "copilot-chat/0.35.0")
+        .header("Content-Type", "application/json")
+        .header("User-Agent", USER_AGENT)
+        .header("Editor-Version", EDITOR_VERSION)
+        .header("Editor-Plugin-Version", EDITOR_PLUGIN_VERSION)
         .header("Copilot-Integration-Id", "vscode-chat")
-        .header("X-Github-Api-Version", "2025-04-01")
         .send()
         .await
         .map_err(|e| ProviderError::Network(e.to_string()))?;
     let val: Value = http::send_for_json(resp, USAGE_URL).await?;
-    let u: CopilotTokenResp =
+    let u: CopilotUsageResp =
         serde_json::from_value(val).map_err(|e| ProviderError::Parse(e.to_string()))?;
     let windows = normalize(&u);
     Ok(ServiceUsage {
@@ -183,24 +225,43 @@ pub(crate) async fn fetch_with(
     })
 }
 
+/// Refresh a stored credential's access_token using its refresh_token.
+///
+/// Returns `None` (no-op) for Copilot: the `gho_…` user OAuth tokens the
+/// Copilot CLI stores in `copilot-cli` / `~/.copilot/config.json` **do not
+/// expire and have no refresh grant** — they persist until revoked, and the
+/// device-code flow the CLI uses (`cli/cli` `internal/authflow/flow.go`,
+/// client_id `178c6fc778ccc68e1d6a`) does not return a `refresh_token`. Only
+/// GitHub-App-installed tokens can expire/refresh, and the Copilot CLI does not
+/// issue those. PATs are similarly non-expiring. The caller therefore falls
+/// back to the existing token. See `docs/oauth-credential-research.md` §4.B.
+pub(crate) async fn refresh_stored(
+    _http: &reqwest::Client,
+    _cred: &crate::store::StoredCredential,
+) -> Option<crate::store::StoredCredential> {
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn normalize_quota_snapshots() {
-        let resp = CopilotTokenResp {
+        let resp = CopilotUsageResp {
             copilot_plan: Some("pro".into()),
-            quota_reset_date_utc: Some("2026-07-01T00:00:00Z".into()),
+            quota_reset_date: Some("2026-07-01T00:00:00Z".into()),
             quota_snapshots: QuotaSnapshots {
                 chat: Some(QuotaSnapshot {
                     entitlement: Some(300.0),
+                    remaining: Some(250.0),
                     quota_remaining: Some(250.0),
                     percent_remaining: Some(83.33),
                     unlimited: Some(false),
                 }),
                 premium_interactions: Some(QuotaSnapshot {
                     entitlement: Some(300.0),
+                    remaining: Some(50.0),
                     quota_remaining: Some(50.0),
                     percent_remaining: Some(16.67),
                     unlimited: Some(false),
@@ -215,5 +276,55 @@ mod tests {
         assert_eq!(ws[0].used_percent, Some(83.33));
         assert_eq!(ws[0].used, Some(250.0));
         assert_eq!(ws[0].limit, Some(300.0));
+        // Both windows share the parsed reset date.
+        assert!(ws[0].resets_at.is_some());
+        assert!(ws[1].resets_at.is_some());
+    }
+
+    #[test]
+    fn parses_real_copilot_fixture() {
+        // Shape captured from a live `/copilot_internal/user` response.
+        let raw = include_str!("../../tests/copilot_internal_fixture.json");
+        let v: Value = serde_json::from_str(raw).unwrap();
+        let u: CopilotUsageResp = serde_json::from_value(v).unwrap();
+        assert_eq!(u.copilot_plan.as_deref(), Some("individual"));
+        // Real API field is `quota_reset_date` (plain YYYY-MM-DD).
+        assert_eq!(u.quota_reset_date.as_deref(), Some("2026-07-01"));
+        let ws = normalize(&u);
+        assert_eq!(ws.len(), 1);
+        assert_eq!(ws[0].label, "Premium requests");
+        // entitlement=300, remaining=71 → used=229.
+        assert_eq!(ws[0].used, Some(229.0));
+        assert_eq!(ws[0].limit, Some(300.0));
+        // percent_remaining=24 → used_percent=76.
+        assert_eq!(ws[0].used_percent, Some(76.0));
+        // Reset date parsed from plain YYYY-MM-DD.
+        assert!(ws[0].resets_at.is_some());
+    }
+
+    #[test]
+    fn parse_reset_date_accepts_plain_and_rfc3339() {
+        // Real API format: plain YYYY-MM-DD.
+        assert!(parse_reset_date("2026-07-01").is_some());
+        // Tolerate full RFC-3339 too.
+        assert!(parse_reset_date("2026-07-01T00:00:00Z").is_some());
+        assert!(parse_reset_date("nonsense").is_none());
+    }
+
+    #[tokio::test]
+    async fn refresh_stored_is_noop() {
+        // Copilot tokens don't expire refreshably; refresh is a documented no-op.
+        let http = crate::http::build_client();
+        let cred = crate::store::StoredCredential {
+            id: "x".into(),
+            provider: Provider::Copilot,
+            label: "test".into(),
+            access_token: "gho_x".into(),
+            refresh_token: None,
+            expires_at: 0,
+            id_token: None,
+            account_id: None,
+        };
+        assert!(refresh_stored(&http, &cred).await.is_none());
     }
 }

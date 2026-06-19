@@ -5,6 +5,7 @@ pub mod codex;
 pub mod copilot;
 pub mod cursor;
 pub mod gemini;
+pub mod zai;
 
 use async_trait::async_trait;
 use futures::future::join_all;
@@ -60,31 +61,68 @@ pub async fn fetch_all(providers: Vec<Box<dyn ProviderApi>>) -> Vec<ServiceUsage
     join_all(futs).await
 }
 
-/// Fetch usage for a manually-added (OAuth) account whose token lives in the store.
+/// Fetch usage for a manually-added (OAuth/API-key) account whose token lives
+/// in the store. Refreshes the access token first if it's near expiry (P0 #3).
 pub async fn fetch_credential(cred: &crate::store::StoredCredential) -> ServiceUsage {
     let http = crate::http::build_client();
-    let label = cred.label.as_str();
-    let res = match cred.provider {
+    let now_ms = chrono::Utc::now().timestamp_millis();
+
+    // P0 #3: refresh expired stored tokens before fetching. Cursor/CoPilot/z.ai
+    // return None (no refresh path); Claude session-key accounts return None
+    // (no refresh_token). Codex/Gemini OAuth accounts rotate and persist.
+    let active = if cred.expires_at > 0 && cred.expires_at < now_ms {
+        match refresh_stored(&http, cred).await {
+            Some(updated) => {
+                let _ = crate::store::update(&updated);
+                updated
+            }
+            None => cred.clone(),
+        }
+    } else {
+        cred.clone()
+    };
+
+    let label = active.label.as_str();
+    let res = match active.provider {
         Provider::Codex => crate::providers::codex::fetch_with(
-            &http, &cred.access_token, cred.account_id.as_deref(), &cred.id_token, Some(label),
+            &http, &active.access_token, active.account_id.as_deref(), &active.id_token, Some(label),
         )
         .await,
-        Provider::Gemini => crate::providers::gemini::fetch_with(&http, &cred.access_token, Some(label)).await,
-        Provider::Claude => crate::providers::claude::fetch_with_session_key(&http, &cred.access_token).await,
-        Provider::Copilot => crate::providers::copilot::fetch_with(&http, &cred.access_token).await,
-        _ => Err(ProviderError::NotLoggedIn("manual accounts not supported for this provider".into())),
+        Provider::Gemini => crate::providers::gemini::fetch_with(&http, &active.access_token, Some(label)).await,
+        Provider::Claude => crate::providers::claude::fetch_with_session_key(&http, &active.access_token).await,
+        Provider::Copilot => crate::providers::copilot::fetch_with(&http, &active.access_token).await,
+        Provider::Zai => crate::providers::zai::fetch_with(&http, &active.access_token, Some(label)).await,
+        Provider::Cursor => Err(ProviderError::NotLoggedIn(
+            "manual accounts not supported for Cursor (CLI-detected only)".into(),
+        )),
     };
     match res {
         Ok(u) => u,
         Err(e) => ServiceUsage {
-            provider: cred.provider,
+            provider: active.provider,
             connected: false,
             plan: None,
-            account: Some(cred.label.clone()),
+            account: Some(active.label.clone()),
             error: Some(e.to_string()),
             windows: vec![],
             detail_windows: vec![],
         },
+    }
+}
+
+/// Dispatch to the provider's `refresh_stored` helper. Returns Some(updated) if
+/// a refresh happened (caller persists), None if not applicable / failed.
+async fn refresh_stored(
+    http: &reqwest::Client,
+    cred: &crate::store::StoredCredential,
+) -> Option<crate::store::StoredCredential> {
+    match cred.provider {
+        Provider::Claude => crate::providers::claude::refresh_stored(http, cred).await,
+        Provider::Codex => crate::providers::codex::refresh_stored(http, cred).await,
+        Provider::Gemini => crate::providers::gemini::refresh_stored(http, cred).await,
+        Provider::Copilot => crate::providers::copilot::refresh_stored(http, cred).await,
+        Provider::Cursor => crate::providers::cursor::refresh_stored(http, cred).await,
+        Provider::Zai => crate::providers::zai::refresh_stored(http, cred).await,
     }
 }
 

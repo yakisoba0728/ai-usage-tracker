@@ -76,6 +76,24 @@ pub fn remove(id: &str) -> bool {
     changed
 }
 
+/// Replace a stored credential in place (used by the refresh path to persist
+/// rotated tokens). Returns true if the id was found and updated.
+pub fn update(cred: &StoredCredential) -> bool {
+    let mut accounts = load();
+    let mut changed = false;
+    for a in accounts.iter_mut() {
+        if a.id == cred.id {
+            *a = cred.clone();
+            changed = true;
+            break;
+        }
+    }
+    if changed {
+        persist(&accounts);
+    }
+    changed
+}
+
 pub fn list() -> Vec<StoredCredential> {
     load()
 }

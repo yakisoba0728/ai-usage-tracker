@@ -322,3 +322,81 @@ Incorporates the senior-advisor review and live checks on the dev machine. Super
 
 ### Tests (§10)
 - Add `StubProvider` to prove `fetch_all` error-isolation; add Gemini refresh-success path, Codex 401/expiry path, scheduler backoff test.
+
+
+---
+
+## Revision 3 — Parallel verify+fix wave, refresh P0, z.ai, UI rebuild (2026-06-18)
+
+Supersedes earlier "no app-side OAuth / no refresh" claims. The product now
+self-refreshes, supports in-app OAuth/API-key flows, and ships a 6th provider.
+
+### Provider verification (per-provider agents vs community references)
+- **Claude**: 3 bug fixes — `fetch_with_session_key` was fetching a non-existent
+  `/api/organizations/{org}/account` shape (always silently lost email+tier);
+  now reads them off the already-fetched org. Keychain write-back now detects
+  the existing entry's `acct` rather than assuming `$USER`. `refresh_oauth`
+  falls back to `platform.claude.com` if `console.anthropic.com` hard-fails.
+- **Codex**: UA bumped `0.1.0 → 0.141.0` (current CLI build); `codex_cli_rs/`
+  prefix is the stable Cloudflare-allowlisted token. Verified
+  `wham/usage` against `codex-rs/backend-client/rate_limit_resets.rs`.
+- **Gemini**: existing code correct against wakamex/gemini-cli-usage + upstream
+  `oauth2.ts`; only added `refresh_stored`.
+- **Copilot**: **P0 bug — wrong endpoint.** Was hitting `/copilot_internal/v2/token`
+  (a token-exchange endpoint), never the quota source. Correct endpoint is
+  `/copilot_internal/user` (matches README + opencode-mystatus). Also fixed:
+  stale `Editor-Version`, wrong serde field (`quota_reset_date_utc` → `quota_reset_date`),
+  `parse_reset_date` rejected the real `YYYY-MM-DD` format, missing `remaining`
+  field, missing `User-Agent`. 6 bugs total.
+- **Cursor**: 2 bug fixes — `normalize` used `total_spend` as a fallback before
+  `limit-remaining` (could overstate usage with on-demand spend); added missing
+  `Accept` header.
+
+### Refresh P0 (#3) — stored OAuth accounts never refreshed
+- Symptom: stored Codex/Gemini OAuth tokens expired ~1h after add → 401 forever.
+- Fix: every provider exposes `pub(crate) async fn refresh_stored(http, cred)
+  -> Option<StoredCredential>`. `providers::fetch_credential` checks
+  `expires_at < now_ms`, dispatches to `refresh_stored`, persists via new
+  `store::update`, then proceeds with the rotated token. Cursor/Copilot/z.ai
+  return `None` (no public refresh path). Claude OAuth rotates RT; Gemini/Codex
+  reuse their CLI's public `client_id`.
+
+### Security P0 (#1) — list_accounts leaked tokens
+- Symptom: `list_accounts` IPC returned full `StoredCredential` (incl.
+  `access_token`, `refresh_token`, `id_token`) — violated "tokens never cross
+  IPC" contract.
+- Fix: new `model::AccountInfo { id, provider, label }` projection;
+  `list_accounts` returns `Vec<AccountInfo>`. Frontend type renamed
+  `StoredCredential → AccountInfo`. Secrets never leave the backend.
+
+### New provider: z.ai GLM Coding Plan (new §6.6)
+- API-key-based (paste via Add account, or `$ZAI_API_KEY` env auto-detect).
+- Endpoint `GET https://api.z.ai/api/monitor/usage/quota/limit` —
+  undocumented but used by community `quotas` crate + `vscode-zai-usage`.
+- Response `{code,success,msg,data:{level,limits[]}}`; each limit has
+  `type/rawType/unit/usage/currentValue/remaining/percentage/nextResetTime`.
+  Error codes 1308/1310 carry `next_flush_time` (used as `resets_at`).
+
+### UI/UX — full rebuild ("Mission control for AI spend")
+- Aesthetic: telemetry-inspired dark dashboard; one signal color (cyan #39D0D8)
+  over a tinted blue-black canvas (#0A0E14); Geist Sans + Geist Mono with
+  tabular-nums on every numeric.
+- Signature element: a circular ring gauge (headline usage) + a fleet-status
+  bar of provider chips. Card grid 1/2/3 responsive.
+- Motion: 320ms ring-arc fill, 1px hover lift, 2px accent focus ring; all
+  disabled under `prefers-reduced-motion`.
+- Provider-agnostic: the render layer never branches on provider identity —
+  exhaustive `Record<Provider, X>` registries are compiler-checked. Adding a
+  7th provider = union entry + SVG mark + (optional) Add-flow bucket.
+- Old components deleted: `ServiceCard`, `ServiceDetail`, `Gauge`, `StatusDot`,
+  `useUsage`. Replaced by `ProviderCard`, `ProviderDetail`, `RingGauge`,
+  `BarGauge`, `FleetBar`, `EmptyState`, `ErrorState`, `ProviderMark`,
+  `useSnapshot`.
+
+### Tests + gates
+- 50 unit tests (up from 24): every provider's refresh-stored helper, the new
+  z.ai normalization + 1308/1310 paths, Copilot's new endpoint + `YYYY-MM-DD`
+  date parsing, Cursor's clamped fallback.
+- Gates: `cargo test --lib` 50/0; `cargo clippy --lib --all-targets` 0 warnings;
+- `tsc --noEmit` 0 errors; `vite build` clean (290 KB JS / 92 KB gzip, Geist
+  fonts bundled).

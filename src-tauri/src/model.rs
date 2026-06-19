@@ -10,6 +10,7 @@ pub enum Provider {
     Gemini,
     Copilot,
     Cursor,
+    Zai,
 }
 
 impl Provider {
@@ -20,6 +21,7 @@ impl Provider {
             Provider::Gemini => "Gemini",
             Provider::Copilot => "GitHub Copilot",
             Provider::Cursor => "Cursor",
+            Provider::Zai => "z.ai",
         }
     }
 }
@@ -44,6 +46,15 @@ pub struct ServiceUsage {
     /// Modal-only windows (Spark / per-model / credits / resets / extra usage).
     /// Hidden on the card, shown when the card is opened.
     pub detail_windows: Vec<LimitWindow>,
+}
+
+/// Display-only projection of a stored credential — what `list_accounts`
+/// returns to the frontend. Never carries the access/refresh tokens (P0 #1).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AccountInfo {
+    pub id: String,
+    pub provider: Provider,
+    pub label: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

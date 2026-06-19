@@ -1,35 +1,44 @@
 import { useCallback, useEffect, useState } from "react";
+import type { UnlistenFn } from "@tauri-apps/api/event";
 
 import { getUsage, onUsageUpdated, refreshNow } from "@/lib/ipc";
-import type { UnlistenFn } from "@tauri-apps/api/event";
 import type { UsageSnapshot } from "@/lib/types";
 
-export interface UseUsageResult {
+export interface UseSnapshotResult {
   snapshot: UsageSnapshot | null;
   loading: boolean;
+  refreshing: boolean;
+  error: string | null;
   refresh: () => Promise<void>;
 }
 
-export function useUsage(): UseUsageResult {
+/**
+ * Subscribe to the live `usage-updated` push, fetch once on mount, and expose
+ * an on-demand `refresh`. `loading` is the initial cold-start state; a later
+ * `refresh()` flips `refreshing` instead so the UI can keep rendering stale
+ * data behind the spinner.
+ */
+export function useSnapshot(): UseSnapshotResult {
   const [snapshot, setSnapshot] = useState<UsageSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
 
-    // Initial fetch.
     getUsage()
       .then((s) => {
         if (!cancelled) setSnapshot(s);
       })
       .catch((err) => {
+        if (!cancelled) setError(String(err));
         console.error("get_usage failed:", err);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
 
-    // Live push subscription.
     const unlistenPromise: Promise<UnlistenFn | undefined> = onUsageUpdated(
       (s) => setSnapshot(s),
     ).catch((err) => {
@@ -46,16 +55,18 @@ export function useUsage(): UseUsageResult {
   }, []);
 
   const refresh = useCallback(async () => {
-    setLoading(true);
+    setRefreshing(true);
     try {
       const s = await refreshNow();
       setSnapshot(s);
+      setError(null);
     } catch (err) {
       console.error("refresh_now failed:", err);
+      setError(String(err));
     } finally {
-      setLoading(false);
+      setRefreshing(false);
     }
   }, []);
 
-  return { snapshot, loading, refresh };
+  return { snapshot, loading, refreshing, error, refresh };
 }

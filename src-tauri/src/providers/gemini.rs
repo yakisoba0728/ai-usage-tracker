@@ -1,8 +1,10 @@
-//! Gemini (via Gemini CLI) — token-parsing only.
+//! Gemini (via Gemini CLI) — usage fetch + OAuth refresh.
+//!
 //! Reads the OAuth token Gemini CLI stores at `~/.gemini/oauth_creds.json`,
-//! checks expiry, and calls the internal Code Assist API (`loadCodeAssist` +
-//! `retrieveUserQuota`). No OAuth of our own: the token is rotated by the
-//! Gemini CLI; on expiry we surface a hint to run `gemini`.
+//! self-refreshes it via Google OAuth on expiry (reusing the CLI's public
+//! client_id/secret; env override `GEMINI_OAUTH_CLIENT_ID`/`..._SECRET`), and
+//! calls the internal Code Assist API (`loadCodeAssist` + `retrieveUserQuota`).
+//! Stored manual accounts refresh the same way via `refresh_stored`.
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -336,6 +338,43 @@ pub(crate) async fn fetch_with(
     })
 }
 
+/// Build a refreshed `StoredCredential` from a successful token refresh.
+/// Pure: preserves `id`/`provider`/`label`/`id_token`/`account_id`, rotates
+/// `access_token`/`refresh_token`/`expires_at`. Keeps the old refresh_token
+/// when Google's response omits a fresh one (Google rotates them rarely).
+fn build_refreshed_cred(
+    cred: &crate::store::StoredCredential,
+    fresh: &Refreshed,
+    now_ms: i64,
+) -> crate::store::StoredCredential {
+    let expires_at = now_ms + (fresh.expires_in.unwrap_or(3600) as i64) * 1000;
+    crate::store::StoredCredential {
+        id: cred.id.clone(),
+        provider: cred.provider,
+        label: cred.label.clone(),
+        access_token: fresh.access_token.clone(),
+        refresh_token: fresh.refresh_token.clone().or_else(|| cred.refresh_token.clone()),
+        expires_at,
+        id_token: cred.id_token.clone(),
+        account_id: cred.account_id.clone(),
+    }
+}
+
+/// Refresh a stored credential's access_token using its refresh_token via the
+/// same Google OAuth endpoint + client metadata (env override > Gemini CLI's
+/// public constants) as the CLI-path self-refresh. Returns `Some(updated_cred)`
+/// when a refresh happened (caller persists); `None` if there is no
+/// refresh_token or the refresh failed (caller falls back to the existing token).
+pub(crate) async fn refresh_stored(
+    http: &reqwest::Client,
+    cred: &crate::store::StoredCredential,
+) -> Option<crate::store::StoredCredential> {
+    let rt = cred.refresh_token.as_ref()?;
+    let fresh = refresh_gemini_token(http, rt).await.ok()?;
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    Some(build_refreshed_cred(cred, &fresh, now_ms))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -352,5 +391,54 @@ mod tests {
         assert_eq!(pro.limit, Some(1000.0)); // 650 / 0.65
         let flash = detail.iter().find(|w| w.label == "gemini-2.5-flash-lite").unwrap();
         assert!(flash.limit.is_none());
+    }
+
+    fn sample_stored(rt: Option<&str>) -> crate::store::StoredCredential {
+        crate::store::StoredCredential {
+            id: "abc".into(),
+            provider: Provider::Gemini,
+            label: "me@example.com".into(),
+            access_token: "old-at".into(),
+            refresh_token: rt.map(str::to_string),
+            expires_at: 1,
+            id_token: Some("jwt-payload".into()),
+            account_id: None,
+        }
+    }
+
+    #[test]
+    fn build_refreshed_cred_rotates_tokens_and_preserves_fields() {
+        let cred = sample_stored(Some("old-rt"));
+        let fresh = Refreshed {
+            access_token: "new-at".into(),
+            refresh_token: Some("new-rt".into()),
+            expires_in: Some(3600),
+        };
+        let out = build_refreshed_cred(&cred, &fresh, 1_000_000);
+        // Preserved verbatim.
+        assert_eq!(out.id, "abc");
+        assert_eq!(out.provider, Provider::Gemini);
+        assert_eq!(out.label, "me@example.com");
+        assert_eq!(out.id_token.as_deref(), Some("jwt-payload"));
+        assert!(out.account_id.is_none());
+        // Rotated.
+        assert_eq!(out.access_token, "new-at");
+        assert_eq!(out.refresh_token.as_deref(), Some("new-rt"));
+        assert_eq!(out.expires_at, 1_000_000 + 3600 * 1000);
+    }
+
+    #[test]
+    fn build_refreshed_cred_keeps_old_rt_when_response_omits_one() {
+        // Google rarely rotates refresh_tokens; the response may omit it.
+        let cred = sample_stored(Some("old-rt"));
+        let fresh = Refreshed {
+            access_token: "new-at".into(),
+            refresh_token: None,
+            expires_in: None, // default 3600s fallback applies
+        };
+        let out = build_refreshed_cred(&cred, &fresh, 0);
+        assert_eq!(out.access_token, "new-at");
+        assert_eq!(out.refresh_token.as_deref(), Some("old-rt"));
+        assert_eq!(out.expires_at, 3600 * 1000);
     }
 }

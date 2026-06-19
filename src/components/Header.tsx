@@ -1,137 +1,128 @@
-import { Loader2, RefreshCw } from "lucide-react";
+import { Loader2, Plus, RefreshCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { BrandMark, PROVIDER_LABEL } from "@/components/ProviderMark";
 import { cn } from "@/lib/utils";
-import { percentBarColor, percentColor } from "@/lib/format";
+import {
+  formatClock,
+  formatUpdatedAgo,
+  percentSeverity,
+  severityBarClass,
+} from "@/lib/format";
+import type { Provider } from "@/lib/types";
 
 export interface HeaderProps {
   fetchedAt: number | null;
-  loading: boolean;
+  refreshing: boolean;
   onRefresh: () => void;
+  onAddAccount: () => void;
   nowMs: number;
   peak: number | null;
+  peakProvider: Provider | null;
   connectedCount: number;
   totalCount: number;
 }
 
-function relativeLabel(fetchedAt: number | null, nowMs: number): string {
-  if (fetchedAt == null) return "Awaiting first update…";
-  const elapsed = Math.max(0, Math.floor(nowMs / 1000) - fetchedAt);
-  if (elapsed < 5) return "Updated just now";
-  if (elapsed < 60) return `Updated ${elapsed}s ago`;
-  const mins = Math.floor(elapsed / 60);
-  const secs = elapsed % 60;
-  return `Updated ${mins}m ${secs}s ago`;
-}
-
-function formatAbsTime(epochSeconds: number): string {
-  return new Date(epochSeconds * 1000).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-}
-
 export function Header({
   fetchedAt,
-  loading,
+  refreshing,
   onRefresh,
+  onAddAccount,
   nowMs,
   peak,
+  peakProvider,
   connectedCount,
   totalCount,
 }: HeaderProps) {
-  const rel = relativeLabel(fetchedAt, nowMs);
+  const ago = formatUpdatedAgo(fetchedAt, nowMs);
 
   return (
-    <header className="sticky top-0 z-30 border-b border-white/[0.06] bg-background/80 backdrop-blur-xl">
-      <div className="mx-auto flex w-full max-w-6xl items-center justify-between gap-3 px-5 py-3.5 sm:gap-4 sm:px-6">
+    <header className="sticky top-0 z-30 border-b border-border bg-canvas/85 backdrop-blur-xl">
+      <div className="mx-auto flex h-14 w-full max-w-[1100px] items-center justify-between gap-3 px-5">
         {/* Brand */}
-        <div className="flex min-w-0 items-center gap-3">
-          <div className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-brand/10 text-brand shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05)]">
-            <svg viewBox="0 0 24 24" fill="none" className="size-[18px]">
-              <circle
-                cx="12"
-                cy="12"
-                r="8.5"
-                stroke="currentColor"
-                strokeWidth="2"
-                opacity="0.28"
-              />
-              <path
-                d="M12 3.5a8.5 8.5 0 0 1 8.5 8.5"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-              />
-              <circle cx="12" cy="12" r="2.4" fill="currentColor" />
-            </svg>
+        <div className="flex min-w-0 items-center gap-2.5">
+          <div className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-signal/30 bg-signal/10 text-signal">
+            <BrandMark className="size-[18px]" pct={64} />
           </div>
-          <div className="min-w-0">
-            <h1 className="text-[15px] font-semibold leading-tight tracking-tight">
+          <div className="min-w-0 leading-tight">
+            <h1 className="text-[15px] font-semibold tracking-tight text-text">
               AI Usage Tracker
             </h1>
-            <p className="truncate text-[11px] text-muted-foreground/70">
+            <p className="truncate text-text-faint" style={{ fontSize: 11 }}>
               {totalCount > 0
-                ? `${connectedCount}/${totalCount} services live`
-                : "No services configured"}
+                ? `${connectedCount}/${totalCount} providers live`
+                : "No providers configured"}
             </p>
           </div>
         </div>
 
-        {/* Status + actions */}
-        <div className="flex items-center gap-2 sm:gap-3">
-          {/* Peak pill — highest used_percent across connected services */}
+        {/* Cluster */}
+        <div className="flex items-center gap-2">
+          {/* Fleet status pill — peak burn + which provider */}
           {peak != null && (
-            <div className="flex items-center gap-2 rounded-full border border-white/[0.07] bg-white/[0.03] px-3 py-1.5">
+            <div
+              className="hidden items-center gap-2 rounded-full border border-border bg-surface px-2.5 py-1 sm:flex"
+              title={
+                peakProvider != null
+                  ? `Peak usage on ${PROVIDER_LABEL[peakProvider]}`
+                  : "Peak usage"
+              }
+            >
               <span
-                className={cn("size-1.5 rounded-full", percentBarColor(peak))}
+                className={cn(
+                  "size-1.5 rounded-full",
+                  severityBarClass(percentSeverity(peak)),
+                )}
               />
-              <span className="text-[11px] font-medium text-muted-foreground">
+              <span className="uppercase tracking-[0.06em] text-text-faint" style={{ fontSize: 10 }}>
                 Peak
               </span>
               <span
                 className={cn(
-                  "font-mono text-[13px] font-semibold tabular-nums",
-                  percentColor(peak),
+                  "num font-semibold",
+                  severityBarClass(percentSeverity(peak)).replace("bg-", "text-"),
                 )}
               >
                 {Math.round(peak)}%
               </span>
+              {peakProvider != null && (
+                <span className="text-text-dim" style={{ fontSize: 11 }}>
+                  {PROVIDER_LABEL[peakProvider]}
+                </span>
+              )}
             </div>
           )}
 
-          {/* Live "updated Xs ago" */}
-          <div className="flex flex-col items-end leading-tight">
-            <span
-              className="font-mono text-[11px] tabular-nums text-muted-foreground"
-              title={
-                fetchedAt != null ? `Fetched at ${formatAbsTime(fetchedAt)}` : undefined
-              }
-            >
-              {rel}
-            </span>
-            {fetchedAt != null && (
-              <span className="hidden font-mono text-[10px] tabular-nums text-muted-foreground/60 sm:block">
-                {formatAbsTime(fetchedAt)}
-              </span>
-            )}
+          {/* Live "Updated Xs ago" */}
+          <div
+            className="num hidden items-center text-text-faint md:flex"
+            style={{ fontSize: 11 }}
+            title={fetchedAt != null ? `Fetched ${formatClock(fetchedAt)}` : undefined}
+          >
+            {ago}
           </div>
 
-          {/* Refresh */}
+          {/* Refresh — outline, ghost-on-hover */}
           <Button
             variant="outline"
-            size="sm"
+            size="icon"
             onClick={onRefresh}
-            disabled={loading}
-            className="h-8 gap-1.5 border-white/10 bg-white/[0.03] px-3 text-muted-foreground hover:bg-white/[0.06] hover:text-foreground"
+            disabled={refreshing}
+            aria-label="Refresh usage"
+            title="Refresh"
+            className="border-border text-text-dim hover:border-border-strong hover:text-text"
           >
-            {loading ? (
-              <Loader2 className="size-3.5 animate-spin" />
+            {refreshing ? (
+              <Loader2 className="size-4 animate-spin text-signal" />
             ) : (
-              <RefreshCw className="size-3.5" />
+              <RefreshCw className="size-4" />
             )}
-            <span className="hidden sm:inline">Refresh</span>
+          </Button>
+
+          {/* Add account — the prominent primary add action */}
+          <Button variant="outline" size="sm" onClick={onAddAccount} className="gap-1.5">
+            <Plus className="size-4 text-signal" />
+            <span>Add account</span>
           </Button>
         </div>
       </div>

@@ -1,8 +1,9 @@
 //! Cursor (experimental) — token-parsing only. Reads the sign-in JWT Cursor
 //! stores as a raw string at `ItemTable[cursorAuth/accessToken]` in its
 //! `state.vscdb` SQLite DB, then POSTs to the Connect-RPC dashboard endpoint
-//! (exactly like the ClearMeasureLabs/cursor-usage-status extension). Money in
-//! the response is USD cents.
+//! (mirrors the ClearMeasureLabs/cursor-usage-status VS Code extension). Money
+//! in the response is USD cents. No token refresh: Cursor JWTs have no public
+//! refresh path, so `refresh_stored` always returns None.
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -80,13 +81,18 @@ fn normalize(u: &CursorUsage) -> Vec<LimitWindow> {
     let Some(p) = &u.plan_usage else {
         return vec![];
     };
+    // Fallback order mirrors ClearMeasureLabs/cursor-usage-status
+    // (src/usageModel.ts::parseDashboardPeriodUsage): includedSpend first,
+    // then limit − remaining (clamped ≥ 0), then totalSpend as last resort.
+    // totalSpend is last because it can include on-demand spend outside the
+    // included allowance, which would overstate usage toward the limit.
     let used_cents = p
         .included_spend
-        .or(p.total_spend)
-        .or(match (p.limit, p.remaining) {
-            (Some(l), Some(r)) => Some(l - r),
+        .or_else(|| match (p.limit, p.remaining) {
+            (Some(l), Some(r)) => Some((l - r).max(0.0)),
             _ => None,
-        });
+        })
+        .or(p.total_spend);
     let limit_cents = p.limit;
     let used_percent = p.total_percent_used.or_else(|| match (used_cents, limit_cents) {
         (Some(u), Some(l)) if l > 0.0 => Some(u / l * 100.0),
@@ -116,6 +122,7 @@ impl crate::providers::ProviderApi for CursorProvider {
             .http
             .post(USAGE_URL)
             .header("Authorization", format!("Bearer {token}"))
+            .header("Accept", "application/json")
             .header("Content-Type", "application/json")
             .header("Connect-Protocol-Version", "1")
             .body("{}")
@@ -137,6 +144,17 @@ impl crate::providers::ProviderApi for CursorProvider {
     }
 }
 
+/// Cursor JWTs have no public refresh path (the sign-in token is reissued only
+/// by signing in through the Cursor app itself), so refresh is a no-op. Always
+/// returns None — the caller falls back to the existing stored token.
+#[allow(clippy::unused_async)]
+pub(crate) async fn refresh_stored(
+    _: &reqwest::Client,
+    _: &crate::store::StoredCredential,
+) -> Option<crate::store::StoredCredential> {
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -149,6 +167,38 @@ mod tests {
         assert_eq!(w.used_percent, Some(15.48));
         assert_eq!(w.used, Some(232.22)); // 23222 cents -> $232.22
         assert_eq!(w.limit, Some(400.0)); // 40000 cents -> $400.00
+    }
+
+    #[test]
+    fn normalize_falls_back_to_limit_minus_remaining() {
+        // No includedSpend/totalSpend: used must be derived as limit − remaining,
+        // matching parseDashboardPeriodUsage in cursor-usage-status.
+        let u = CursorUsage {
+            enabled: Some(true),
+            plan_usage: Some(PlanUsage {
+                limit: Some(40000.0),
+                remaining: Some(10000.0),
+                ..Default::default()
+            }),
+        };
+        let w = &normalize(&u)[0];
+        assert_eq!(w.used, Some(300.0)); // (40000 − 10000) cents -> $300.00
+        assert_eq!(w.limit, Some(400.0));
+    }
+
+    #[test]
+    fn normalize_clamps_negative_remaining_to_zero() {
+        // remaining > limit must not produce a negative `used`.
+        let u = CursorUsage {
+            enabled: Some(true),
+            plan_usage: Some(PlanUsage {
+                limit: Some(10000.0),
+                remaining: Some(30000.0),
+                ..Default::default()
+            }),
+        };
+        let w = &normalize(&u)[0];
+        assert_eq!(w.used, Some(0.0));
     }
 
     #[test]

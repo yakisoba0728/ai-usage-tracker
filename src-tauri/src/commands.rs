@@ -25,9 +25,9 @@ pub fn default_config_store() -> ConfigStore {
 
 pub fn build_providers(cfg: &AppConfig) -> Vec<Box<dyn ProviderApi>> {
     let mut v: Vec<Box<dyn ProviderApi>> = Vec::new();
-    // Order MUST match [Claude, Codex, Gemini, Copilot, Cursor]. Local parsing
-    // (keychain / credential files) stays for ALL providers; Claude additionally
-    // supports a pasted session key via "Add account".
+    // Order MUST match [Claude, Codex, Gemini, Copilot, Cursor, z.ai]. Local
+    // parsing (keychain / credential files / env) stays for ALL providers;
+    // Claude additionally supports a pasted session key via "Add account".
     if cfg.enabled[0] {
         v.push(Box::new(crate::providers::claude::ClaudeProvider::new()));
     }
@@ -42,6 +42,9 @@ pub fn build_providers(cfg: &AppConfig) -> Vec<Box<dyn ProviderApi>> {
     }
     if cfg.enabled[4] {
         v.push(Box::new(crate::providers::cursor::CursorProvider::new()));
+    }
+    if cfg.enabled[5] {
+        v.push(Box::new(crate::providers::zai::ZaiProvider::new()));
     }
     v
 }
@@ -109,9 +112,13 @@ pub async fn start_login(app: AppHandle, provider: crate::model::Provider) -> Re
     crate::login::start(app, provider).await
 }
 
+/// Display-only list of stored accounts — tokens never cross IPC (P0 #1).
 #[tauri::command]
-pub async fn list_accounts() -> Result<Vec<crate::store::StoredCredential>, String> {
-    Ok(crate::store::list())
+pub async fn list_accounts() -> Result<Vec<crate::model::AccountInfo>, String> {
+    Ok(crate::store::list()
+        .into_iter()
+        .map(|c| crate::model::AccountInfo { id: c.id, provider: c.provider, label: c.label })
+        .collect())
 }
 
 #[tauri::command]

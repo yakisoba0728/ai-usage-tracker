@@ -1,0 +1,23 @@
+[
+  {
+    "uuid": "11111111-2222-3333-4444-555555555555",
+    "name": "Personal",
+    "rate_limit_tier": "default_claude_max_20x",
+    "raven_type": "normal",
+    "memberships": [
+      {
+        "uuid": "mmmmmmm-nnnn-oooo-pppp-qqqqqqqqqqqq",
+        "role": "admin",
+        "account": {
+          "uuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+          "email_address": "user@example.com",
+          "name": "User Name"
+        },
+        "created_at": "2025-01-01T00:00:00.000000Z",
+        "updated_at": "2025-01-01T00:00:00.000000Z"
+      }
+    ],
+    "created_at": "2025-01-01T00:00:00.000000Z",
+    "updated_at": "2025-01-01T00:00:00.000000Z"
+  }
+]

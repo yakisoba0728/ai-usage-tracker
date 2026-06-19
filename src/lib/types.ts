@@ -1,4 +1,15 @@
-export type Provider = "claude" | "codex" | "gemini" | "copilot" | "cursor";
+/**
+ * Data model — mirrors the Rust IPC contract EXACTLY. Do not diverge; the
+ * backend serializes into these shapes. A new provider is added to the
+ * `Provider` union and gets the full UI for free (no per-provider code).
+ */
+export type Provider =
+  | "claude"
+  | "codex"
+  | "gemini"
+  | "copilot"
+  | "cursor"
+  | "zai";
 
 export interface LimitWindow {
   label: string;
@@ -14,32 +25,36 @@ export interface ServiceUsage {
   plan: string | null;
   account: string | null;
   error: string | null;
-  /** PRIMARY windows — shown on the card as the headline usage. */
+  /** PRIMARY windows — shown on the card (headline ring + secondary bars). */
   windows: LimitWindow[];
   /** MODAL-ONLY windows — hidden on the card, shown in the detail modal. */
   detail_windows: LimitWindow[];
 }
 
 export interface UsageSnapshot {
-  // epoch seconds
+  /** epoch seconds */
   fetched_at: number;
   services: ServiceUsage[];
 }
 
+/**
+ * 6 enabled slots, one per provider in PROVIDER_ORDER. Adding a 7th provider
+ * means appending to PROVIDER_ORDER here AND the Rust AppConfig (the
+ * orchestrator owns the Rust side).
+ */
 export interface AppConfig {
   poll_seconds: number;
-  enabled: [boolean, boolean, boolean, boolean, boolean];
+  enabled: [boolean, boolean, boolean, boolean, boolean, boolean];
 }
 
-export interface StoredCredential {
+/**
+ * Display-only projection of a stored credential. The Rust `list_accounts`
+ * command masks to this shape — access/refresh tokens never cross IPC (P0 #1).
+ */
+export interface AccountInfo {
   id: string;
   provider: Provider;
   label: string;
-  access_token: string;
-  refresh_token: string | null;
-  expires_at: number;
-  id_token: string | null;
-  account_id: string | null;
 }
 
 export interface LoginInfo {

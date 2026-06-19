@@ -4,7 +4,13 @@
 //! checks expiry, then calls `api.anthropic.com/api/oauth/usage` + `/profile`.
 //! Surfaces every rolling window (five_hour, seven_day + per-model + cowork +
 //! omelette) and `extra_usage`, and derives a human plan label like "Max 20x"
-//! from `rateLimitTier`. Token-parsing only.
+//! from `rateLimitTier`.
+//!
+//! Refresh: self-refreshes the OAuth token (the usage-API 429 is per access
+//! token, see anthropics/claude-code#31021) against console.anthropic.com with
+//! a platform.claude.com fallback, and exposes `refresh_stored` for stored
+//! OAuth accounts. Session-key accounts (`fetch_with_session_key`) carry no
+//! refresh_token, so `refresh_stored` returns None for them.
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -213,8 +219,13 @@ fn normalize(raw: &UsageResponse) -> (Vec<LimitWindow>, Vec<LimitWindow>) {
     (ws, detail)
 }
 
-const CLAUDE_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+const CLAUDE_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5942d1962f5e";
 const CLAUDE_TOKEN_URL: &str = "https://console.anthropic.com/v1/oauth/token";
+// Newer Claude Code builds are migrating to platform.claude.com; console is
+// still authoritative today (verified via anthropics/claude-code#31021 + the
+// cedws/3a24b2c gist). Try console first, fall back to platform on a hard
+// failure so a future endpoint cutover doesn't strand stored accounts.
+const CLAUDE_TOKEN_URL_FALLBACK: &str = "https://platform.claude.com/v1/oauth/token";
 
 #[derive(serde::Deserialize)]
 struct Refreshed {
@@ -223,20 +234,26 @@ struct Refreshed {
     #[serde(default)] expires_in: Option<u64>,
 }
 
-/// Refresh the OAuth token using the public Claude Code client_id. The 429 on
-/// the usage API is per-access-token (see anthropics/claude-code#31021), so a
-/// fresh token reopens the rate-limit window. Refresh tokens rotate — we write
-/// the new pair back so the CLI and app stay in sync.
-async fn refresh_oauth(http: &reqwest::Client, rt: &str) -> Result<Refreshed, ProviderError> {
-    let body = serde_json::json!({
+/// Body for the OAuth `refresh_token` grant, built from the public Claude Code
+/// client_id (pure / unit-tested). Refresh tokens rotate on success, so every
+/// caller MUST persist the returned access+refresh pair.
+fn refresh_request_body(rt: &str) -> serde_json::Value {
+    serde_json::json!({
         "grant_type": "refresh_token",
         "refresh_token": rt,
         "client_id": CLAUDE_CLIENT_ID,
-    });
+    })
+}
+
+async fn post_refresh(
+    http: &reqwest::Client,
+    url: &str,
+    body: &serde_json::Value,
+) -> Result<Refreshed, ProviderError> {
     let resp = http
-        .post(CLAUDE_TOKEN_URL)
+        .post(url)
         .header("Content-Type", "application/json")
-        .json(&body)
+        .json(body)
         .send()
         .await
         .map_err(|e| ProviderError::Network(e.to_string()))?;
@@ -248,7 +265,73 @@ async fn refresh_oauth(http: &reqwest::Client, rt: &str) -> Result<Refreshed, Pr
             body: text.chars().take(200).collect(),
         });
     }
-    serde_json::from_str::<Refreshed>(&text).map_err(|e| ProviderError::Parse(format!("refresh: {e}")))
+    serde_json::from_str::<Refreshed>(&text)
+        .map_err(|e| ProviderError::Parse(format!("refresh: {e}")))
+}
+
+/// Refresh the OAuth token using the public Claude Code client_id. The usage-API
+/// 429 is per access token (see anthropics/claude-code#31021), so a fresh token
+/// reopens the rate-limit window. Refresh tokens rotate — callers write the new
+/// pair back so the CLI and app stay in sync. Tries console.anthropic.com first,
+/// then platform.claude.com on a hard (network / non-2xx) failure.
+async fn refresh_oauth(http: &reqwest::Client, rt: &str) -> Result<Refreshed, ProviderError> {
+    let body = refresh_request_body(rt);
+    match post_refresh(http, CLAUDE_TOKEN_URL, &body).await {
+        Ok(r) => Ok(r),
+        Err(e) => {
+            // Retry ONLY when console could not have refreshed (network error
+            // or non-2xx). A 2xx parse error is excluded on purpose: a
+            // successful-looking response may already have rotated the
+            // refresh_token server-side, and reusing it on the fallback would
+            // burn the (single-use) token.
+            let retry = matches!(e, ProviderError::Network(_) | ProviderError::Status { .. });
+            if retry {
+                if let Ok(r) = post_refresh(http, CLAUDE_TOKEN_URL_FALLBACK, &body).await {
+                    return Ok(r);
+                }
+            }
+            Err(e)
+        }
+    }
+}
+
+/// Pure core of `refresh_stored`: stamp a stored credential with the rotated
+/// tokens. `now_ms` is injected so the expiry math is deterministic under test.
+/// Unchanged fields (`id`/`provider`/`label`/`id_token`/`account_id`) are
+/// preserved; `expires_at` is 0 when the server omits `expires_in`.
+fn apply_refresh(
+    cred: &crate::store::StoredCredential,
+    fresh: Refreshed,
+    now_ms: i64,
+) -> crate::store::StoredCredential {
+    let expires_at = fresh.expires_in.map(|s| now_ms + (s as i64) * 1000).unwrap_or(0);
+    crate::store::StoredCredential {
+        id: cred.id.clone(),
+        provider: cred.provider,
+        label: cred.label.clone(),
+        access_token: fresh.access_token,
+        refresh_token: Some(fresh.refresh_token),
+        expires_at,
+        id_token: cred.id_token.clone(),
+        account_id: cred.account_id.clone(),
+    }
+}
+
+/// Refresh a stored credential's access_token using its refresh_token.
+/// Returns Some(updated_cred) if a refresh happened (the caller persists it);
+/// None when it does not apply — no refresh_token (session-key / API-key
+/// accounts) or the refresh failed (caller falls back to the existing token).
+pub(crate) async fn refresh_stored(
+    http: &reqwest::Client,
+    cred: &crate::store::StoredCredential,
+) -> Option<crate::store::StoredCredential> {
+    let rt = cred.refresh_token.as_deref()?;
+    let fresh = refresh_oauth(http, rt).await.ok()?;
+    Some(apply_refresh(
+        cred,
+        fresh,
+        chrono::Utc::now().timestamp_millis(),
+    ))
 }
 
 fn write_back(
@@ -275,7 +358,15 @@ fn write_back(
 fn write_creds(s: &str) -> Result<(), ProviderError> {
     #[cfg(target_os = "macos")]
     {
-        let acct = std::env::var("USER").unwrap_or_default();
+        // Match the account of the EXISTING entry so `add-generic-password -U`
+        // updates it in place. Claude Code writes under the OS username
+        // (verified live: acct == $USER), but if a pre-existing entry lives
+        // under a different account (shared machine, renamed user), blindly
+        // using $USER would fork into a duplicate that `secrets::read_macos_keychain`
+        // (which reads any account) might not surface. Fall back to $USER on
+        // first write when no entry exists yet.
+        let acct =
+            existing_keychain_account().unwrap_or_else(|| std::env::var("USER").unwrap_or_default());
         let out = std::process::Command::new("/usr/bin/security")
             .args(["add-generic-password", "-s", "Claude Code-credentials", "-a", &acct, "-w", s, "-U"])
             .output()
@@ -294,6 +385,31 @@ fn write_creds(s: &str) -> Result<(), ProviderError> {
         std::fs::write(&p, s).map_err(|e| ProviderError::Network(format!("write {}: {e}", p.display())))?;
         Ok(())
     }
+}
+
+/// Best-effort `acct` attribute of the existing `Claude Code-credentials`
+/// keychain item — i.e. the exact entry `secrets::read_macos_keychain` reads.
+/// None if there is no item or `security` can't run (caller falls back to $USER).
+#[cfg(target_os = "macos")]
+fn existing_keychain_account() -> Option<String> {
+    let out = std::process::Command::new("/usr/bin/security")
+        .args(["find-generic-password", "-s", "Claude Code-credentials"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    // `security find-generic-password -s X` (no -w/-g) prints attributes
+    // without prompting; the account line looks like:  "acct"<blob>="yakisoba"
+    let text = String::from_utf8_lossy(&out.stdout);
+    text.lines().find_map(|l| {
+        let l = l.trim();
+        let after = l.strip_prefix("\"acct\"<blob>=\"")?;
+        after
+            .strip_suffix('"')
+            .map(str::to_string)
+            .filter(|s| !s.is_empty())
+    })
 }
 
 #[async_trait]
@@ -391,10 +507,25 @@ pub(crate) async fn fetch_with(
 
 /// Fetch Claude usage via the claude.ai web API using a `sessionKey` cookie
 /// (manually-added session-key account). No OAuth / CLI involved.
+///
+/// Shape verified against the live `/api/organizations` response: each org
+/// carries `rate_limit_tier` directly and `memberships[].account.email_address`
+/// inline, so no separate `/account` round-trip is needed (the shape that call
+/// used to assume was wrong and always degraded to no email / no tier).
 #[derive(Deserialize)]
 struct WebOrg {
     uuid: String, // the identifier the usage endpoint expects
     #[serde(default)] name: Option<String>,
+    #[serde(default)] rate_limit_tier: Option<String>,
+    #[serde(default)] memberships: Vec<WebMembership>,
+}
+#[derive(Deserialize)]
+struct WebMembership {
+    #[serde(default)] account: Option<WebMemberAccount>,
+}
+#[derive(Deserialize)]
+struct WebMemberAccount {
+    #[serde(default, rename = "email_address")] email_address: Option<String>,
 }
 #[derive(Deserialize)]
 struct WebWindow {
@@ -408,21 +539,6 @@ struct WebUsage {
     #[serde(default)] seven_day: Option<WebWindow>,
     #[serde(default)] seven_day_sonnet: Option<WebWindow>,
     #[serde(default)] seven_day_opus: Option<WebWindow>,
-}
-
-#[derive(Deserialize)]
-struct WebAccount {
-    #[serde(default, rename = "email_address")] email_address: Option<String>,
-    #[serde(default)] memberships: Vec<WebMembership>,
-}
-#[derive(Deserialize)]
-struct WebMembership {
-    #[serde(default)] organization: Option<WebMemberOrg>,
-}
-#[derive(Deserialize)]
-struct WebMemberOrg {
-    #[serde(default)] uuid: Option<String>,
-    #[serde(default)] rate_limit_tier: Option<String>,
 }
 
 pub(crate) async fn fetch_with_session_key(
@@ -457,32 +573,12 @@ pub(crate) async fn fetch_with_session_key(
     let u: WebUsage =
         serde_json::from_value(v).map_err(|e| ProviderError::Parse(format!("usage: {e}")))?;
 
-    // Best-effort: enrich with email + plan tier so the card matches the
-    // locally-parsed Claude card (plan badge + account line).
-    let (email, tier) = match http
-        .get(format!("https://claude.ai/api/organizations/{}/account", org.uuid))
-        .header("Cookie", &cookie)
-        .header("Accept", "application/json")
-        .send()
-        .await
-    {
-        Ok(r) => crate::http::send_for_json(r, "claude.ai/account")
-            .await
-            .ok()
-            .and_then(|v| serde_json::from_value::<WebAccount>(v).ok())
-            .map(|a| {
-                let tier = a
-                    .memberships
-                    .iter()
-                    .filter_map(|m| m.organization.as_ref())
-                    .find(|o| o.uuid.as_deref() == Some(org.uuid.as_str()))
-                    .or_else(|| a.memberships.iter().filter_map(|m| m.organization.as_ref()).next())
-                    .and_then(|o| o.rate_limit_tier.clone());
-                (a.email_address, tier)
-            })
-            .unwrap_or((None, None)),
-        Err(_) => (None, None),
-    };
+    // Email + plan tier come straight off the org object we already fetched.
+    let email = org
+        .memberships
+        .iter()
+        .find_map(|m| m.account.as_ref())
+        .and_then(|a| a.email_address.clone());
 
     let win = |label: &str, w: &Option<WebWindow>| -> Option<LimitWindow> {
         w.as_ref().map(|w| LimitWindow {
@@ -510,7 +606,7 @@ pub(crate) async fn fetch_with_session_key(
     Ok(ServiceUsage {
         provider: Provider::Claude,
         connected: true,
-        plan: format_plan(&tier, &None).or(org.name),
+        plan: format_plan(&org.rate_limit_tier, &None).or(org.name),
         account: email,
         error: None,
         windows,
@@ -570,5 +666,97 @@ mod tests {
         let r2 = resolve_creds(flat).unwrap();
         assert_eq!(r2.access_token, "b");
         assert!(r2.rate_limit_tier.is_none());
+    }
+    #[test]
+    fn refresh_request_body_shape() {
+        let b = refresh_request_body("rt-123");
+        assert_eq!(b["grant_type"], "refresh_token");
+        assert_eq!(b["refresh_token"], "rt-123");
+        assert_eq!(b["client_id"], CLAUDE_CLIENT_ID);
+        assert_eq!(b.as_object().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn apply_refresh_copies_and_rotates() {
+        let cred = crate::store::StoredCredential {
+            id: "id1".into(),
+            provider: crate::model::Provider::Claude,
+            label: "user@example.com".into(),
+            access_token: "old-access".into(),
+            refresh_token: Some("old-refresh".into()),
+            expires_at: 1000,
+            id_token: Some("idt".into()),
+            account_id: Some("acct".into()),
+        };
+        let fresh = Refreshed {
+            access_token: "new-access".into(),
+            refresh_token: "new-refresh".into(),
+            expires_in: Some(28800),
+        };
+        let out = apply_refresh(&cred, fresh, 1_000_000);
+        // rotated
+        assert_eq!(out.access_token, "new-access");
+        assert_eq!(out.refresh_token.as_deref(), Some("new-refresh"));
+        assert_eq!(out.expires_at, 1_000_000 + 28800 * 1000);
+        // preserved
+        assert_eq!(out.id, "id1");
+        assert_eq!(out.provider, crate::model::Provider::Claude);
+        assert_eq!(out.label, "user@example.com");
+        assert_eq!(out.id_token.as_deref(), Some("idt"));
+        assert_eq!(out.account_id.as_deref(), Some("acct"));
+    }
+
+    #[test]
+    fn apply_refresh_unknown_expiry_when_missing() {
+        let cred = crate::store::StoredCredential {
+            id: "id1".into(),
+            provider: crate::model::Provider::Claude,
+            label: "x".into(),
+            access_token: "old".into(),
+            refresh_token: Some("r".into()),
+            expires_at: 0,
+            id_token: None,
+            account_id: None,
+        };
+        let fresh = Refreshed {
+            access_token: "a".into(),
+            refresh_token: "r2".into(),
+            expires_in: None,
+        };
+        let out = apply_refresh(&cred, fresh, 5_000_000);
+        assert_eq!(out.expires_at, 0);
+    }
+
+    #[tokio::test]
+    async fn refresh_stored_none_without_refresh_token() {
+        // Session-key / API-key accounts have no refresh_token → None, no network.
+        let cred = crate::store::StoredCredential {
+            id: "id".into(),
+            provider: crate::model::Provider::Claude,
+            label: "x".into(),
+            access_token: "a".into(),
+            refresh_token: None,
+            expires_at: 0,
+            id_token: None,
+            account_id: None,
+        };
+        let http = crate::http::build_client();
+        assert!(refresh_stored(&http, &cred).await.is_none());
+    }
+
+    #[test]
+    fn web_orgs_parse_tier_and_email() {
+        let v: serde_json::Value =
+            serde_json::from_str(include_str!("../../tests/claude_web_orgs.json")).unwrap();
+        let orgs: Vec<WebOrg> = serde_json::from_value(v).unwrap();
+        let org = orgs.into_iter().next().unwrap();
+        assert_eq!(org.uuid, "11111111-2222-3333-4444-555555555555");
+        assert_eq!(org.rate_limit_tier.as_deref(), Some("default_claude_max_20x"));
+        let email = org
+            .memberships
+            .iter()
+            .find_map(|m| m.account.as_ref())
+            .and_then(|a| a.email_address.clone());
+        assert_eq!(email.as_deref(), Some("user@example.com"));
     }
 }

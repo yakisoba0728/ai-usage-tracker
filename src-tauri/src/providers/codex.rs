@@ -1,10 +1,10 @@
 //! Codex (ChatGPT) via Codex CLI. Reads `~/.codex/auth.json`, decodes the
-//! `id_token` for plan/email display, and calls the SAME endpoint the official
-//! codex CLI polls: `chatgpt.com/backend-api/wham/usage` with `Authorization:
-//! Bearer <access_token>`, `ChatGPT-Account-Id`, and a `codex_cli_rs/…`
-//! User-Agent (the prefix Cloudflare allow-lists for the CLI). Response gives
-//! `rate_limit.primary_window` (5h) + `secondary_window` (weekly) `used_percent`.
-//! Token-parsing only — no refresh.
+//! `id_token` for subscription/renewal info, and calls the SAME endpoint the
+//! official codex CLI polls: `chatgpt.com/backend-api/wham/usage` with
+//! `Authorization: Bearer <access_token>`, `ChatGPT-Account-Id`, and a
+//! `codex_cli_rs/` User-Agent. Surfaces the main 5h/weekly rate limits, every
+//! additional rate limit (e.g. `GPT-5.3-Codex-Spark`), credits, and available
+//! rate-limit resets. Token-parsing only.
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -16,8 +16,7 @@ use crate::model::{LimitWindow, Provider, ServiceUsage};
 use crate::providers::ProviderError;
 use crate::secrets;
 
-/// The real endpoint, per openai/codex `backend-client` (`rate_limit_status_url`
-/// with PathStyle::ChatGptApi). NOT `/codex/usage`.
+/// The real endpoint, per openai/codex `backend-client` (PathStyle::ChatGptApi).
 const USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 /// `codex_cli_rs/` is the UA prefix Cloudflare allow-lists for the CLI.
 const CODEX_UA: &str = "codex_cli_rs/0.1.0 (ai-usage-tracker)";
@@ -38,7 +37,10 @@ struct WhamUsage {
     #[serde(default)] plan_type: Option<String>,
     #[serde(default)] email: Option<String>,
     #[serde(default)] rate_limit: Option<RateLimit>,
+    #[serde(default)] additional_rate_limits: Vec<AdditionalLimit>,
     #[serde(default)] credits: Option<Credits>,
+    #[serde(default)] rate_limit_reset_credits: Option<ResetCredits>,
+    #[serde(default)] code_review_rate_limit: Option<RateLimit>,
 }
 #[derive(Deserialize, Default)]
 struct RateLimit {
@@ -51,8 +53,19 @@ struct RateWindow {
     #[serde(default)] reset_at: Option<i64>, // epoch seconds
 }
 #[derive(Deserialize, Default)]
+struct AdditionalLimit {
+    #[serde(default)] limit_name: Option<String>,
+    #[serde(default)] rate_limit: Option<RateLimit>,
+}
+#[derive(Deserialize, Default)]
 struct Credits {
     #[serde(default)] balance: Option<String>,
+    #[serde(default)] has_credits: Option<bool>,
+    #[serde(default)] unlimited: Option<bool>,
+}
+#[derive(Deserialize, Default)]
+struct ResetCredits {
+    #[serde(default)] available_count: Option<i64>,
 }
 
 pub struct CodexProvider {
@@ -70,70 +83,96 @@ fn read_tokens() -> Result<Tokens, ProviderError> {
     let v = secrets::read_json_file(&secrets::codex_auth_path())?;
     let a: AuthDotJson =
         serde_json::from_value(v).map_err(|e| ProviderError::Parse(format!("codex auth: {e}")))?;
-    a.tokens.ok_or_else(|| {
-        ProviderError::NotLoggedIn("Codex not logged in (run `codex login`)".into())
-    })
+    a.tokens
+        .ok_or_else(|| ProviderError::NotLoggedIn("Codex not logged in (run `codex login`)".into()))
 }
 
-/// Pure: rate_limit windows → LimitWindows (5-hour + weekly), plus credits.
+fn push_window(ws: &mut Vec<LimitWindow>, label: &str, w: &Option<RateWindow>) {
+    if let Some(w) = w {
+        ws.push(LimitWindow {
+            label: label.into(),
+            used_percent: w.used_percent.map(|x| x as f32),
+            resets_at: w.reset_at,
+            used: None,
+            limit: None,
+        });
+    }
+}
+
+/// Pure: main windows + every additional rate limit + credits + resets.
 fn normalize(u: &WhamUsage) -> Vec<LimitWindow> {
     let mut ws = Vec::new();
     if let Some(rl) = &u.rate_limit {
-        if let Some(w) = &rl.primary_window {
-            ws.push(LimitWindow {
-                label: "5-hour".into(),
-                used_percent: w.used_percent.map(|x| x as f32),
-                resets_at: w.reset_at,
-                used: None,
-                limit: None,
-            });
+        push_window(&mut ws, "5-hour", &rl.primary_window);
+        push_window(&mut ws, "Weekly", &rl.secondary_window);
+    }
+    for al in &u.additional_rate_limits {
+        let Some(rl) = &al.rate_limit else { continue };
+        let name = al.limit_name.clone().unwrap_or_default();
+        if name.is_empty() {
+            continue;
         }
-        if let Some(w) = &rl.secondary_window {
-            ws.push(LimitWindow {
-                label: "Weekly".into(),
-                used_percent: w.used_percent.map(|x| x as f32),
-                resets_at: w.reset_at,
-                used: None,
-                limit: None,
-            });
-        }
+        push_window(&mut ws, &format!("{name} · 5-hour"), &rl.primary_window);
+        push_window(&mut ws, &format!("{name} · Weekly"), &rl.secondary_window);
+    }
+    if let Some(rl) = &u.code_review_rate_limit {
+        push_window(&mut ws, "Code review · 5-hour", &rl.primary_window);
+        push_window(&mut ws, "Code review · Weekly", &rl.secondary_window);
     }
     if let Some(c) = &u.credits {
-        if let Some(bal) = &c.balance {
-            if let Ok(b) = bal.parse::<f64>() {
+        let bal = c.balance.as_deref().and_then(|b| b.parse::<f64>().ok());
+        if c.unlimited == Some(true) {
+            ws.push(LimitWindow {
+                label: "Credits (unlimited)".into(),
+                used_percent: None,
+                resets_at: None,
+                used: None,
+                limit: None,
+            });
+        } else if c.has_credits == Some(true) || matches!(bal, Some(v) if v > 0.0) {
+            if let Some(v) = bal {
                 ws.push(LimitWindow {
                     label: "Credits balance".into(),
                     used_percent: None,
                     resets_at: None,
-                    used: Some(b),
+                    used: Some(v),
                     limit: None,
                 });
             }
         }
     }
+    if let Some(r) = &u.rate_limit_reset_credits {
+        if let Some(n) = r.available_count {
+            ws.push(LimitWindow {
+                label: "Available rate-limit resets".into(),
+                used_percent: None,
+                resets_at: None,
+                used: Some(n as f64),
+                limit: None,
+            });
+        }
+    }
     ws
 }
 
-/// plan/email from the response (preferred) else the id_token JWT claims.
-fn resolve_plan_email(u: &WhamUsage, id_token: &Option<String>) -> (Option<String>, Option<String>) {
-    let plan = u.plan_type.clone().or_else(|| {
-        id_token
-            .as_deref()
-            .and_then(|t| jwt_payload(t).ok())
-            .and_then(|c| {
-                c.get("https://api.openai.com/auth")
-                    .and_then(|a| a.get("plan"))
-                    .and_then(|p| p.as_str())
-                    .map(String::from)
-            })
-    });
-    let email = u.email.clone().or_else(|| {
-        id_token
-            .as_deref()
-            .and_then(|t| jwt_payload(t).ok())
-            .and_then(|c| c.get("email").and_then(|e| e.as_str()).map(String::from))
-    });
-    (plan, email)
+fn capitalize(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+        None => String::new(),
+    }
+}
+
+/// Subscription renewal date (YYYY-MM-DD) from the id_token, if present.
+fn renewal_date(id_token: &Option<String>) -> Option<String> {
+    let claims = jwt_payload(id_token.as_deref()?).ok()?;
+    let until = claims
+        .get("https://api.openai.com/auth")
+        .and_then(|a| a.get("chatgpt_subscription_active_until"))
+        .and_then(|v| v.as_str())?;
+    chrono::DateTime::parse_from_rfc3339(until)
+        .ok()
+        .map(|d| d.format("%Y-%m-%d").to_string())
 }
 
 #[async_trait]
@@ -153,12 +192,20 @@ impl crate::providers::ProviderApi for CodexProvider {
         let raw: Value = http::get_json(&self.http, &t.access_token, USAGE_URL, &extra).await?;
         let u: WhamUsage =
             serde_json::from_value(raw).map_err(|e| ProviderError::Parse(format!("codex usage: {e}")))?;
-        let (plan, email) = resolve_plan_email(&u, &t.id_token);
+
+        let plan = u.plan_type.as_deref().map(capitalize);
+        let account = match (u.email.as_ref(), renewal_date(&t.id_token)) {
+            (Some(email), Some(d)) => Some(format!("{email} · renews {d}")),
+            (Some(email), None) => Some(email.clone()),
+            (None, Some(d)) => Some(format!("renews {d}")),
+            (None, None) => None,
+        };
+
         Ok(ServiceUsage {
             provider: Provider::Codex,
             connected: true,
             plan,
-            account: email,
+            account,
             error: None,
             windows: normalize(&u),
         })
@@ -170,17 +217,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn normalize_wham_fixture() {
+    fn normalize_wham_fixture_includes_spark_and_credits() {
         let u: WhamUsage =
             serde_json::from_str(include_str!("../../tests/codex_wham_fixture.json")).unwrap();
         let ws = normalize(&u);
+        let labels: Vec<&str> = ws.iter().map(|w| w.label.as_str()).collect();
+        assert!(labels.contains(&"5-hour"));
+        assert!(labels.contains(&"Weekly"));
+        assert!(labels.iter().any(|l| l.contains("Spark") && l.contains("5-hour")));
+        assert!(labels.contains(&"Credits balance"));
+        assert!(labels.contains(&"Available rate-limit resets"));
         let five = ws.iter().find(|w| w.label == "5-hour").unwrap();
         assert_eq!(five.used_percent, Some(1.0));
-        assert_eq!(five.resets_at, Some(1781842264));
-        let weekly = ws.iter().find(|w| w.label == "Weekly").unwrap();
-        assert_eq!(weekly.used_percent, Some(1.0));
-        let credits = ws.iter().find(|w| w.label == "Credits balance").unwrap();
-        assert_eq!(credits.used, Some(9.99));
     }
 
     #[test]

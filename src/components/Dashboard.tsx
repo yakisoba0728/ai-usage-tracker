@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 
 import { Header } from "@/components/Header";
@@ -5,14 +6,24 @@ import { ServiceCard } from "@/components/ServiceCard";
 import { AddAccountDialog } from "@/components/AddAccountDialog";
 import { useNow } from "@/hooks/useNow";
 import { useUsage } from "@/hooks/useUsage";
+import { loginOptions } from "@/lib/ipc";
+import type { Provider } from "@/lib/types";
 
 export function Dashboard() {
   const { snapshot, loading, refresh } = useUsage();
   const nowMs = useNow(1000);
+  const [loginable, setLoginable] = useState<Provider[]>([]);
 
-  // Only show cards for providers we could actually parse/connect. Offline
-  // providers (no token) are hidden — add them via "Add account" instead.
-  const services = (snapshot?.services ?? []).filter((s) => s.connected);
+  useEffect(() => {
+    loginOptions().then(setLoginable).catch(() => undefined);
+  }, []);
+
+  // Show a card if the provider connected OR can be logged in from the app
+  // (so an expired/missing token — e.g. Claude — stays visible + re-authable,
+  // while providers with no login path stay hidden).
+  const services = (snapshot?.services ?? []).filter(
+    (s) => s.connected || loginable.includes(s.provider),
+  );
   const connectedCount = services.filter((s) => s.connected).length;
 
   // Highest used_percent across every window of every connected service

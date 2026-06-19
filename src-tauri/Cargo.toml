@@ -27,3 +27,4 @@ base64 = "0.22"
 futures = "0.3"
 rusqlite = { version = "0.32", features = ["bundled"] }
 tracing = "0.1"
+portable-pty = "0.9.0"

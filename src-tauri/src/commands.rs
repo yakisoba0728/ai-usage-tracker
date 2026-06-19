@@ -116,3 +116,21 @@ pub async fn list_accounts() -> Result<Vec<crate::store::StoredCredential>, Stri
 pub async fn remove_account(id: String) -> Result<bool, String> {
     Ok(crate::store::remove(&id))
 }
+
+/// CLI-driven OAuth login (codexbar style): drive the provider's CLI `/login`
+/// in a PTY. Emits `cli-login-url` (frontend opens browser) + `login-complete`.
+#[tauri::command]
+pub async fn login_via_cli(app: AppHandle, provider: crate::model::Provider) -> Result<(), String> {
+    crate::cli_login::start(app, provider);
+    Ok(())
+}
+
+/// Providers that can be logged in from the app (CLI-PTY or device-code).
+#[tauri::command]
+pub fn login_options() -> Vec<crate::model::Provider> {
+    use crate::model::Provider;
+    [Provider::Claude, Provider::Codex, Provider::Gemini, Provider::Copilot]
+        .into_iter()
+        .filter(|p| crate::cli_login::supports_cli_login(*p) || crate::login::supports_login(*p))
+        .collect()
+}

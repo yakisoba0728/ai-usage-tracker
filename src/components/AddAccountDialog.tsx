@@ -12,13 +12,18 @@ import {
 } from "@/components/ui/dialog";
 import {
   listAccounts,
+  loginViaCli,
+  onCliLoginUrl,
   onLoginComplete,
   removeAccount,
   startLogin,
 } from "@/lib/ipc";
 import type { LoginInfo, Provider, StoredCredential } from "@/lib/types";
 
+/** Providers offered in the dialog. Claude uses CLI-driven login; the rest use
+ * device-code. */
 const SUPPORTED: { p: Provider; name: string }[] = [
+  { p: "claude", name: "Claude" },
   { p: "codex", name: "Codex" },
   { p: "gemini", name: "Gemini" },
   { p: "copilot", name: "GitHub Copilot" },
@@ -51,7 +56,21 @@ export function AddAccountDialog({ onChanged }: { onChanged: () => void }) {
     if (open) load();
   }, [open]);
 
-  // Listen for login completion for the lifetime of the component.
+  // CLI-login URL arrives as an event (Claude): open the browser + show it.
+  useEffect(() => {
+    let un: UnlistenFn | undefined;
+    onCliLoginUrl((u) => {
+      setInfo({ provider: u.provider, verification_url: u.url, user_code: "", expires_in: 900 });
+      void openUrl(u.url);
+    }).then((u) => {
+      un = u;
+    });
+    return () => {
+      un?.();
+    };
+  }, []);
+
+  // Login completion (device-code OR CLI).
   useEffect(() => {
     let un: UnlistenFn | undefined;
     onLoginComplete((r) => {
@@ -78,9 +97,14 @@ export function AddAccountDialog({ onChanged }: { onChanged: () => void }) {
     setBusy(p);
     setInfo(null);
     try {
-      const i = await startLogin(p);
-      setInfo(i);
-      await openUrl(i.verification_url);
+      if (p === "claude") {
+        // CLI-driven login (codexbar style): URL arrives via cli-login-url.
+        await loginViaCli(p);
+      } else {
+        const i = await startLogin(p);
+        setInfo(i);
+        await openUrl(i.verification_url);
+      }
     } catch (e) {
       setError(String(e));
       setBusy(null);
@@ -117,8 +141,8 @@ export function AddAccountDialog({ onChanged }: { onChanged: () => void }) {
         <div className="space-y-4 text-sm">
           <section>
             <p className="mb-2 text-xs text-muted-foreground">
-              Add via OAuth — signs in as the official CLI (reuses its public
-              client id):
+              Sign in via OAuth — Claude drives the official CLI login; others
+              use a device code. No password stored.
             </p>
             <div className="flex flex-wrap gap-2">
               {SUPPORTED.map(({ p, name }) => (
@@ -139,25 +163,29 @@ export function AddAccountDialog({ onChanged }: { onChanged: () => void }) {
               ))}
             </div>
             <p className="mt-2 text-[11px] text-muted-foreground/70">
-              Claude/Cursor are auto-detect only (no public OAuth client).
+              Cursor is auto-detect only (no public OAuth client).
             </p>
           </section>
 
           {info && (
             <div className="space-y-1.5 rounded-md border bg-muted/30 p-3 text-xs">
               <button
-                className="inline-flex items-center gap-1 underline underline-offset-2"
+                className="inline-flex items-center gap-1 break-all underline underline-offset-2"
                 onClick={() => openUrl(info.verification_url)}
               >
                 {info.verification_url}
-                <ExternalLink className="size-3" />
+                <ExternalLink className="size-3 shrink-0" />
               </button>
-              <div>
-                Enter code:{" "}
-                <span className="font-mono text-base tracking-widest">
-                  {info.user_code}
-                </span>
-              </div>
+              {info.user_code ? (
+                <div>
+                  Enter code:{" "}
+                  <span className="font-mono text-base tracking-widest">
+                    {info.user_code}
+                  </span>
+                </div>
+              ) : (
+                <div>Authorize in your browser.</div>
+              )}
               <div className="flex items-center gap-1.5 text-muted-foreground">
                 <Loader2 className="size-3 animate-spin" />
                 Waiting for authorization…

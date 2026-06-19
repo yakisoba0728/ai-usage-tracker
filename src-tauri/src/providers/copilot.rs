@@ -1,34 +1,46 @@
-//! GitHub Copilot — real usage via GitHub's documented billing API.
-//! Auth reuses the `gh` CLI's stored token (`gh auth token`). The user-scoped
-//! billing endpoint needs the `user` scope; if the token lacks it we surface an
-//! actionable hint instead of guessing.
+//! GitHub Copilot — reads the **Copilot CLI**'s stored token (macOS Keychain
+//! service `copilot-cli`, else `~/.copilot/config.json`) and calls the SAME
+//! internal quota endpoint the VS Code Copilot extension uses:
+//! `api.github.com/copilot_internal/user` with the Copilot editor headers.
+//! Gives entitlement / remaining / percent / reset date. Token-parsing only.
+//!
+//! Note: the `gh` CLI's OAuth token does NOT work here (wrong client, no
+//! Copilot scope). Use `copilot login` (the Copilot CLI) or a fine-grained PAT.
 
 use std::path::PathBuf;
 
 use async_trait::async_trait;
 use serde::Deserialize;
+use serde_json::Value;
 
 use crate::http;
 use crate::model::{LimitWindow, Provider, ServiceUsage};
 use crate::providers::ProviderError;
+use crate::secrets;
 
-const API_VERSION: &str = "2022-11-28";
+const USAGE_URL: &str = "https://api.github.com/copilot_internal/user";
 
 #[derive(Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-struct BillingResp {
-    #[serde(default)] usage_items: Vec<UsageItem>,
+struct CopilotUser {
+    #[serde(default)] copilot_plan: Option<String>,
+    #[serde(default)] quota_reset_date: Option<String>,
+    #[serde(default)] quota_snapshots: Option<QuotaSnapshots>,
 }
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct UsageItem {
-    #[serde(default)] net_quantity: Option<f64>,
+#[derive(Deserialize, Default)]
+struct QuotaSnapshots {
+    #[serde(default)] premium_interactions: Option<Quota>,
+}
+#[derive(Deserialize, Default)]
+struct Quota {
+    #[serde(default)] entitlement: Option<f64>,
+    #[serde(default)] remaining: Option<f64>,
+    #[serde(default)] percent_remaining: Option<f64>,
+    #[serde(default)] unlimited: Option<bool>,
 }
 
 pub struct CopilotProvider {
     http: reqwest::Client,
 }
-
 impl CopilotProvider {
     pub fn new() -> Self {
         Self {
@@ -37,57 +49,76 @@ impl CopilotProvider {
     }
 }
 
-fn gh_hosts_path() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| dirs::home_dir().unwrap().join(".config"))
-        .join("gh")
-        .join("hosts.yml")
+fn copilot_config_path() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".copilot")
+        .join("config.json")
 }
 
-/// The GitHub username from `~/.config/gh/hosts.yml` (the `user:` line).
-fn gh_user() -> Result<String, ProviderError> {
-    let raw = std::fs::read_to_string(gh_hosts_path())
-        .map_err(|e| ProviderError::NotLoggedIn(format!("gh hosts.yml: {e}")))?;
-    for line in raw.lines() {
-        let t = line.trim();
-        if let Some(v) = t.strip_prefix("user:") {
-            let v = v.trim().trim_matches('"').trim_matches('\'');
-            if !v.is_empty() {
-                return Ok(v.to_string());
+/// Reuse the Copilot CLI's stored OAuth token. macOS Keychain service
+/// `copilot-cli`; elsewhere `~/.copilot/config.json` → github.com.oauth_token.
+fn read_copilot_token() -> Result<String, ProviderError> {
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(tok) = secrets::read_macos_keychain("copilot-cli") {
+            if !tok.is_empty() {
+                return Ok(tok.trim().to_string());
             }
         }
     }
-    Err(ProviderError::NotLoggedIn("no user in gh hosts.yml".into()))
+    if let Ok(v) = secrets::read_json_file(&copilot_config_path()) {
+        if let Some(tok) = v
+            .get("github.com")
+            .and_then(|g| g.get("oauth_token"))
+            .and_then(|t| t.as_str())
+        {
+            return Ok(tok.to_string());
+        }
+    }
+    Err(ProviderError::NotLoggedIn(
+        "Copilot CLI not logged in (run `copilot login`)".into(),
+    ))
 }
 
-/// Reuse the gh CLI's stored token via `gh auth token` (works across gh's
-/// storage backends; we never store our own credentials).
-fn gh_token() -> Result<String, ProviderError> {
-    let out = std::process::Command::new("gh")
-        .args(["auth", "token"])
-        .output()
-        .map_err(|e| ProviderError::NotLoggedIn(format!("spawn gh: {e} (is gh installed?)")))?;
-    if !out.status.success() {
-        return Err(ProviderError::NotLoggedIn(
-            "gh not logged in (run `gh auth login`)".into(),
-        ));
-    }
-    let tok = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if tok.is_empty() {
-        return Err(ProviderError::NotLoggedIn("gh auth token empty".into()));
-    }
-    Ok(tok)
+fn parse_reset_date(s: &str) -> Option<i64> {
+    let d = chrono::NaiveDate::parse_from_str(s.trim(), "%Y-%m-%d").ok()?;
+    Some(d.and_hms_opt(0, 0, 0)?.and_utc().timestamp())
 }
 
-/// Pure: sum netQuantity → used credits. Allowance/percent omitted (plan-dependent).
-fn normalize(resp: &BillingResp) -> Vec<LimitWindow> {
-    let used: f64 = resp.usage_items.iter().filter_map(|i| i.net_quantity).sum();
+/// Pure: premium_interactions quota → window.
+fn normalize(u: &CopilotUser) -> Vec<LimitWindow> {
+    let Some(q) = u.quota_snapshots.as_ref().and_then(|s| s.premium_interactions.as_ref())
+    else {
+        return vec![];
+    };
+    if q.unlimited == Some(true) {
+        return vec![LimitWindow {
+            label: "Premium interactions".into(),
+            used_percent: None,
+            resets_at: u.quota_reset_date.as_deref().and_then(parse_reset_date),
+            used: None,
+            limit: None,
+        }];
+    }
+    let limit = q.entitlement;
+    let used = match (q.entitlement, q.remaining) {
+        (Some(e), Some(r)) => Some(e - r),
+        _ => None,
+    };
+    let used_percent = q
+        .percent_remaining
+        .map(|p| 100.0 - p)
+        .or_else(|| match (used, limit) {
+            (Some(u), Some(l)) if l > 0.0 => Some(u / l * 100.0),
+            _ => None,
+        });
     vec![LimitWindow {
-        label: "AI credits used (month)".into(),
-        used_percent: None,
-        resets_at: None,
-        used: Some(used),
-        limit: None,
+        label: "Premium interactions".into(),
+        used_percent: used_percent.map(|x| x as f32),
+        resets_at: u.quota_reset_date.as_deref().and_then(parse_reset_date),
+        used,
+        limit,
     }]
 }
 
@@ -98,35 +129,34 @@ impl crate::providers::ProviderApi for CopilotProvider {
     }
 
     async fn fetch(&self) -> Result<ServiceUsage, ProviderError> {
-        let user = gh_user()?;
-        let token = gh_token()?;
-        let url = format!(
-            "https://api.github.com/users/{user}/settings/billing/ai_credit/usage?year={y}&month={m}",
-            y = chrono::Utc::now().format("%Y"),
-            m = chrono::Utc::now().format("%-m")
-        );
-        let extra = [
-            ("Accept", "application/vnd.github+json"),
-            ("X-GitHub-Api-Version", API_VERSION),
-        ];
-        let resp: BillingResp = http::get_json(&self.http, &token, &url, &extra).await.map_err(|e| {
-            // Scope failures surface as Status; make the hint actionable.
-            match e {
-                ProviderError::Status { status, .. } if status == 403 || status == 404 => {
-                    ProviderError::NotLoggedIn(format!(
-                        "gh token lacks billing scope — run `gh auth refresh -h github.com -s user` {status}"
-                    ))
-                }
-                other => other,
-            }
+        let token = read_copilot_token()?;
+        let resp = self
+            .http
+            .get(USAGE_URL)
+            .header("Authorization", format!("token {token}"))
+            .header("Accept", "application/json")
+            .header("User-Agent", "GitHubCopilotChat/0.35.0")
+            .header("Editor-Version", "vscode/1.107.0")
+            .header("Editor-Plugin-Version", "copilot-chat/0.35.0")
+            .header("Copilot-Integration-Id", "vscode-chat")
+            .send()
+            .await
+            .map_err(|e| ProviderError::Network(e.to_string()))?;
+        let val: Value = http::send_for_json(resp, USAGE_URL).await.map_err(|e| {
+            // 403/404 usually means the token lacks Copilot scope.
+            ProviderError::NotLoggedIn(format!(
+                "Copilot quota unavailable ({e}); run `copilot login`"
+            ))
         })?;
+        let u: CopilotUser =
+            serde_json::from_value(val).map_err(|e| ProviderError::Parse(e.to_string()))?;
         Ok(ServiceUsage {
             provider: Provider::Copilot,
             connected: true,
-            plan: None,
-            account: Some(user),
+            plan: u.copilot_plan.clone(),
+            account: None,
             error: None,
-            windows: normalize(&resp),
+            windows: normalize(&u),
         })
     }
 }
@@ -136,11 +166,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn normalize_sums_net_quantity() {
-        let r: BillingResp =
-            serde_json::from_str(include_str!("../../tests/copilot_billing_fixture.json")).unwrap();
-        let w = &normalize(&r)[0];
-        assert_eq!(w.used, Some(150.0));
-        assert!(w.used_percent.is_none());
+    fn normalize_internal_fixture() {
+        let u: CopilotUser =
+            serde_json::from_str(include_str!("../../tests/copilot_internal_fixture.json")).unwrap();
+        let w = &normalize(&u)[0];
+        assert_eq!(w.limit, Some(300.0));
+        assert_eq!(w.used, Some(229.0)); // 300 - 71
+        assert_eq!(w.used_percent, Some(76.0)); // 100 - 24
+        assert!(w.resets_at.is_some()); // 2026-07-01 parsed
+    }
+
+    #[test]
+    fn normalize_empty_when_no_quota() {
+        assert!(normalize(&CopilotUser::default()).is_empty());
     }
 }

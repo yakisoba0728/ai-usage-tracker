@@ -72,6 +72,7 @@ struct Window {
 struct ExtraUsage {
     #[serde(default)] is_enabled: Option<bool>,
     #[serde(default)] used_credits: Option<f64>,
+    #[serde(default)] monthly_limit: Option<f64>,
     #[serde(default)] utilization: Option<f64>,
 }
 
@@ -109,7 +110,7 @@ impl ClaudeProvider {
 fn window(label: &str, w: &Window) -> LimitWindow {
     LimitWindow {
         label: label.into(),
-        used_percent: w.utilization.map(|v| (v * 100.0) as f32),
+        used_percent: w.utilization.map(|v| v as f32),
         resets_at: w.resets_at.map(|d| d.timestamp()),
         used: None,
         limit: None,
@@ -138,10 +139,10 @@ fn normalize(raw: &UsageResponse) -> Vec<LimitWindow> {
         if e.is_enabled.unwrap_or(false) {
             ws.push(LimitWindow {
                 label: "Extra usage".into(),
-                used_percent: e.utilization.map(|v| (v * 100.0) as f32),
+                used_percent: e.utilization.map(|v| v as f32),
                 resets_at: None,
-                used: e.used_credits,
-                limit: None,
+                used: e.used_credits.map(|c| c / 100.0),
+                limit: e.monthly_limit.map(|c| c / 100.0),
             });
         }
     }
@@ -196,8 +197,12 @@ mod tests {
         assert!(labels.contains(&"7-day"));
         assert!(labels.contains(&"Extra usage"));
         let five = ws.iter().find(|w| w.label == "5-hour").unwrap();
-        assert_eq!(five.used_percent, Some(23.5));
+        assert_eq!(five.used_percent, Some(23.5)); // utilization is already 0..100
         assert!(five.resets_at.is_some());
+        let extra = ws.iter().find(|w| w.label == "Extra usage").unwrap();
+        assert_eq!(extra.used, Some(12.5)); // 1250 cents -> $12.50
+        assert_eq!(extra.limit, Some(100.0)); // 10000 cents -> $100.00
+        assert_eq!(extra.used_percent, Some(12.5));
     }
 
     #[test]

@@ -1,7 +1,8 @@
-//! Cursor (experimental). Reads the sign-in token Cursor stores in its
-//! `state.vscdb` SQLite DB and POSTs to the Connect-RPC usage endpoint.
-//! This endpoint is undocumented and may be WAF-protected; we use legitimate
-//! headers only and degrade honestly if blocked. Marked "unstable" in the UI.
+//! Cursor (experimental) — token-parsing only. Reads the sign-in JWT Cursor
+//! stores as a raw string at `ItemTable[cursorAuth/accessToken]` in its
+//! `state.vscdb` SQLite DB, then POSTs to the Connect-RPC dashboard endpoint
+//! (exactly like the ClearMeasureLabs/cursor-usage-status extension). Money in
+//! the response is USD cents.
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -14,18 +15,27 @@ use crate::secrets;
 
 const USAGE_URL: &str =
     "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage";
-
+const ACCESS_KEY: &str = "cursorAuth/accessToken";
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct CursorUsage {
-    #[serde(default)] plan_usage: Option<f64>,
-    #[serde(default)] max_plan_usage: Option<f64>,
+    #[serde(default)] enabled: Option<bool>,
+    #[serde(default)] plan_usage: Option<PlanUsage>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct PlanUsage {
+    #[serde(default)] included_spend: Option<f64>,
+    #[serde(default)] total_spend: Option<f64>,
+    #[serde(default)] remaining: Option<f64>,
+    #[serde(default)] limit: Option<f64>,
+    #[serde(default)] total_percent_used: Option<f64>,
 }
 
 pub struct CursorProvider {
     http: reqwest::Client,
 }
-
 impl CursorProvider {
     pub fn new() -> Self {
         Self {
@@ -34,66 +44,57 @@ impl CursorProvider {
     }
 }
 
-/// Read the Cursor auth token from the globalStorage SQLite DB. VS Code-family
-/// stores global state in an `ItemTable(key, value)`; Cursor keeps its auth
-/// token under a cursorAuth-ish key. We search plausible keys defensively.
+/// Read the Cursor access token from `state.vscdb` (raw string value).
 fn read_cursor_token() -> Result<String, ProviderError> {
-    let db = secrets::cursor_state_db().ok_or_else(|| {
-        ProviderError::NotLoggedIn("Cursor not installed / no state.vscdb".into())
-    })?;
+    let db = secrets::cursor_state_db()
+        .ok_or_else(|| ProviderError::NotLoggedIn("Cursor not installed / no state.vscdb".into()))?;
     let conn = rusqlite::Connection::open_with_flags(
         &db,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .map_err(|e| ProviderError::NotLoggedIn(format!("open state.vscdb: {e}")))?;
-
     let mut stmt = conn
-        .prepare("SELECT key, value FROM ItemTable WHERE key LIKE '%cursorAuth%' OR key LIKE '%authToken%' OR key LIKE '%accessToken%'")
+        .prepare("SELECT value FROM ItemTable WHERE key = ? LIMIT 1")
         .map_err(|e| ProviderError::Parse(format!("query state.vscdb: {e}")))?;
-    let rows: Vec<(String, String)> = stmt
-        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
-        .map_err(|e| ProviderError::Parse(format!("read state.vscdb: {e}")))?
-        .filter_map(|r| r.ok())
-        .collect();
-
-    for (_k, v) in &rows {
-        // Cursor stores the token either as a bare string or a JSON object.
-        if v.starts_with('{') {
-            if let Ok(obj) = serde_json::from_str::<Value>(v) {
-                for field in ["accessToken", "token", "value"] {
-                    if let Some(s) = obj.get(field).and_then(|x| x.as_str()) {
-                        if !s.is_empty() {
-                            return Ok(s.to_string());
-                        }
-                    }
-                }
-            }
-        } else if !v.is_empty() && v.contains('.') {
-            // looks like a JWT-ish bearer token
-            return Ok(v.clone());
-        }
-    }
-    Err(ProviderError::NotLoggedIn(
-        "Cursor token not found in state.vscdb (sign in to Cursor)".into(),
-    ))
+    let token: Option<String> = stmt
+        .query_row([ACCESS_KEY], |r| r.get::<_, String>(0))
+        .ok();
+    token.filter(|t| !t.is_empty()).ok_or_else(|| {
+        ProviderError::NotLoggedIn(
+            "Cursor token not found in state.vscdb (sign in to Cursor)".into(),
+        )
+    })
 }
 
-/// Pure: plan usage → window. plan_usage/max_plan_usage give a percentage when
-/// both are present.
+/// Pure: planUsage → window. Money is cents → dollars.
 fn normalize(u: &CursorUsage) -> Vec<LimitWindow> {
-    let used_percent = match (u.plan_usage, u.max_plan_usage) {
-        (Some(used), Some(max)) if max > 0.0 => Some((used / max * 100.0) as f32),
-        _ => None,
+    if u.enabled == Some(false) {
+        return vec![];
+    }
+    let Some(p) = &u.plan_usage else {
+        return vec![];
     };
-    if u.plan_usage.is_none() && u.max_plan_usage.is_none() {
+    let used_cents = p
+        .included_spend
+        .or(p.total_spend)
+        .or_else(|| match (p.limit, p.remaining) {
+            (Some(l), Some(r)) => Some(l - r),
+            _ => None,
+        });
+    let limit_cents = p.limit;
+    let used_percent = p.total_percent_used.or_else(|| match (used_cents, limit_cents) {
+        (Some(u), Some(l)) if l > 0.0 => Some(u / l * 100.0),
+        _ => None,
+    });
+    if used_cents.is_none() && limit_cents.is_none() && used_percent.is_none() {
         return vec![];
     }
     vec![LimitWindow {
         label: "Plan usage".into(),
-        used_percent,
+        used_percent: used_percent.map(|x| x as f32),
         resets_at: None,
-        used: u.plan_usage,
-        limit: u.max_plan_usage,
+        used: used_cents.map(|c| c / 100.0),
+        limit: limit_cents.map(|c| c / 100.0),
     }]
 }
 
@@ -105,7 +106,6 @@ impl crate::providers::ProviderApi for CursorProvider {
 
     async fn fetch(&self) -> Result<ServiceUsage, ProviderError> {
         let token = read_cursor_token()?;
-        // Connect-RPC unary: method in URL, body is the JSON request, empty here.
         let resp = self
             .http
             .post(USAGE_URL)
@@ -116,9 +116,7 @@ impl crate::providers::ProviderApi for CursorProvider {
             .send()
             .await
             .map_err(|e| ProviderError::Network(e.to_string()))?;
-        let val: Value = http::send_for_json(resp, USAGE_URL).await.map_err(|e| {
-            ProviderError::Network(format!("Cursor usage endpoint blocked/unavailable: {e}"))
-        })?;
+        let val: Value = http::send_for_json(resp, USAGE_URL).await?;
         let u: CursorUsage =
             serde_json::from_value(val).map_err(|e| ProviderError::Parse(e.to_string()))?;
         Ok(ServiceUsage {
@@ -137,17 +135,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn normalize_fixture_percent() {
+    fn normalize_fixture_cents_to_dollars() {
         let u: CursorUsage =
             serde_json::from_str(include_str!("../../tests/cursor_usage_fixture.json")).unwrap();
         let w = &normalize(&u)[0];
-        assert_eq!(w.used_percent, Some(25.0));
-        assert_eq!(w.limit, Some(5000.0));
-        assert_eq!(w.used, Some(1250.0));
+        assert_eq!(w.used_percent, Some(15.48));
+        assert_eq!(w.used, Some(232.22)); // 23222 cents -> $232.22
+        assert_eq!(w.limit, Some(400.0)); // 40000 cents -> $400.00
     }
 
     #[test]
-    fn normalize_empty_when_no_data() {
+    fn normalize_empty_when_no_plan_usage() {
         assert!(normalize(&CursorUsage::default()).is_empty());
+        assert!(normalize(&CursorUsage { enabled: Some(false), plan_usage: None }).is_empty());
     }
 }

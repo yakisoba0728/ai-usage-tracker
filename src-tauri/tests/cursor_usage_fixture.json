@@ -1,4 +1,13 @@
 {
-  "planUsage": 1250,
-  "maxPlanUsage": 5000
+  "enabled": true,
+  "billingCycleStart": "1768399334000",
+  "billingCycleEnd": "1771077734000",
+  "planUsage": {
+    "totalSpend": 23222,
+    "includedSpend": 23222,
+    "bonusSpend": 0,
+    "remaining": 16778,
+    "limit": 40000,
+    "totalPercentUsed": 15.48
+  }
 }

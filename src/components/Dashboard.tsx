@@ -10,7 +10,9 @@ export function Dashboard() {
   const { snapshot, loading, refresh } = useUsage();
   const nowMs = useNow(1000);
 
-  const services = snapshot?.services ?? [];
+  // Only show cards for providers we could actually parse/connect. Offline
+  // providers (no token) are hidden — add them via "Add account" instead.
+  const services = (snapshot?.services ?? []).filter((s) => s.connected);
   const connectedCount = services.filter((s) => s.connected).length;
 
   // Highest used_percent across every window of every connected service
@@ -78,12 +80,13 @@ function EmptyState() {
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-1.5 py-24 text-center">
       <span className="text-sm font-medium text-foreground/90">
-        No services configured
+        No services connected
       </span>
       <span className="max-w-xs text-xs leading-relaxed text-muted-foreground/70">
-        Sign in to a provider's CLI (e.g.{" "}
-        <span className="font-mono">claude</span>,{" "}
-        <span className="font-mono">codex login</span>) to see live usage here.
+        Sign in to a provider's CLI (e.g. <span className="font-mono">claude</span>,{" "}
+        <span className="font-mono">codex login</span>), or click{" "}
+        <span className="font-medium text-foreground/80">Add account</span> to sign
+        in via OAuth.
       </span>
     </div>
   );

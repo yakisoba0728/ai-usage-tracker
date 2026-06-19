@@ -20,7 +20,7 @@ pub fn empty_snapshot_store() -> SnapshotStore {
 }
 
 pub fn default_config_store() -> ConfigStore {
-    Arc::new(RwLock::new(AppConfig::default()))
+    Arc::new(RwLock::new(AppConfig::load()))
 }
 
 pub fn build_providers(cfg: &AppConfig) -> Vec<Box<dyn ProviderApi>> {
@@ -28,36 +28,45 @@ pub fn build_providers(cfg: &AppConfig) -> Vec<Box<dyn ProviderApi>> {
     // Order MUST match [Claude, Codex, Gemini, Copilot, Cursor, z.ai]. Local
     // parsing (keychain / credential files / env) stays for ALL providers;
     // Claude additionally supports a pasted session key via "Add account".
-    if cfg.enabled[0] {
+    if cfg.enabled_array()[0] {
         v.push(Box::new(crate::providers::claude::ClaudeProvider::new()));
     }
-    if cfg.enabled[1] {
+    if cfg.enabled_array()[1] {
         v.push(Box::new(crate::providers::codex::CodexProvider::new()));
     }
-    if cfg.enabled[2] {
+    if cfg.enabled_array()[2] {
         v.push(Box::new(crate::providers::gemini::GeminiProvider::new()));
     }
-    if cfg.enabled[3] {
+    if cfg.enabled_array()[3] {
         v.push(Box::new(crate::providers::copilot::CopilotProvider::new()));
     }
-    if cfg.enabled[4] {
+    if cfg.enabled_array()[4] {
         v.push(Box::new(crate::providers::cursor::CursorProvider::new()));
     }
-    if cfg.enabled[5] {
+    if cfg.enabled_array()[5] {
         v.push(Box::new(crate::providers::zai::ZaiProvider::new()));
     }
     v
 }
 
 /// Fetch every enabled provider (concurrently, isolated), store + emit the
-/// snapshot, and update the tray label to the highest usage percent.
+/// snapshot.
 pub async fn refresh_once(app: &AppHandle, cfg: &ConfigStore, snap: &SnapshotStore) -> UsageSnapshot {
     let providers = build_providers(&*cfg.read().await);
+    // Emit per-provider loading events so the frontend can show a shimmer on
+    // each card independently.
+    for p in &providers {
+        let _ = app.emit("provider-loading", p.key());
+    }
+    let stored = crate::store::list();
+    for cred in &stored {
+        let _ = app.emit("provider-loading", cred.provider);
+    }
     let mut services = fetch_all(providers).await;
     // Manually-added (OAuth / API-key) accounts from the store, in addition
     // to auto-detected CLI ones.
-    for cred in crate::store::list() {
-        services.push(crate::providers::fetch_credential(&cred).await);
+    for cred in &stored {
+        services.push(crate::providers::fetch_credential(cred).await);
     }
     // If a stored account connected for a provider, drop the auto-detect
     // failure for the same provider (the user's explicit Add-account wins).
@@ -69,14 +78,7 @@ pub async fn refresh_once(app: &AppHandle, cfg: &ConfigStore, snap: &SnapshotSto
     };
     *snap.write().await = snapshot.clone();
     let _ = app.emit("usage-updated", &snapshot);
-
-    let title = match snapshot.max_used_percent() {
-        Some(p) => format!("{:.0}%", p.round()),
-        None => "AI".to_string(),
-    };
-    if let Some(tray) = app.tray_by_id("main") {
-        let _ = tray.set_title(Some(&title));
-    }
+    // Tray shows the app icon only — no title text (per user request).
     snapshot
 }
 
@@ -116,6 +118,7 @@ pub async fn set_config(
 ) -> Result<(), String> {
     new.validate().map_err(|e| e.to_string())?;
     let poll = new.poll_seconds;
+    new.save();
     *cfg.write().await = new;
     crate::scheduler::restart(&app, poll);
     Ok(())

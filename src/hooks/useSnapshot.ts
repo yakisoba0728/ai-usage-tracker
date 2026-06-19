@@ -1,28 +1,42 @@
-import { useCallback, useEffect, useState } from "react";
-import type { UnlistenFn } from "@tauri-apps/api/event";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import { getUsage, onUsageUpdated, refreshNow } from "@/lib/ipc";
-import type { UsageSnapshot } from "@/lib/types";
+import {
+  getUsage,
+  onProviderLoading,
+  onUsageUpdated,
+  refreshNow,
+} from "@/lib/ipc";
+import type { Provider, UsageSnapshot } from "@/lib/types";
 
 export interface UseSnapshotResult {
   snapshot: UsageSnapshot | null;
   loading: boolean;
   refreshing: boolean;
   error: string | null;
+  /** Providers mid-fetch in the current cycle — cleared on each snapshot. */
+  loadingProviders: Set<Provider>;
   refresh: () => Promise<void>;
 }
 
-/**
- * Subscribe to the live `usage-updated` push, fetch once on mount, and expose
- * an on-demand `refresh`. `loading` is the initial cold-start state; a later
- * `refresh()` flips `refreshing` instead so the UI can keep rendering stale
- * data behind the spinner.
- */
 export function useSnapshot(): UseSnapshotResult {
   const [snapshot, setSnapshot] = useState<UsageSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Per-provider loading flags. Mutated through a ref + state mirror so the
+  // `provider-loading` listener (fired outside React) can append without
+  // racing, and the snapshot handler can clear in one shot.
+  const loadingRef = useRef<Set<Provider>>(new Set());
+  const [loadingProviders, setLoadingProviders] = useState<Set<Provider>>(
+    () => new Set(),
+  );
+
+  const markLoading = useCallback((provider: Provider) => {
+    const next = new Set(loadingRef.current);
+    next.add(provider);
+    loadingRef.current = next;
+    setLoadingProviders(next);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -39,20 +53,31 @@ export function useSnapshot(): UseSnapshotResult {
         if (!cancelled) setLoading(false);
       });
 
-    const unlistenPromise: Promise<UnlistenFn | undefined> = onUsageUpdated(
-      (s) => setSnapshot(s),
-    ).catch((err) => {
+    const usageUnlisten = onUsageUpdated((s) => {
+      // A full snapshot closes every in-flight provider fetch.
+      if (loadingRef.current.size > 0) {
+        loadingRef.current = new Set();
+        setLoadingProviders(new Set());
+      }
+      setSnapshot(s);
+    }).catch((err) => {
       console.error("subscribe usage-updated failed:", err);
+      return undefined;
+    });
+
+    const loadingUnlisten = onProviderLoading((p) => {
+      if (!cancelled) markLoading(p);
+    }).catch((err) => {
+      console.error("subscribe provider-loading failed:", err);
       return undefined;
     });
 
     return () => {
       cancelled = true;
-      void unlistenPromise.then((un) => {
-        if (un) un();
-      });
+      void usageUnlisten.then((un) => un?.());
+      void loadingUnlisten.then((un) => un?.());
     };
-  }, []);
+  }, [markLoading]);
 
   const refresh = useCallback(async () => {
     setRefreshing(true);
@@ -68,5 +93,5 @@ export function useSnapshot(): UseSnapshotResult {
     }
   }, []);
 
-  return { snapshot, loading, refreshing, error, refresh };
+  return { snapshot, loading, refreshing, error, loadingProviders, refresh };
 }

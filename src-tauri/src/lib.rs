@@ -13,7 +13,7 @@ pub mod oauth_login;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager, WindowEvent,
+    Emitter, LogicalPosition, Manager, WindowEvent,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -35,10 +35,26 @@ pub fn run() {
             commands::cancel_login,
         ])
         .setup(|app| {
-            // --- Tray ---
+            // --- Tray popover window (borderless, hidden initially) ---
+            let popover = tauri::WebviewWindowBuilder::new(
+                app,
+                "popover",
+                tauri::WebviewUrl::App("index.html?window=popover".into()),
+            )
+            .title("")
+            .decorations(false)
+            .skip_taskbar(true)
+            .resizable(false)
+            .visible(false)
+            .inner_size(340.0, 440.0)
+            .build()?;
+            let _ = popover.set_position(LogicalPosition::new(1e6, 1e6)); // off-screen until first toggle
+
+            // --- Tray (icon only, no title) ---
             let show = MenuItem::with_id(app, "show", "Show dashboard", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &quit])?;
+            let refresh_item = MenuItem::with_id(app, "refresh", "Refresh now", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&refresh_item, &show, &quit])?;
 
             let mut builder = TrayIconBuilder::with_id("main")
                 .tooltip("AI Usage Tracker");
@@ -54,6 +70,9 @@ pub fn run() {
                             let _ = w.set_focus();
                         }
                     }
+                    "refresh" => {
+                        let _ = app.emit("trigger-refresh", ());
+                    }
                     "quit" => app.exit(0),
                     _ => {}
                 })
@@ -65,12 +84,27 @@ pub fn run() {
                     } = event
                     {
                         let app = tray.app_handle();
-                        if let Some(w) = app.get_webview_window("main") {
-                            if w.is_visible().unwrap_or(false) {
-                                let _ = w.hide();
+                        // Left-click toggles the custom popover (not the
+                        // main dashboard window). The popover is a borderless
+                        // window positioned just below the tray icon.
+                        if let Some(popover) = app.get_webview_window("popover") {
+                            if popover.is_visible().unwrap_or(false) {
+                                let _ = popover.hide();
                             } else {
-                                let _ = w.show();
-                                let _ = w.set_focus();
+                                // Position below the tray icon. On macOS the
+                                // tray lives in the menu bar at the top of the
+                                // screen; place the popover just below it,
+                                // right-aligned to the icon area.
+                                if let Some(monitor) = popover.primary_monitor().ok().flatten() {
+                                    let mon = monitor.size();
+                                    let mon_pos = monitor.position();
+                                    let _ = popover.set_position(LogicalPosition::new(
+                                        mon_pos.x as f64 + mon.width as f64 / monitor.scale_factor() - 360.0,
+                                        (mon_pos.y as f64) / monitor.scale_factor() + 6.0,
+                                    ));
+                                }
+                                let _ = popover.show();
+                                let _ = popover.set_focus();
                             }
                         }
                     }
@@ -80,15 +114,24 @@ pub fn run() {
             // --- Background poller ---
             scheduler::start(
                 app.handle().clone(),
-                config::AppConfig::default().poll_seconds,
+                config::AppConfig::load().poll_seconds,
             );
             Ok(())
         })
         .on_window_event(|window, event| {
-            // close-to-tray: never actually close, just hide
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                let _ = window.hide();
-                api.prevent_close();
+            let label = window.label();
+            // close-to-tray: main window hides instead of closing.
+            // Popover always hides (it has no close button — clicking
+            // outside or pressing Escape dismisses it).
+            if label == "main" {
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    let _ = window.hide();
+                    api.prevent_close();
+                }
+            } else if label == "popover" {
+                if let WindowEvent::Focused(false) = event {
+                    let _ = window.hide();
+                }
             }
         })
         .run(tauri::generate_context!())

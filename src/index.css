@@ -152,12 +152,16 @@
   }
 }
 
-/* ── Numerics: every usage number is mono + tabular ────────────────────────── */
-.num {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  font-feature-settings: "tnum" 1, "zero" 1;
+/* ── Per-card loading: subtle opacity pulse while a provider re-fetches. ───── */
+@keyframes card-loading-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
 }
+.card-loading {
+  animation: card-loading-pulse 1.1s ease-in-out infinite;
+}
+
+ /* ── Numerics: every usage number is mono + tabular ────────────────────────── */
 
 /* ── Thin scrollbars for scroll regions ────────────────────────────────────── */
 .scroll-area {

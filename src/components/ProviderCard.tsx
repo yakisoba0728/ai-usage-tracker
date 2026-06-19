@@ -1,35 +1,97 @@
+import type { DragEvent, KeyboardEvent } from "react";
+
 import { BarGauge } from "@/components/BarGauge";
-import { ProviderMark, PROVIDER_LABEL } from "@/components/ProviderMark";
+import { ProviderMark } from "@/components/ProviderMark";
 import { CardError } from "@/components/ErrorState";
+import { providerDisplayName, cardWindows } from "@/lib/providers";
 import { cn } from "@/lib/utils";
-import type { Provider, ServiceUsage } from "@/lib/types";
+import type { AppConfig, Provider, ServiceUsage } from "@/lib/types";
 
 export interface ProviderCardProps {
   service: ServiceUsage;
   nowMs: number;
+  config: AppConfig | null;
+  /** Show the per-card loading shimmer (provider is mid-fetch). */
+  loading?: boolean;
+  /** Enable native drag-and-drop reordering (only in custom sort mode). */
+  draggable?: boolean;
+  /** This card is the one being dragged → fade it. */
+  isDragging?: boolean;
+  /** A dragged card is hovering over this one → show the drop indicator. */
+  isDropTarget?: boolean;
   onOpen: (provider: Provider) => void;
+  onDragStart?: (provider: Provider, e: DragEvent<HTMLDivElement>) => void;
+  onDragEnter?: (provider: Provider, e: DragEvent<HTMLDivElement>) => void;
+  onDragLeave?: (provider: Provider, e: DragEvent<HTMLDivElement>) => void;
+  onDrop?: (provider: Provider, e: DragEvent<HTMLDivElement>) => void;
+  onDragEnd?: (provider: Provider, e: DragEvent<HTMLDivElement>) => void;
 }
 
 /**
- * Flat bars-only card. Primary window headlines with a 6px severity bar + reset
- * countdown; remaining windows are compact 4px bars. The whole card is a button
- * that opens the detail modal. Hover brightens the border + surface only — no
- * lift, no shadow.
+ * Flat bars-only card. The resolved headline window (user-pinned
+ * `primary_window`, else the first primary window) leads with a 6px severity
+ * bar + reset countdown; the rest render as compact 4px bars. The whole card is
+ * a role=button that opens the detail modal, and — in custom sort mode — a
+ * native HTML5 drag handle for reordering.
  */
-export function ProviderCard({ service, nowMs, onOpen }: ProviderCardProps) {
-  const windows = service.windows ?? [];
+export function ProviderCard({
+  service,
+  nowMs,
+  config,
+  loading = false,
+  draggable = false,
+  isDragging = false,
+  isDropTarget = false,
+  onOpen,
+  onDragStart,
+  onDragEnter,
+  onDragLeave,
+  onDrop,
+  onDragEnd,
+}: ProviderCardProps) {
+  const windows = cardWindows(service, config);
   const primary = windows[0];
   const secondary = windows.slice(1);
   const hasData = service.connected && windows.length > 0 && primary != null;
+  const name = providerDisplayName(config, service.provider);
+
+  function handleKeyDown(e: KeyboardEvent<HTMLDivElement>) {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      onOpen(service.provider);
+    }
+  }
+
+  const dragHandlers = draggable
+    ? {
+        draggable: true as const,
+        onDragStart: (e: DragEvent<HTMLDivElement>) => onDragStart?.(service.provider, e),
+        onDragEnter: (e: DragEvent<HTMLDivElement>) => onDragEnter?.(service.provider, e),
+        onDragOver: (e: DragEvent<HTMLDivElement>) => {
+          // Must preventDefault on dragover for a div to accept drops.
+          e.preventDefault();
+        },
+        onDragLeave: (e: DragEvent<HTMLDivElement>) => onDragLeave?.(service.provider, e),
+        onDrop: (e: DragEvent<HTMLDivElement>) => onDrop?.(service.provider, e),
+        onDragEnd: (e: DragEvent<HTMLDivElement>) => onDragEnd?.(service.provider, e),
+      }
+    : {};
 
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
+      aria-label={`${name} usage. Open details.`}
       onClick={() => onOpen(service.provider)}
+      onKeyDown={handleKeyDown}
+      {...dragHandlers}
       className={cn(
-        "group flex w-full cursor-pointer flex-col rounded-lg border border-border bg-surface p-4 text-left",
-        "transition-[background-color,border-color] duration-100",
+        "group flex w-full cursor-pointer flex-col rounded-lg border bg-surface p-4 text-left",
+        "transition-[background-color,border-color,opacity] duration-100",
         "hover:border-border-strong hover:bg-surface-2",
+        isDropTarget ? "border-border-strong border-dashed" : "border-border",
+        isDragging && "opacity-50",
+        loading && "card-loading",
       )}
     >
       {/* Header row — mark + name (left), plan badge (right) */}
@@ -40,9 +102,7 @@ export function ProviderCard({ service, nowMs, onOpen }: ProviderCardProps) {
             className="size-4 shrink-0 text-text-dim"
           />
           <div className="min-w-0 leading-tight">
-            <h3 className="truncate text-md font-semibold text-text">
-              {PROVIDER_LABEL[service.provider]}
-            </h3>
+            <h3 className="truncate text-md font-semibold text-text">{name}</h3>
             {service.account && (
               <p
                 className="num mt-0.5 truncate text-text-faint"
@@ -86,6 +146,6 @@ export function ProviderCard({ service, nowMs, onOpen }: ProviderCardProps) {
           />
         )}
       </div>
-    </button>
+    </div>
   );
 }

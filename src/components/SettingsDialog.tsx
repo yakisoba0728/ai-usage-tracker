@@ -1,5 +1,3 @@
-import { useEffect, useState } from "react";
-
 import {
   Dialog,
   DialogContent,
@@ -8,12 +6,16 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { ProviderMark, PROVIDER_LABEL } from "@/components/ProviderMark";
-import { getConfig, setConfig } from "@/lib/ipc";
+import { PROVIDER_ORDER } from "@/lib/providers";
 import { cn } from "@/lib/utils";
 import type { AppConfig, Provider } from "@/lib/types";
 
-/** Display sort order — local Dashboard state, not persisted to the backend. */
-export type SortBy = "usage" | "name";
+/**
+ * Card ordering source. "custom" honors the drag-and-drop `sort_index` order;
+ * "usage" / "name" auto-sort on top of it. Default is "custom" so reordering is
+ * visible — the other modes would otherwise clobber manual order every refresh.
+ */
+export type SortBy = "custom" | "usage" | "name";
 
 /** Poll-interval segmented options — labels map to backend seconds. */
 const POLL_OPTIONS: { label: string; value: number }[] = [
@@ -23,74 +25,39 @@ const POLL_OPTIONS: { label: string; value: number }[] = [
   { label: "30m", value: 1800 },
 ];
 
-/**
- * enabled[] index order — MUST mirror PROVIDER_ORDER in the Rust AppConfig:
- * claude / codex / gemini / copilot / cursor / zai.
- */
-const PROVIDER_ORDER: Provider[] = [
-  "claude",
-  "codex",
-  "gemini",
-  "copilot",
-  "cursor",
-  "zai",
-];
-
 export interface SettingsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Display-only preferences (local state in Dashboard). */
+  /** Owned by Dashboard; changes persist immediately. */
+  config: AppConfig | null;
+  onConfigChange: (next: AppConfig) => void;
+  /** Display-only preferences (local Dashboard state). */
   sortBy: SortBy;
   onSortByChange: (s: SortBy) => void;
   showOffline: boolean;
   onShowOfflineChange: (b: boolean) => void;
-  /** Open the Add-account flow (closes settings first). */
-  onAddAccount: () => void;
 }
 
 /**
  * Three flat-gray sections: poll interval (segmented), providers (toggle rows
- * that persist to the backend config), and display (sort + show-offline, local
- * Dashboard state). Poll + provider changes are optimistic: the UI updates
- * immediately and the poll loop picks up the new interval / provider set on its
- * next cycle.
+ * persisted to the backend config), and display (sort + show-offline). Config
+ * is owned by the Dashboard; this dialog just projects + patches it.
  */
 export function SettingsDialog({
   open,
   onOpenChange,
+  config,
+  onConfigChange,
   sortBy,
   onSortByChange,
   showOffline,
   onShowOfflineChange,
-  onAddAccount,
 }: SettingsDialogProps) {
-  const [config, setConfigState] = useState<AppConfig | null>(null);
-
-  // Load config whenever the dialog opens.
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    getConfig()
-      .then((c) => {
-        if (!cancelled) setConfigState(c);
-      })
-      .catch((e) => console.error("get_config failed:", e));
-    return () => {
-      cancelled = true;
-    };
-  }, [open]);
-
-  // Optimistic update + persist.
-  function persist(next: AppConfig) {
-    setConfigState(next);
-    void setConfig(next).catch((e) => console.error("set_config failed:", e));
-  }
-
   function toggleProvider(i: number, on: boolean) {
     if (!config) return;
-    const enabled = [...config.enabled] as AppConfig["enabled"];
-    enabled[i] = on;
-    persist({ ...config, enabled });
+    const providers = [...config.providers] as AppConfig["providers"];
+    providers[i] = { ...providers[i], enabled: on };
+    onConfigChange({ ...config, providers });
   }
 
   return (
@@ -111,7 +78,7 @@ export function SettingsDialog({
             <Segmented
               options={POLL_OPTIONS}
               value={config?.poll_seconds}
-              onChange={(s) => config && persist({ ...config, poll_seconds: s })}
+              onChange={(s) => config && onConfigChange({ ...config, poll_seconds: s })}
               disabled={config == null}
             />
           </Section>
@@ -122,7 +89,7 @@ export function SettingsDialog({
               {PROVIDER_ORDER.map((p, i) => (
                 <Row key={p} label={PROVIDER_LABEL[p]} mark={p}>
                   <Toggle
-                    checked={config?.enabled[i] ?? false}
+                    checked={config?.providers[i].enabled ?? false}
                     disabled={config == null}
                     onChange={(on) => toggleProvider(i, on)}
                     ariaLabel={`Enable ${PROVIDER_LABEL[p]}`}
@@ -130,14 +97,6 @@ export function SettingsDialog({
                 </Row>
               ))}
             </div>
-            <button
-              type="button"
-              onClick={onAddAccount}
-              className="mt-1 rounded-md px-1.5 py-1.5 text-text-dim transition-colors hover:bg-surface-2 hover:text-text"
-              style={{ fontSize: 12, fontWeight: 500 }}
-            >
-              + Add account
-            </button>
           </Section>
 
           {/* Display */}
@@ -146,6 +105,7 @@ export function SettingsDialog({
               <Row label="Sort by">
                 <Segmented
                   options={[
+                    { label: "Custom", value: "custom" as const },
                     { label: "Usage", value: "usage" as const },
                     { label: "Name", value: "name" as const },
                   ]}

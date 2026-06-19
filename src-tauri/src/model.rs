@@ -21,7 +21,7 @@ impl Provider {
             Provider::Gemini => "Gemini",
             Provider::Copilot => "GitHub Copilot",
             Provider::Cursor => "Cursor",
-            Provider::Zai => "z.ai",
+            Provider::Zai => "z.ai Coding Plan",
         }
     }
 }

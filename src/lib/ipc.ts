@@ -12,6 +12,8 @@ import type {
 
 const USAGE_UPDATED_EVENT = "usage-updated";
 const LOGIN_COMPLETE_EVENT = "login-complete";
+const PROVIDER_LOADING_EVENT = "provider-loading";
+const TRIGGER_REFRESH_EVENT = "trigger-refresh";
 
 export function getUsage(): Promise<UsageSnapshot> {
   return invoke<UsageSnapshot>("get_usage");
@@ -75,5 +77,21 @@ export function onLoginComplete(
 ): Promise<UnlistenFn> {
   return listen<LoginResult>(LOGIN_COMPLETE_EVENT, (event) => {
     cb(event.payload);
+  });
+}
+
+/** Fired before each provider's fetch starts (payload = the Provider). */
+export function onProviderLoading(
+  cb: (provider: Provider) => void,
+): Promise<UnlistenFn> {
+  return listen<Provider>(PROVIDER_LOADING_EVENT, (event) => {
+    cb(event.payload);
+  });
+}
+
+/** Fired from the tray "Refresh now" menu item. */
+export function onTriggerRefresh(cb: () => void): Promise<UnlistenFn> {
+  return listen<null>(TRIGGER_REFRESH_EVENT, () => {
+    cb();
   });
 }

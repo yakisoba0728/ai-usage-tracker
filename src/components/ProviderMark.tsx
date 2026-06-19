@@ -82,5 +82,5 @@ export const PROVIDER_LABEL: Record<Provider, string> = {
   gemini: "Gemini",
   copilot: "GitHub Copilot",
   cursor: "Cursor",
-  zai: "z.ai",
+  zai: "z.ai Coding Plan",
 };

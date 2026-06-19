@@ -40,13 +40,36 @@ export interface UsageSnapshot {
 }
 
 /**
- * 6 enabled slots, one per provider in PROVIDER_ORDER. Adding a 7th provider
- * means appending to PROVIDER_ORDER here AND the Rust AppConfig (the
- * orchestrator owns the Rust side).
+ * Per-provider user settings. Mirrors the Rust `ProviderConfig` 1:1 (config.rs).
+ * Indexed in `AppConfig.providers` by canonical `PROVIDER_ORDER`.
+ */
+export interface ProviderConfig {
+  enabled: boolean;
+  /** Override the display name shown on the card / modal title. */
+  custom_name: string | null;
+  /** Notification thresholds in percent (0–100). Default [50,75,90,95,100]. */
+  notify_thresholds: number[];
+  /** Which window label to surface as the card headline. null = auto. */
+  primary_window: string | null;
+  /** Sort index for drag-and-drop reordering. Lower = earlier. */
+  sort_index: number;
+}
+
+/**
+ * Persisted user configuration. `providers` is a fixed 6-tuple in canonical
+ * order [claude, codex, gemini, copilot, cursor, zai] — exactly mirrors the
+ * Rust `AppConfig.providers: [ProviderConfig; 6]`.
  */
 export interface AppConfig {
   poll_seconds: number;
-  enabled: [boolean, boolean, boolean, boolean, boolean, boolean];
+  providers: [
+    ProviderConfig,
+    ProviderConfig,
+    ProviderConfig,
+    ProviderConfig,
+    ProviderConfig,
+    ProviderConfig,
+  ];
 }
 
 /**

@@ -69,7 +69,13 @@ async fn post_form<T: DeserializeOwned>(
     url: &str,
     form: &[(&str, &str)],
 ) -> Result<T, String> {
-    let resp = http.post(url).form(form).send().await.map_err(|e| e.to_string())?;
+    let resp = http
+        .post(url)
+        .header("Accept", "application/json")
+        .form(form)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
     read::<T>(resp, url).await
 }
 
@@ -79,7 +85,7 @@ async fn read<T: DeserializeOwned>(resp: reqwest::Response, url: &str) -> Result
     if !status.is_success() {
         return Err(format!("{url} ({status}): {}", &text[..text.len().min(200)]));
     }
-    serde_json::from_str(&text).map_err(|e| format!("parse {url}: {e}"))
+    serde_json::from_str(&text).map_err(|e| format!("parse {url}: {e} (body was: {})", &text[..text.len().min(200)]))
 }
 
 fn finish(app: &AppHandle, provider: Provider, res: Result<StoredCredential, String>) {

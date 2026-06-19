@@ -42,6 +42,11 @@ export function loginOAuth(provider: Provider): Promise<string> {
   return invoke<string>("login_oauth", { provider });
 }
 
+/** Exchange a pasted code (Claude manual-code flow). */
+export function exchangeCode(provider: Provider, code: string): Promise<void> {
+  return invoke<void>("exchange_code", { provider, code });
+}
+
 /** Cancel the in-progress OAuth login (closes the local callback server). */
 export function cancelLogin(): Promise<void> {
   return invoke<void>("cancel_login");

@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/dialog";
 import {
   cancelLogin,
+  exchangeCode,
   listAccounts,
   loginOAuth,
   onLoginComplete,
@@ -20,8 +21,10 @@ import {
 } from "@/lib/ipc";
 import type { LoginInfo, Provider, StoredCredential } from "@/lib/types";
 
-/** Claude/Codex use browser+localhost OAuth; Gemini/Copilot use device-code. */
+/** Claude/Codex use browser OAuth; Gemini/Copilot use device-code. */
 const BROWSER_OAUTH: Provider[] = ["claude", "codex"];
+/** Claude only allows the provider-hosted redirect, so the user pastes a code. */
+const MANUAL_CODE: Provider[] = ["claude"];
 
 const SUPPORTED: { p: Provider; name: string }[] = [
   { p: "claude", name: "Claude" },
@@ -44,6 +47,8 @@ export function AddAccountDialog({ onChanged }: { onChanged: () => void }) {
   const [busy, setBusy] = useState<Provider | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [accounts, setAccounts] = useState<StoredCredential[]>([]);
+  const [manualFor, setManualFor] = useState<Provider | null>(null);
+  const [codeInput, setCodeInput] = useState("");
 
   async function load() {
     try {
@@ -64,6 +69,8 @@ export function AddAccountDialog({ onChanged }: { onChanged: () => void }) {
       if (r.ok) {
         setInfo(null);
         setError(null);
+        setManualFor(null);
+        setCodeInput("");
         void load();
         onChanged();
         setOpen(false);
@@ -82,17 +89,33 @@ export function AddAccountDialog({ onChanged }: { onChanged: () => void }) {
     setError(null);
     setBusy(p);
     setInfo(null);
+    setManualFor(null);
+    setCodeInput("");
     try {
       if (BROWSER_OAUTH.includes(p)) {
-        // Browser + localhost-callback flow (opens the provider's authorize URL).
         const url = await loginOAuth(p);
         setInfo({ provider: p, verification_url: url, user_code: "", expires_in: 300 });
+        if (MANUAL_CODE.includes(p)) setManualFor(p);
         await openUrl(url);
       } else {
         const i = await startLogin(p);
         setInfo(i);
         await openUrl(i.verification_url);
       }
+    } catch (e) {
+      setError(String(e));
+      setBusy(null);
+    }
+  }
+
+  async function submitCode() {
+    const provider = manualFor;
+    if (!provider || !codeInput.trim()) return;
+    setError(null);
+    setBusy(provider);
+    try {
+      await exchangeCode(provider, codeInput.trim());
+      // `login-complete` will close + refresh on success.
     } catch (e) {
       setError(String(e));
       setBusy(null);
@@ -110,6 +133,8 @@ export function AddAccountDialog({ onChanged }: { onChanged: () => void }) {
     setInfo(null);
     setError(null);
     setBusy(null);
+    setManualFor(null);
+    setCodeInput("");
     setOpen(false);
   }
 
@@ -128,8 +153,7 @@ export function AddAccountDialog({ onChanged }: { onChanged: () => void }) {
         <div className="space-y-4 text-sm">
           <section>
             <p className="mb-2 text-xs text-muted-foreground">
-              Sign in via OAuth — opens your browser; we capture the token on a
-              local callback. No password stored.
+              Sign in via OAuth — opens your browser. No password stored.
             </p>
             <div className="flex flex-wrap gap-2">
               {SUPPORTED.map(({ p, name }) => (
@@ -163,7 +187,23 @@ export function AddAccountDialog({ onChanged }: { onChanged: () => void }) {
                 {info.verification_url}
                 <ExternalLink className="size-3 shrink-0" />
               </button>
-              {info.user_code ? (
+              {manualFor ? (
+                <div className="space-y-1.5">
+                  <div>Authorize, then paste the code shown on the page:</div>
+                  <div className="flex gap-2">
+                    <input
+                      className="flex-1 rounded-md border bg-background px-2 py-1 font-mono text-sm"
+                      placeholder="paste code"
+                      value={codeInput}
+                      onChange={(e) => setCodeInput(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && submitCode()}
+                    />
+                    <Button size="sm" onClick={submitCode} disabled={!codeInput.trim()}>
+                      Submit
+                    </Button>
+                  </div>
+                </div>
+              ) : info.user_code ? (
                 <div>
                   Enter code:{" "}
                   <span className="font-mono text-base tracking-widest">
@@ -175,7 +215,7 @@ export function AddAccountDialog({ onChanged }: { onChanged: () => void }) {
               )}
               <div className="flex items-center gap-1.5 text-muted-foreground">
                 <Loader2 className="size-3 animate-spin" />
-                Waiting for authorization… (close X to cancel)
+                Waiting… (close X to cancel)
               </div>
             </div>
           )}

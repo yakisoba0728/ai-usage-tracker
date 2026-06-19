@@ -148,3 +148,13 @@ pub async fn login_oauth(app: AppHandle, provider: crate::model::Provider) -> Re
 pub fn cancel_login() {
     crate::oauth_login::cancel();
 }
+
+/// Exchange a code the user pasted (Claude's manual-code flow).
+#[tauri::command]
+pub async fn exchange_code(
+    app: AppHandle,
+    provider: crate::model::Provider,
+    code: String,
+) -> Result<(), String> {
+    crate::oauth_login::exchange_code(app, provider, code).await
+}

@@ -32,6 +32,7 @@ pub fn run() {
             commands::list_accounts,
             commands::remove_account,
             commands::login_oauth,
+            commands::exchange_code,
             commands::cancel_login,
             commands::login_options,
         ])

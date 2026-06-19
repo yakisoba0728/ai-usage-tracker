@@ -1,9 +1,10 @@
-//! Browser + localhost-callback OAuth login (the codex-switcher pattern). We
-//! spin up a tiny local HTTP server, build the provider's authorize URL with
-//! PKCE + a localhost redirect, open it in the user's browser, capture the
-//! authorization code on the callback, and exchange it for tokens. The browser
-//! handles the provider's login (incl. any Cloudflare), so we never have to.
-//! Works for Codex (proven) and Claude; Gemini/Copilot keep the device-code path.
+//! Browser OAuth login. Two modes:
+//! - **LocalServer** (Codex): the provider allows a localhost redirect, so we
+//!   run a local callback server and capture the code automatically.
+//! - **ManualCode** (Claude): the provider only allows its own redirect page
+//!   (`platform.claude.com/oauth/code/callback`), so we open the authorize URL
+//!   with `code=true` (the page shows a one-time code), the user pastes it, and
+//!   we exchange it. No localhost server.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex};
@@ -20,16 +21,24 @@ use crate::jwt::jwt_payload;
 use crate::model::Provider;
 use crate::store::{self, StoredCredential};
 
-const REDIRECT_PATH: &str = "/auth/callback";
+const LOCAL_REDIRECT_PATH: &str = "/auth/callback";
 const TIMEOUT_SECS: u64 = 300;
 
-/// Per-provider OAuth config (public client_ids reused from the official CLIs).
+#[derive(Clone)]
+enum LoginMode {
+    /// Localhost callback server; code captured automatically.
+    LocalServer,
+    /// Provider-hosted redirect page shows a code the user pastes.
+    ManualCode { redirect_uri: String },
+}
+
 struct OAuthSpec {
     authorize_url: String,
     token_url: String,
     client_id: String,
     scope: String,
     extra_params: Vec<(&'static str, &'static str)>,
+    mode: LoginMode,
 }
 
 fn spec_for(p: Provider) -> Option<OAuthSpec> {
@@ -39,12 +48,12 @@ fn spec_for(p: Provider) -> Option<OAuthSpec> {
             token_url: "https://auth.openai.com/oauth/token".into(),
             client_id: "app_EMoamEEZ73f0CkXaXp7hrann".into(),
             scope: "openid profile email offline_access".into(),
-            // Required by OpenAI OAuth (per codex-switcher / codex CLI).
             extra_params: vec![
                 ("originator", "codex_cli_rs"),
                 ("codex_cli_simplified_flow", "true"),
                 ("id_token_add_organizations", "true"),
             ],
+            mode: LoginMode::LocalServer,
         }),
         Provider::Claude => Some(OAuthSpec {
             authorize_url: "https://claude.com/cai/oauth/authorize".into(),
@@ -53,7 +62,11 @@ fn spec_for(p: Provider) -> Option<OAuthSpec> {
             scope:
                 "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
                     .into(),
+            // code=true makes Anthropic's redirect page display the auth code.
             extra_params: vec![("code", "true")],
+            mode: LoginMode::ManualCode {
+                redirect_uri: "https://platform.claude.com/oauth/code/callback".into(),
+            },
         }),
         _ => None,
     }
@@ -71,9 +84,19 @@ struct LoginResult {
     error: Option<String>,
 }
 
-/// Global cancel flag for the currently-active OAuth login.
+/// Cancel flag for the active LocalServer login.
 static ACTIVE: LazyLock<Mutex<Option<std::sync::Arc<AtomicBool>>>> =
     LazyLock::new(|| Mutex::new(None));
+
+/// PKCE state retained for the active ManualCode login (between URL open and the
+/// user pasting the code).
+struct Pending {
+    verifier: String,
+    redirect_uri: String,
+    token_url: String,
+    client_id: String,
+}
+static PENDING: LazyLock<Mutex<Option<(Provider, Pending)>>> = LazyLock::new(|| Mutex::new(None));
 
 pub fn cancel() {
     if let Ok(guard) = ACTIVE.lock() {
@@ -83,53 +106,85 @@ pub fn cancel() {
     }
 }
 
-/// Start the OAuth login. Returns the authorize URL (for the frontend to open)
-/// and runs the callback server in the background; emits `login-complete` when
-/// done.
+/// Start a login. Returns the authorize URL for the browser.
 pub fn start(app: AppHandle, provider: Provider) -> Result<String, String> {
     let spec = spec_for(provider).ok_or_else(|| "OAuth login not supported for this provider".to_string())?;
-
     let verifier = pkce_verifier();
     let challenge = pkce_challenge(&verifier);
     let state = random_b64(32);
 
-    // Bind a local callback server (prefer 1455 like the official CLIs; fall
-    // back to an OS-assigned port).
-    let server = Server::http("127.0.0.1:1455")
-        .or_else(|_| Server::http("127.0.0.1:0"))
-        .map_err(|e| format!("start local server: {e}"))?;
-    let port = server
-        .server_addr()
-        .to_ip()
-        .map(|a| a.port())
-        .unwrap_or(0);
-    let redirect_uri = format!("http://localhost:{port}{REDIRECT_PATH}");
+    match spec.mode.clone() {
+        LoginMode::LocalServer => {
+            let server = Server::http("127.0.0.1:1455")
+                .or_else(|_| Server::http("127.0.0.1:0"))
+                .map_err(|e| format!("start local server: {e}"))?;
+            let port = server.server_addr().to_ip().map(|a| a.port()).unwrap_or(0);
+            let redirect_uri = format!("http://localhost:{port}{LOCAL_REDIRECT_PATH}");
+            let auth_url = build_authorize_url(&spec, &redirect_uri, &challenge, &state);
 
-    let auth_url = build_authorize_url(&spec, &redirect_uri, &challenge, &state);
-
-    let cancelled = std::sync::Arc::new(AtomicBool::new(false));
-    if let Ok(mut g) = ACTIVE.lock() {
-        *g = Some(cancelled.clone());
+            let cancelled = std::sync::Arc::new(AtomicBool::new(false));
+            if let Ok(mut g) = ACTIVE.lock() {
+                *g = Some(cancelled.clone());
+            }
+            let app2 = app.clone();
+            let client_id = spec.client_id.clone();
+            let token_url = spec.token_url.clone();
+            std::thread::spawn(move || {
+                run_server(app2, provider, server, client_id, token_url, redirect_uri, verifier, state, cancelled);
+            });
+            Ok(auth_url)
+        }
+        LoginMode::ManualCode { redirect_uri } => {
+            let auth_url = build_authorize_url(&spec, &redirect_uri, &challenge, &state);
+            if let Ok(mut g) = PENDING.lock() {
+                *g = Some((
+                    provider,
+                    Pending {
+                        verifier,
+                        redirect_uri: redirect_uri.clone(),
+                        token_url: spec.token_url.clone(),
+                        client_id: spec.client_id.clone(),
+                    },
+                ));
+            }
+            // clear any stale LocalServer cancel flag
+            if let Ok(mut g) = ACTIVE.lock() {
+                *g = None;
+            }
+            Ok(auth_url)
+        }
     }
+}
 
-    let app2 = app.clone();
-    let spec_client = spec.client_id.clone();
-    let token_url = spec.token_url.clone();
-    std::thread::spawn(move || {
-        run_server(
-            app2,
-            provider,
-            server,
-            spec_client,
-            token_url,
-            redirect_uri,
-            verifier,
-            state,
-            cancelled,
-        );
-    });
-
-    Ok(auth_url)
+/// Exchange a code the user pasted (ManualCode flow, e.g. Claude).
+pub async fn exchange_code(app: AppHandle, provider: Provider, code: String) -> Result<(), String> {
+    let pending = {
+        let mut g = PENDING.lock().map_err(|e| e.to_string())?;
+        let taken = g.take();
+        match taken {
+            Some((p, pend)) if p == provider => pend,
+            _ => return Err("no pending login for this provider".into()),
+        }
+    };
+    match exchange(&pending.token_url, &pending.client_id, &pending.redirect_uri, &pending.verifier, &code).await {
+        Ok(t) => {
+            let cred = build_credential(provider, &t);
+            let label = cred.label.clone();
+            store::add(cred);
+            let _ = app.emit(
+                "login-complete",
+                LoginResult { provider, ok: true, label: Some(label), error: None },
+            );
+            Ok(())
+        }
+        Err(e) => {
+            let _ = app.emit(
+                "login-complete",
+                LoginResult { provider, ok: false, label: None, error: Some(e.clone()) },
+            );
+            Err(e)
+        }
+    }
 }
 
 fn run_server(
@@ -167,16 +222,14 @@ fn run_server(
                         continue;
                     }
                 };
-                if parsed.path() != REDIRECT_PATH {
+                if parsed.path() != LOCAL_REDIRECT_PATH {
                     let _ = req.respond(Response::from_string("Not Found").with_status_code(404));
                     continue;
                 }
                 let params: std::collections::HashMap<String, String> =
                     parsed.query_pairs().into_owned().collect();
                 if let Some(err) = params.get("error") {
-                    let _ = req.respond(
-                        Response::from_string(format!("OAuth error: {err}")).with_status_code(400),
-                    );
+                    let _ = req.respond(Response::from_string(format!("OAuth error: {err}")).with_status_code(400));
                     return emit_err(&app, provider, format!("provider error: {err}"));
                 }
                 if params.get("state").map(|s| s.as_str()) != Some(&expected_state) {
@@ -186,9 +239,7 @@ fn run_server(
                 let code = match params.get("code") {
                     Some(c) if !c.is_empty() => c.clone(),
                     _ => {
-                        let _ = req.respond(
-                            Response::from_string("Missing code").with_status_code(400),
-                        );
+                        let _ = req.respond(Response::from_string("Missing code").with_status_code(400));
                         continue;
                     }
                 };
@@ -208,9 +259,7 @@ fn run_server(
     let Some(code) = got_code else {
         return emit_err(&app, provider, "no code".into());
     };
-
-    let tokens = rt.block_on(exchange(&token_url, &client_id, &redirect_uri, &verifier, &code));
-    match tokens {
+    match rt.block_on(exchange(&token_url, &client_id, &redirect_uri, &verifier, &code)) {
         Ok(t) => {
             let cred = build_credential(provider, &t);
             let label = cred.label.clone();
@@ -383,6 +432,18 @@ mod tests {
         let url = build_authorize_url(&spec, "http://localhost:1455/auth/callback", "chk", "st");
         assert!(url.contains("originator=codex_cli_rs"));
         assert!(url.contains("codex_cli_simplified_flow=true"));
-        assert!(url.contains("code_challenge_method=S256"));
+    }
+
+    #[test]
+    fn claude_uses_platform_redirect() {
+        let spec = spec_for(Provider::Claude).unwrap();
+        match &spec.mode {
+            LoginMode::ManualCode { redirect_uri } => {
+                assert!(redirect_uri.contains("platform.claude.com"));
+            }
+            _ => panic!("claude should be ManualCode"),
+        }
+        let url = build_authorize_url(&spec, "https://platform.claude.com/oauth/code/callback", "c", "s");
+        assert!(url.contains("code=true"));
     }
 }

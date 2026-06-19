@@ -6,6 +6,8 @@ pub mod model;
 pub mod providers;
 pub mod scheduler;
 pub mod secrets;
+pub mod login;
+pub mod store;
 
 use tauri::{
     menu::{Menu, MenuItem},

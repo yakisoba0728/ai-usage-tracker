@@ -1,11 +1,8 @@
-//! Claude — session-key-only mode. Local credential parsing (keychain /
-//! ~/.claude/.credentials.json) was removed because Claude Code retired its
-//! old OAuth client_id and the new one uses an undocumented token endpoint.
-//! Claude now works exclusively via a pasted `sessionKey` cookie from
-//! claude.ai (Add Account → Claude → paste the key). The legacy auto-detect
-//! code below is retained for reference.
+//! Claude (via Claude Code) — reads the OAuth token from the macOS keychain
+//! (or ~/.claude/.credentials.json), auto-refreshes via the public Claude Code
+//! client_id against api.anthropic.com/v1/oauth/token, then fetches usage from
+//! api.anthropic.com/api/oauth/usage + /profile. Modeled on claude-meter (MIT).
 
-#![allow(dead_code)]
 use async_trait::async_trait;
 use serde::Deserialize;
 
@@ -213,12 +210,12 @@ fn normalize(raw: &UsageResponse) -> (Vec<LimitWindow>, Vec<LimitWindow>) {
 }
 
 const CLAUDE_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5942d1962f5e";
-const CLAUDE_TOKEN_URL: &str = "https://console.anthropic.com/v1/oauth/token";
-// Newer Claude Code builds are migrating to platform.claude.com; console is
-// still authoritative today (verified via anthropics/claude-code#31021 + the
-// cedws/3a24b2c gist). Try console first, fall back to platform on a hard
-// failure so a future endpoint cutover doesn't strand stored accounts.
+const CLAUDE_TOKEN_URL: &str = "https://api.anthropic.com/v1/oauth/token";
+// Fallback — verified to accept the same client_id (returned 429 = recognized).
 const CLAUDE_TOKEN_URL_FALLBACK: &str = "https://platform.claude.com/v1/oauth/token";
+/// OAuth scopes — MANDATORY in the refresh body (without it: HTTP 400
+/// 'Invalid request format'). Extracted from Claude Code 2.1.181 binary.
+const CLAUDE_OAUTH_SCOPES: &str = "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
 
 #[derive(serde::Deserialize)]
 struct Refreshed {
@@ -235,6 +232,7 @@ fn refresh_request_body(rt: &str) -> serde_json::Value {
         "grant_type": "refresh_token",
         "refresh_token": rt,
         "client_id": CLAUDE_CLIENT_ID,
+        "scope": CLAUDE_OAUTH_SCOPES,
     })
 }
 
@@ -412,18 +410,33 @@ impl crate::providers::ProviderApi for ClaudeProvider {
     }
 
     async fn fetch(&self) -> Result<ServiceUsage, ProviderError> {
-        // Read the Claude Code OAuth token from the keychain (macOS) or
-        // ~/.claude/.credentials.json. NO in-app refresh — the old client_id
-        // was retired by Anthropic and the new one has an undocumented token
-        // endpoint. The user must run `claude` to refresh; the CLI writes the
-        // fresh token back to the same keychain entry we read from.
         let blob = crate::secrets::read_claude_creds_json()?;
-        let creds = resolve_creds(blob)?;
+        let mut creds = resolve_creds(blob.clone())?;
         let now_ms = chrono::Utc::now().timestamp_millis();
+        // Auto-refresh when expired. The refresh rotates tokens and writes the
+        // new pair back to the keychain so the CLI and app stay in sync.
         if creds.expires_at > 0 && creds.expires_at < now_ms {
-            return Err(ProviderError::Expired(
-                "Claude Code token expired — run `claude` in your terminal to refresh.".into(),
-            ));
+            if let Some(rt) = creds.refresh_token.clone() {
+                match refresh_oauth(&self.http, &rt).await {
+                    Ok(fresh) => {
+                        let exp = fresh.expires_in
+                            .map(|s| now_ms + (s as i64) * 1000)
+                            .unwrap_or(0);
+                        let _ = write_back(&blob, &fresh.access_token, &fresh.refresh_token, exp);
+                        creds.access_token = fresh.access_token;
+                        creds.refresh_token = Some(fresh.refresh_token);
+                    }
+                    Err(_) => {
+                        return Err(ProviderError::Expired(
+                            "Claude Code token expired and refresh failed — run `claude` to re-authenticate.".into(),
+                        ));
+                    }
+                }
+            } else {
+                return Err(ProviderError::Expired(
+                    "Claude Code token expired — run `claude` to refresh.".into(),
+                ));
+            }
         }
         fetch_with(
             &self.http,
@@ -629,7 +642,8 @@ mod tests {
         assert_eq!(b["grant_type"], "refresh_token");
         assert_eq!(b["refresh_token"], "rt-123");
         assert_eq!(b["client_id"], CLAUDE_CLIENT_ID);
-        assert_eq!(b.as_object().unwrap().len(), 3);
+        assert_eq!(b["scope"], CLAUDE_OAUTH_SCOPES);
+        assert_eq!(b.as_object().unwrap().len(), 4);
     }
 
     #[test]

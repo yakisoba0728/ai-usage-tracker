@@ -60,6 +60,35 @@ pub async fn fetch_all(providers: Vec<Box<dyn ProviderApi>>) -> Vec<ServiceUsage
     join_all(futs).await
 }
 
+/// Fetch usage for a manually-added (OAuth) account whose token lives in the store.
+pub async fn fetch_credential(cred: &crate::store::StoredCredential) -> ServiceUsage {
+    let http = crate::http::build_client();
+    let label = cred.label.as_str();
+    let res = match cred.provider {
+        Provider::Codex => crate::providers::codex::fetch_with(
+            &http, &cred.access_token, cred.account_id.as_deref(), &cred.id_token, Some(label),
+        )
+        .await,
+        Provider::Gemini => crate::providers::gemini::fetch_with(&http, &cred.access_token, Some(label)).await,
+        Provider::Copilot => Err(ProviderError::NotLoggedIn(
+            "Copilot usage needs a fine-grained PAT (Plan:read); the OAuth token lacks billing scope".into(),
+        )),
+        _ => Err(ProviderError::NotLoggedIn("manual accounts not supported for this provider".into())),
+    };
+    match res {
+        Ok(u) => u,
+        Err(e) => ServiceUsage {
+            provider: cred.provider,
+            connected: false,
+            plan: None,
+            account: Some(cred.label.clone()),
+            error: Some(e.to_string()),
+            windows: vec![],
+            detail_windows: vec![],
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

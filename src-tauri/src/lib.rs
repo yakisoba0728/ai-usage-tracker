@@ -19,13 +19,14 @@ use tauri::{
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .manage(commands::empty_snapshot_store())
-        .manage(commands::default_config_store())
         .invoke_handler(tauri::generate_handler![
             commands::get_usage,
             commands::refresh_now,
             commands::get_config,
             commands::set_config,
+            commands::start_login,
+            commands::list_accounts,
+            commands::remove_account,
         ])
         .setup(|app| {
             // --- Tray ---

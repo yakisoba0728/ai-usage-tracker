@@ -184,35 +184,47 @@ impl crate::providers::ProviderApi for CodexProvider {
 
     async fn fetch(&self) -> Result<ServiceUsage, ProviderError> {
         let t = read_tokens()?;
-        let mut extra: Vec<(&str, &str)> = vec![("User-Agent", CODEX_UA)];
-        let acc_holder;
-        if let Some(acc) = &t.account_id {
-            acc_holder = acc.clone();
-            extra.push(("ChatGPT-Account-Id", acc_holder.as_str()));
-        }
-        let raw: Value = http::get_json(&self.http, &t.access_token, USAGE_URL, &extra).await?;
-        let u: WhamUsage =
-            serde_json::from_value(raw).map_err(|e| ProviderError::Parse(format!("codex usage: {e}")))?;
+        fetch_with(&self.http, &t.access_token, t.account_id.as_deref(), &t.id_token, None).await
+    }
+}
 
-        let plan = u.plan_type.as_deref().map(capitalize);
-        let account = match (u.email.as_ref(), renewal_date(&t.id_token)) {
+/// Fetch Codex usage given an explicit token (used for manually-added accounts).
+pub(crate) async fn fetch_with(
+    http: &reqwest::Client,
+    access_token: &str,
+    account_id: Option<&str>,
+    id_token: &Option<String>,
+    label_override: Option<&str>,
+) -> Result<ServiceUsage, ProviderError> {
+    let mut extra: Vec<(&str, &str)> = vec![("User-Agent", CODEX_UA)];
+    let acc_holder;
+    if let Some(acc) = account_id {
+        acc_holder = acc.to_string();
+        extra.push(("ChatGPT-Account-Id", acc_holder.as_str()));
+    }
+    let raw: Value = http::get_json(http, access_token, USAGE_URL, &extra).await?;
+    let u: WhamUsage =
+        serde_json::from_value(raw).map_err(|e| ProviderError::Parse(format!("codex usage: {e}")))?;
+    let plan = u.plan_type.as_deref().map(capitalize);
+    let account = match label_override {
+        Some(l) => Some(l.to_string()),
+        None => match (u.email.as_ref(), renewal_date(id_token)) {
             (Some(email), Some(d)) => Some(format!("{email} · renews {d}")),
             (Some(email), None) => Some(email.clone()),
             (None, Some(d)) => Some(format!("renews {d}")),
             (None, None) => None,
-        };
-
-        let (windows, detail_windows) = normalize(&u);
-        Ok(ServiceUsage {
-            provider: Provider::Codex,
-            connected: true,
-            plan,
-            account,
-            error: None,
-            windows,
-            detail_windows,
-        })
-    }
+        },
+    };
+    let (windows, detail_windows) = normalize(&u);
+    Ok(ServiceUsage {
+        provider: Provider::Codex,
+        connected: true,
+        plan,
+        account,
+        error: None,
+        windows,
+        detail_windows,
+    })
 }
 
 #[cfg(test)]

@@ -169,6 +169,62 @@ impl crate::providers::ProviderApi for GeminiProvider {
     }
 }
 
+async fn post_code_assist(
+    http: &reqwest::Client,
+    token: &str,
+    method: &str,
+    payload: Value,
+) -> Result<Value, ProviderError> {
+    let url = format!("{CODE_ASSIST_BASE}:{method}");
+    let resp = http
+        .post(&url)
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Content-Type", "application/json")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| ProviderError::Network(e.to_string()))?;
+    http::send_for_json(resp, &url).await
+}
+
+/// Fetch Gemini usage given an explicit token (manually-added accounts).
+pub(crate) async fn fetch_with(
+    http: &reqwest::Client,
+    token: &str,
+    label_override: Option<&str>,
+) -> Result<ServiceUsage, ProviderError> {
+    let load = post_code_assist(
+        http,
+        token,
+        "loadCodeAssist",
+        json!({ "metadata": { "ideType": "IDE_UNSPECIFIED", "platform": "PLATFORM_UNSPECIFIED", "pluginType": "GEMINI" } }),
+    )
+    .await?;
+    let project = load
+        .get("cloudaicompanionProject")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .ok_or_else(|| ProviderError::Parse("no cloudaicompanionProject".into()))?;
+    let quota_val = post_code_assist(http, token, "retrieveUserQuota", json!({ "project": project })).await?;
+    let quota: QuotaResp =
+        serde_json::from_value(quota_val).map_err(|e| ProviderError::Parse(e.to_string()))?;
+    let tier = load
+        .get("paidTier")
+        .and_then(|t| t.get("name"))
+        .and_then(|n| n.as_str())
+        .map(String::from);
+    let (windows, detail_windows) = normalize(&quota);
+    Ok(ServiceUsage {
+        provider: Provider::Gemini,
+        connected: true,
+        plan: tier,
+        account: label_override.map(|s| s.to_string()),
+        error: None,
+        windows,
+        detail_windows,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

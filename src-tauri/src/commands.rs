@@ -48,7 +48,11 @@ pub fn build_providers(cfg: &AppConfig) -> Vec<Box<dyn ProviderApi>> {
 /// snapshot, and update the tray label to the highest usage percent.
 pub async fn refresh_once(app: &AppHandle, cfg: &ConfigStore, snap: &SnapshotStore) -> UsageSnapshot {
     let providers = build_providers(&*cfg.read().await);
-    let services = fetch_all(providers).await;
+    let mut services = fetch_all(providers).await;
+    // Manually-added (OAuth) accounts from the store, in addition to auto-detected CLI ones.
+    for cred in crate::store::list() {
+        services.push(crate::providers::fetch_credential(&cred).await);
+    }
     let snapshot = UsageSnapshot {
         fetched_at: chrono::Utc::now().timestamp(),
         services,
@@ -96,4 +100,19 @@ pub async fn set_config(
     *cfg.write().await = new;
     crate::scheduler::restart(&app, poll);
     Ok(())
+}
+
+#[tauri::command]
+pub async fn start_login(app: AppHandle, provider: crate::model::Provider) -> Result<crate::login::LoginInfo, String> {
+    crate::login::start(app, provider).await
+}
+
+#[tauri::command]
+pub async fn list_accounts() -> Result<Vec<crate::store::StoredCredential>, String> {
+    Ok(crate::store::list())
+}
+
+#[tauri::command]
+pub async fn remove_account(id: String) -> Result<bool, String> {
+    Ok(crate::store::remove(&id))
 }

@@ -30,3 +30,28 @@ export interface AppConfig {
   poll_seconds: number;
   enabled: [boolean, boolean, boolean, boolean, boolean];
 }
+
+export interface StoredCredential {
+  id: string;
+  provider: Provider;
+  label: string;
+  access_token: string;
+  refresh_token: string | null;
+  expires_at: number;
+  id_token: string | null;
+  account_id: string | null;
+}
+
+export interface LoginInfo {
+  provider: Provider;
+  verification_url: string;
+  user_code: string;
+  expires_in: number;
+}
+
+export interface LoginResult {
+  provider: Provider;
+  ok: boolean;
+  label: string | null;
+  error: string | null;
+}

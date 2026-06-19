@@ -2,6 +2,7 @@ import { Loader2 } from "lucide-react";
 
 import { Header } from "@/components/Header";
 import { ServiceCard } from "@/components/ServiceCard";
+import { AddAccountDialog } from "@/components/AddAccountDialog";
 import { useNow } from "@/hooks/useNow";
 import { useUsage } from "@/hooks/useUsage";
 
@@ -40,15 +41,18 @@ export function Dashboard() {
         />
 
         <main className="mx-auto w-full max-w-6xl flex-1 px-5 py-6 sm:px-6 sm:py-8">
+          <div className="mb-4 flex justify-end">
+            <AddAccountDialog onChanged={refresh} />
+          </div>
           {snapshot == null ? (
             <LoadingState />
           ) : services.length === 0 ? (
             <EmptyState />
           ) : (
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
-              {services.map((service) => (
+              {services.map((service, idx) => (
                 <ServiceCard
-                  key={service.provider}
+                  key={`${service.provider}-${idx}`}
                   service={service}
                   nowMs={nowMs}
                 />

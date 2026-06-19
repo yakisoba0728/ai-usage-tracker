@@ -1,7 +1,6 @@
 import { AlertCircle, ChevronRight } from "lucide-react";
 
 import { BarGauge } from "@/components/Gauge";
-import { RingGauge } from "@/components/RingGauge";
 import { ServiceDetail } from "@/components/ServiceDetail";
 import { StatusDot } from "@/components/StatusDot";
 import { Badge } from "@/components/ui/badge";
@@ -12,7 +11,6 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
-import { formatResetCountdown, formatUsedLimit } from "@/lib/format";
 import type { LimitWindow, Provider, ServiceUsage } from "@/lib/types";
 
 const PROVIDER_TITLES: Record<Provider, string> = {
@@ -23,15 +21,12 @@ const PROVIDER_TITLES: Record<Provider, string> = {
   cursor: "Cursor",
 };
 
-/** Pick the most pressing primary window as the headline (highest used_percent). */
-function pickHeadline(windows: LimitWindow[]): LimitWindow | null {
-  const withPct = windows.filter((w) => w.used_percent != null);
-  if (withPct.length > 0) {
-    return withPct.reduce((a, b) =>
-      (b.used_percent ?? 0) > (a.used_percent ?? 0) ? b : a,
-    );
-  }
-  return windows[0] ?? null;
+/** Fixed card order: 5-hour on top, 7-day/Weekly below, everything else after. */
+function windowRank(label: string): number {
+  const l = label.toLowerCase();
+  if (l.includes("5-hour") || l.includes("5 hour") || l.includes("5h")) return 0;
+  if (l.includes("7-day") || l.includes("7 day") || l.includes("weekly") || l.includes("7d")) return 1;
+  return 2;
 }
 
 export interface ServiceCardProps {
@@ -41,13 +36,9 @@ export interface ServiceCardProps {
 
 export function ServiceCard({ service, nowMs }: ServiceCardProps) {
   const title = PROVIDER_TITLES[service.provider] ?? service.provider;
-  const windows = service.windows ?? [];
-  const headline = service.connected ? pickHeadline(windows) : null;
-  const secondary = headline ? windows.filter((w) => w !== headline) : [];
-  const headlineReset = headline
-    ? formatResetCountdown(headline.resets_at, nowMs)
-    : null;
-  const headlineUsedLimit = headline ? formatUsedLimit(headline) : null;
+  const ordered = [...(service.windows ?? [])].sort(
+    (a, b) => windowRank(a.label) - windowRank(b.label),
+  );
 
   return (
     <Dialog>
@@ -90,45 +81,19 @@ export function ServiceCard({ service, nowMs }: ServiceCardProps) {
             )}
           </div>
 
-          {/* Body */}
+          {/* Body — fixed bars only (5-hour on top, 7-day below). */}
           <div className="mt-4">
-            {service.connected && headline ? (
-              <>
-                <div className="flex items-center gap-4">
-                  <RingGauge value={headline.used_percent} />
-                  <div className="min-w-0 flex-1">
-                    <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-                      {headline.label}
-                    </div>
-                    {headlineReset && (
-                      <div className="mt-1.5 font-mono text-xs tabular-nums text-muted-foreground">
-                        {headlineReset}
-                      </div>
-                    )}
-                    {headlineUsedLimit && (
-                      <div className="mt-0.5 font-mono text-[11px] tabular-nums text-muted-foreground/70">
-                        {headlineUsedLimit}
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {secondary.length > 0 && (
-                  <>
-                    <div className="my-4 h-px bg-white/[0.06]" />
-                    <div className="space-y-3">
-                      {secondary.map((w, i) => (
-                        <BarGauge
-                          key={`${w.label}-${i}`}
-                          window={w}
-                          nowMs={nowMs}
-                          showMeta={false}
-                        />
-                      ))}
-                    </div>
-                  </>
-                )}
-              </>
+            {service.connected && ordered.length > 0 ? (
+              <div className="space-y-3.5">
+                {ordered.map((w: LimitWindow, i: number) => (
+                  <BarGauge
+                    key={`${w.label}-${i}`}
+                    window={w}
+                    nowMs={nowMs}
+                    showMeta
+                  />
+                ))}
+              </div>
             ) : (
               <EmptyState
                 text={

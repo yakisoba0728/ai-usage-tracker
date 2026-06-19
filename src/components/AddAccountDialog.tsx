@@ -249,8 +249,8 @@ export function AddAccountDialog({
                   type="button"
                   disabled={busy !== null}
                   onClick={() => startDeviceCode(sessionFor)}
-                  className="mt-2 text-text-faint underline-offset-2 transition-colors hover:text-signal disabled:opacity-50"
-                  style={{ fontSize: 11 }}
+                  className="-mx-0.5 mt-2 cursor-pointer rounded-sm px-0.5 text-signal underline decoration-signal/40 underline-offset-2 transition-colors hover:decoration-signal disabled:cursor-not-allowed disabled:opacity-50"
+                  style={{ fontSize: 11, fontWeight: 500 }}
                 >
                   Or sign in with {PROVIDER_LABEL[sessionFor]} instead →
                 </button>

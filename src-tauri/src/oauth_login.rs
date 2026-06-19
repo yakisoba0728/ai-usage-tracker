@@ -95,6 +95,7 @@ struct Pending {
     redirect_uri: String,
     token_url: String,
     client_id: String,
+    state: String,
 }
 static PENDING: LazyLock<Mutex<Option<(Provider, Pending)>>> = LazyLock::new(|| Mutex::new(None));
 
@@ -144,6 +145,7 @@ pub fn start(app: AppHandle, provider: Provider) -> Result<String, String> {
                         redirect_uri: redirect_uri.clone(),
                         token_url: spec.token_url.clone(),
                         client_id: spec.client_id.clone(),
+                        state,
                     },
                 ));
             }
@@ -166,7 +168,16 @@ pub async fn exchange_code(app: AppHandle, provider: Provider, code: String) -> 
             _ => return Err("no pending login for this provider".into()),
         }
     };
-    match exchange(&pending.token_url, &pending.client_id, &pending.redirect_uri, &pending.verifier, &code).await {
+    match exchange(
+        &pending.token_url,
+        &pending.client_id,
+        &pending.redirect_uri,
+        &pending.verifier,
+        &code,
+        Some(&pending.state),
+    )
+    .await
+    {
         Ok(t) => {
             let cred = build_credential(provider, &t);
             let label = cred.label.clone();
@@ -259,7 +270,7 @@ fn run_server(
     let Some(code) = got_code else {
         return emit_err(&app, provider, "no code".into());
     };
-    match rt.block_on(exchange(&token_url, &client_id, &redirect_uri, &verifier, &code)) {
+    match rt.block_on(exchange(&token_url, &client_id, &redirect_uri, &verifier, &code, None)) {
         Ok(t) => {
             let cred = build_credential(provider, &t);
             let label = cred.label.clone();
@@ -279,6 +290,7 @@ async fn exchange(
     redirect_uri: &str,
     verifier: &str,
     code: &str,
+    state: Option<&str>,
 ) -> Result<Value, String> {
     let client = reqwest::Client::new();
     // Anthropic's token endpoint rejects form-encoding ("Invalid request
@@ -290,6 +302,7 @@ async fn exchange(
             "redirect_uri": redirect_uri,
             "client_id": client_id,
             "code_verifier": verifier,
+            "state": state.unwrap_or(""),
         });
         client
             .post(token_url)

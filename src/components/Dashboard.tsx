@@ -20,7 +20,6 @@ export function Dashboard() {
   // (primary + detail) — the honest "peak" surfaced in the header.
   let peak: number | null = null;
   for (const s of services) {
-    if (!s.connected) continue;
     for (const w of [...(s.windows ?? []), ...(s.detail_windows ?? [])]) {
       if (w.used_percent != null && (peak == null || w.used_percent > peak)) {
         peak = w.used_percent;
@@ -40,7 +39,7 @@ export function Dashboard() {
           nowMs={nowMs}
           peak={peak}
           connectedCount={connectedCount}
-          totalCount={services.length}
+          totalCount={snapshot?.services?.length ?? 0}
         />
 
         <main className="mx-auto w-full max-w-6xl flex-1 px-5 py-6 sm:px-6 sm:py-8">

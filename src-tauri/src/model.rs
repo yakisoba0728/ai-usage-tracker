@@ -59,7 +59,7 @@ impl UsageSnapshot {
         self.services
             .iter()
             .filter(|s| s.connected)
-            .flat_map(|s| s.windows.iter())
+            .flat_map(|s| s.windows.iter().chain(s.detail_windows.iter()))
             .filter_map(|w| w.used_percent)
             .fold(None, |acc, v| match acc {
                 None => Some(v),

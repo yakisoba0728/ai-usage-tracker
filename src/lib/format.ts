@@ -38,19 +38,6 @@ export function percentBarColor(p: number | null): string {
   }
 }
 
-/** Stroke color class for a usage percent (SVG ring). */
-export function percentStrokeColor(p: number | null): string {
-  switch (percentSeverity(p)) {
-    case "crit":
-      return "stroke-crit";
-    case "warn":
-      return "stroke-warn";
-    case "ok":
-      return "stroke-ok";
-    default:
-      return "stroke-muted-foreground/30";
-  }
-}
 
 /** "72%" or "—" when there is no value; whole-number percent. */
 export function formatPercent(p: number | null): string {

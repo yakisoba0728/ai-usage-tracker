@@ -1,6 +1,14 @@
-//! Browser OAuth login via a localhost callback server (Codex): the provider
-//! allows a localhost redirect, so we run a local callback server and capture
-//! the code automatically.
+//! Browser OAuth login via a localhost callback server. The provider allows a
+//! localhost redirect, so we run a local callback server and capture the
+//! authorization code automatically. Used by Codex (OpenAI PKCE) and Gemini
+//! (Google Authorization Code + loopback, matching gemini-cli's oauth2.ts).
+
+//! Gemini CLI's public installed-app client (same values gemini-cli ships).
+//! The "secret" is not actually secret for installed apps (RFC 6749 §2.1);
+//! Google still requires it in the token exchange for this client type.
+const GEMINI_CID: &str =
+    "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com";
+const GEMINI_CSEC: &str = "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";
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex};
@@ -30,6 +38,9 @@ struct OAuthSpec {
     authorize_url: String,
     token_url: String,
     client_id: String,
+    /// Optional client_secret for installed-app clients (Google). PKCE alone
+    /// also works, but matching gemini-cli exactly (id+secret) is safest.
+    client_secret: Option<String>,
     scope: String,
     extra_params: Vec<(&'static str, &'static str)>,
     mode: LoginMode,
@@ -41,11 +52,28 @@ fn spec_for(p: Provider) -> Option<OAuthSpec> {
             authorize_url: "https://auth.openai.com/oauth/authorize".into(),
             token_url: "https://auth.openai.com/oauth/token".into(),
             client_id: "app_EMoamEEZ73f0CkXaXp7hrann".into(),
+            client_secret: None,
             scope: "openid profile email offline_access".into(),
             extra_params: vec![
                 ("originator", "codex_cli_rs"),
                 ("codex_cli_simplified_flow", "true"),
                 ("id_token_add_organizations", "true"),
+            ],
+            mode: LoginMode::LocalServer,
+        }),
+        Provider::Gemini => Some(OAuthSpec {
+            // Google Authorization Code + loopback redirect (gemini-cli pattern).
+            // The Gemini client_id does NOT support the device-code grant —
+            // googleapis.com/device/code returns "invalid_client: Invalid
+            // client type" — so we use the same loopback flow gemini-cli uses.
+            authorize_url: "https://accounts.google.com/o/oauth2/v2/auth".into(),
+            token_url: "https://oauth2.googleapis.com/token".into(),
+            client_id: GEMINI_CID.into(),
+            client_secret: Some(GEMINI_CSEC.into()),
+            scope: "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile".into(),
+            extra_params: vec![
+                ("access_type", "offline"),
+                ("prompt", "consent"),
             ],
             mode: LoginMode::LocalServer,
         }),
@@ -95,9 +123,10 @@ pub fn start(app: AppHandle, provider: Provider) -> Result<String, String> {
             }
             let app2 = app.clone();
             let client_id = spec.client_id.clone();
+            let client_secret = spec.client_secret.clone();
             let token_url = spec.token_url.clone();
             std::thread::spawn(move || {
-                run_server(app2, provider, server, client_id, token_url, redirect_uri, verifier, state, cancelled);
+                run_server(app2, provider, server, client_id, client_secret, token_url, redirect_uri, verifier, state, cancelled);
             });
             Ok(auth_url)
         }
@@ -110,14 +139,15 @@ fn run_server(
     provider: Provider,
     server: Server,
     client_id: String,
+    client_secret: Option<String>,
     token_url: String,
     redirect_uri: String,
     verifier: String,
     expected_state: String,
     cancelled: std::sync::Arc<AtomicBool>,
 ) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(TIMEOUT_SECS);
 
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(TIMEOUT_SECS);
     let mut got_code: Option<String> = None;
     while got_code.is_none() {
         if cancelled.load(Ordering::SeqCst) {
@@ -173,7 +203,7 @@ fn run_server(
     let Some(code) = got_code else {
         return emit_err(&app, provider, "no code".into());
     };
-    match tauri::async_runtime::block_on(exchange(&token_url, &client_id, &redirect_uri, &verifier, &code, None)) {
+    match tauri::async_runtime::block_on(exchange(&token_url, &client_id, client_secret.as_deref(), &redirect_uri, &verifier, &code, None)) {
         Ok(t) => {
             let cred = build_credential(provider, &t);
             let label = cred.label.clone();
@@ -190,19 +220,25 @@ fn run_server(
 async fn exchange(
     token_url: &str,
     client_id: &str,
+    client_secret: Option<&str>,
     redirect_uri: &str,
     verifier: &str,
     code: &str,
     _state: Option<&str>,
 ) -> Result<Value, String> {
     let client = crate::http::build_client();
-    let body = format!(
+    // Optional client_secret appended after the standard PKCE body (Google
+    // installed-app clients require it even with PKCE).
+    let mut body = format!(
         "grant_type=authorization_code&code={}&redirect_uri={}&client_id={}&code_verifier={}",
         urlencoding::encode(code),
         urlencoding::encode(redirect_uri),
         urlencoding::encode(client_id),
         urlencoding::encode(verifier),
     );
+    if let Some(secret) = client_secret {
+        body.push_str(&format!("&client_secret={}", urlencoding::encode(secret)));
+    }
     let resp = client
         .post(token_url)
         .header("Content-Type", "application/x-www-form-urlencoded")
@@ -256,6 +292,13 @@ fn build_credential(provider: Provider, tokens: &Value) -> StoredCredential {
                 .map(String::from);
             (email.unwrap_or_else(|| "Codex account".into()), acct)
         }
+        (Provider::Gemini, Some(jwt)) => {
+            // Google id_token JWT carries the user email at the top level.
+            let email = jwt_payload(jwt)
+                .ok()
+                .and_then(|c| c.get("email").and_then(|v| v.as_str()).map(String::from));
+            (email.unwrap_or_else(|| "Gemini account".into()), None)
+        }
         _ => (format!("{provider:?} account"), None),
     };
 
@@ -293,9 +336,8 @@ fn build_authorize_url(spec: &OAuthSpec, redirect_uri: &str, challenge: &str, st
 }
 
 fn pkce_verifier() -> String {
-    let mut bytes = [0u8; 64];
-    rand::rng().fill_bytes(&mut bytes);
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+    // RFC 7636 §4.1: 43–128 chars; 32 random bytes → 43 base64url chars.
+    random_b64(32)
 }
 
 fn pkce_challenge(verifier: &str) -> String {
@@ -339,5 +381,21 @@ mod tests {
         let url = build_authorize_url(&spec, "http://localhost:1455/auth/callback", "chk", "st");
         assert!(url.contains("originator=codex_cli_rs"));
         assert!(url.contains("codex_cli_simplified_flow=true"));
+    }
+
+    #[test]
+    fn gemini_spec_uses_loopback_oauth_with_secret() {
+        // Gemini must NOT use device-code (google rejects it with
+        // `invalid_client: Invalid client type`); it uses Authorization Code +
+        // loopback redirect like gemini-cli.
+        let spec = spec_for(Provider::Gemini).expect("gemini must support OAuth");
+        assert!(spec.client_secret.is_some(), "gemini client_secret required");
+        assert!(spec.authorize_url.contains("accounts.google.com"));
+        assert!(spec.token_url.contains("oauth2.googleapis.com"));
+        assert!(spec.scope.contains("cloud-platform"));
+        assert!(spec.scope.contains("userinfo.email"));
+        // access_type=offline + prompt=consent forces a refresh_token.
+        assert!(spec.extra_params.iter().any(|(k, v)| *k == "access_type" && *v == "offline"));
+        assert!(spec.extra_params.iter().any(|(k, v)| *k == "prompt" && *v == "consent"));
     }
 }

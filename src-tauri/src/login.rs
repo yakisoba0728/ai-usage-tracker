@@ -2,9 +2,11 @@
 //! manually-added account is treated as "logged in via that CLI". The backend
 //! requests the device code, the UI opens the verification URL in the user's
 //! browser, and this module polls to completion then persists the credential.
-//! Feasible for Codex / Copilot / Gemini (login surfaces are not bot-gated).
-//! Claude (console.anthropic.com is Cloudflare-blocked) and Cursor (no public
-//! client_id) are not supported here.
+//! Feasible for Codex / Copilot. Gemini uses loopback OAuth (see
+//! `oauth_login.rs`); its Google installed-app client_id does not support the
+//! device-code grant (`invalid_client: Invalid client type`). Claude
+//! (Cloudflare-blocked) and Cursor (no public client_id) are not supported
+//! here either.
 
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
@@ -17,10 +19,6 @@ const CODEX_ISSUER: &str = "https://auth.openai.com";
 const CODEX_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 
 const GH_CLIENT_ID: &str = "178c6fc778ccc68e1d6a";
-
-const GEMINI_CID: &str =
-    "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com";
-const GEMINI_CSEC: &str = "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";
 
 const POLL_MAX_SECS: u64 = 15 * 60;
 
@@ -47,8 +45,7 @@ pub async fn start(app: AppHandle, provider: Provider) -> Result<LoginInfo, Stri
     match provider {
         Provider::Codex => start_codex(app, http, provider).await,
         Provider::Copilot => start_github(app, http, provider).await,
-        Provider::Gemini => start_gemini(app, http, provider).await,
-        _ => Err(format!("{provider:?} does not support in-app login")),
+        _ => Err(format!("{provider:?} does not support device-code login; Gemini uses browser OAuth")),
     }
 }
 
@@ -310,96 +307,11 @@ async fn poll_github(
     })
 }
 
-// ---- Gemini (Google) ----
-
-#[derive(Deserialize)]
-struct GDeviceCode {
-    device_code: String,
-    user_code: String,
-    verification_url: String,
-    #[serde(default)] interval: u64,
-}
-#[derive(Deserialize)]
-struct GToken {
-    #[serde(default)] access_token: Option<String>,
-    #[serde(default)] refresh_token: Option<String>,
-    #[serde(default)] expires_in: Option<u64>,
-    #[serde(default)] id_token: Option<String>,
-    #[serde(default)] error: Option<String>,
-}
-
-async fn start_gemini(app: AppHandle, http: reqwest::Client, provider: Provider) -> Result<LoginInfo, String> {
-    let r: GDeviceCode = post_form(
-        &http,
-        "https://oauth2.googleapis.com/device/code",
-        &[
-            ("client_id", GEMINI_CID),
-            ("scope", "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email"),
-        ],
-    )
-    .await?;
-    let interval = r.interval.max(5);
-    let info = LoginInfo {
-        provider,
-        verification_url: r.verification_url.clone(),
-        user_code: r.user_code.clone(),
-        expires_in: 900,
-    };
-    let app2 = app.clone();
-    tauri::async_runtime::spawn(async move {
-        let res = poll_gemini(http, r.device_code, interval).await;
-        finish(&app2, provider, res);
-    });
-    Ok(info)
-}
-
-async fn poll_gemini(http: reqwest::Client, device_code: String, interval: u64) -> Result<StoredCredential, String> {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(POLL_MAX_SECS);
-    let tok = loop {
-        let t: GToken = post_form(
-            &http,
-            "https://oauth2.googleapis.com/token",
-            &[
-                ("client_id", GEMINI_CID),
-                ("client_secret", GEMINI_CSEC),
-                ("device_code", &device_code),
-                ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
-            ],
-        )
-        .await?;
-        if t.access_token.is_some() {
-            break t;
-        }
-        if matches!(t.error.as_deref(), Some("authorization_pending") | Some("slow_down"))
-            && std::time::Instant::now() < deadline
-        {
-            let extra = if t.error.as_deref() == Some("slow_down") { 5 } else { 0 };
-            tokio::time::sleep(std::time::Duration::from_secs(interval + extra)).await;
-            continue;
-        }
-        return Err(t.error.unwrap_or_else(|| "google device: no token".into()));
-    };
-    let label = tok
-        .id_token
-        .as_deref()
-        .and_then(|t| jwt_payload(t).ok())
-        .and_then(|c| c.get("email").and_then(|v| v.as_str()).map(String::from))
-        .unwrap_or_else(|| "Gemini account".into());
-    let expires_at = tok
-        .expires_in
-        .map(|s| chrono::Utc::now().timestamp_millis() + (s as i64) * 1000)
-        .unwrap_or(0);
-    Ok(StoredCredential {
-        id: String::new(),
-        provider: Provider::Gemini,
-        label,
-        access_token: tok.access_token.unwrap(),
-        refresh_token: tok.refresh_token,
-        expires_at,
-        id_token: tok.id_token,
-        account_id: None,
-    })
-}
+// Gemini used to live here as a device-code flow, but Google's installed-app
+// client_id (the one gemini-cli ships) rejects the device-code grant with
+// `invalid_client: Invalid client type`. Gemini now uses loopback OAuth in
+// `oauth_login.rs` (Authorization Code + PKCE + client_secret, matching
+// gemini-cli's `oauth2.ts`).
 
 fn interval_secs(v: &serde_json::Value, default: u64) -> u64 {
     v.as_u64()

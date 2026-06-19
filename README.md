@@ -11,17 +11,8 @@ usage API directly — **no estimation, no proxy server, tokens stay on-device**
 >    Gemini CLI, Copilot CLI, Cursor) and use it as-is.
 > 2. **Add account** in-app — paste an API key / session key, or complete an
 >    OAuth device-code / browser-callback flow using the CLI's *public*
->    `client_id`. Stored accounts live in `accounts.json` and are refreshed
->    in-app when they expire.
-
-## Supported providers
-
-| Provider | Source of credential | Usage API | Refresh |
-|---|---|---|---|
-| **Claude** | Claude Code — macOS Keychain (`Claude Code-credentials`) / `~/.claude/.credentials.json` (auto); or a pasted `claude.ai` **session key** (manual) | `api.anthropic.com/api/oauth/usage` (+ `/profile`) for OAuth; `claude.ai/api/organizations/{uuid}/usage` for session-key | OAuth: self-refresh via `console.anthropic.com/v1/oauth/token` (rotates the refresh_token; writes back so the CLI stays in sync). Session key: not refreshable. Modeled on `claude-meter`. |
-| **Codex** | Codex CLI — `~/.codex/auth.json` (`$CODEX_HOME` honored) (auto); or in-app **browser OAuth** (manual) | `chatgpt.com/backend-api/wham/usage` with `codex_cli_rs/` UA + `ChatGPT-Account-Id` | OAuth: self-refresh via `auth.openai.com/oauth/token` (`grant_type=refresh_token`, client_id `app_EMoamEEZ73f0CkXaXp7hrann`). |
-| **Gemini** | Gemini CLI — `~/.gemini/oauth_creds.json` (auto); or in-app **device-code OAuth** (manual) | Google Code Assist `loadCodeAssist` / `retrieveUserQuota` | OAuth: self-refresh via `oauth2.googleapis.com/token` reusing the Gemini CLI's public client_id/secret. |
-| **GitHub Copilot** | Copilot CLI — macOS Keychain `copilot-cli` / `~/.copilot/config.json` (auto); or a pasted **PAT / OAuth token** (manual) | `api.github.com/copilot_internal/user` with `Editor-Version`, `Editor-Plugin-Version`, `Copilot-Integration-Id` headers | No refresh — GitHub OAuth/PAT tokens are non-expiring. |
+| **Gemini** | Gemini CLI — `~/.gemini/oauth_creds.json` (auto); or in-app **browser OAuth** (manual) | Google Code Assist `loadCodeAssist` / `retrieveUserQuota` | OAuth: self-refresh via `oauth2.googleapis.com/token` reusing the Gemini CLI's public client_id/secret. In-app login uses Authorization Code + loopback redirect (the same flow `gemini` uses); Google's installed-app client_id does NOT support the device-code grant. |
+| **GitHub Copilot** | Copilot CLI — macOS Keychain `copilot-cli` / `~/.copilot/config.json` (auto); or **in-app GitHub device-code OAuth** (`gho_` token) **or** a pasted token (manual) | `api.github.com/copilot_internal/user` with `Editor-Version`, `Editor-Plugin-Version`, `Copilot-Integration-Id` headers | No refresh — GitHub OAuth/PAT tokens are non-expiring. Accepted token types: `gho_` (OAuth), `ghu_` (GitHub App user), `github_pat_` (fine-grained PAT with the **Copilot Requests** account permission). Classic `ghp_` PATs are **not** supported. |
 | **Cursor** (experimental) | `state.vscdb` → `ItemTable[cursorAuth/accessToken]` (auto-only — no add flow) | Connect-RPC `api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage` | No public refresh path. |
 | **z.ai** (GLM Coding Plan) | `ZAI_API_KEY` env (auto); or a pasted **API key** (manual) | `api.z.ai/api/monitor/usage/quota/limit` (community-documented; returns 5h + weekly limits) | No refresh — long-lived API key. |
 

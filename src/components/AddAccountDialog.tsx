@@ -26,7 +26,14 @@ import type { AccountInfo, LoginInfo, Provider } from "@/lib/types";
 /** Providers that add via pasting a raw key (no OAuth round-trip). */
 const SESSION_KEY: Provider[] = ["claude", "copilot", "zai"];
 /** Providers that add via browser + localhost-callback OAuth. */
-const BROWSER_OAUTH: Provider[] = ["codex"];
+const BROWSER_OAUTH: Provider[] = ["codex", "gemini"];
+/**
+ * Providers that ALSO support device-code OAuth as an alternative to pasting
+ * a key. Shown as a "Sign in with X" link in the session-key panel.
+ * - copilot: GitHub OAuth device-code (same flow `copilot login` uses, with
+ *   the GitHub CLI's public client_id). Returns a `gho_…` token.
+ */
+const SESSION_KEY_WITH_OAUTH: Provider[] = ["copilot"];
 
 /** Providers with an add flow (cursor is CLI-detected only — no add flow). */
 const SUPPORTED: Provider[] = ["claude", "codex", "gemini", "copilot", "zai"];
@@ -34,7 +41,7 @@ const SUPPORTED: Provider[] = ["claude", "codex", "gemini", "copilot", "zai"];
 /** Where to find the key, per session-key provider. */
 const SESSION_HINT: Partial<Record<Provider, string>> = {
   claude: "claude.ai → DevTools → Application → Cookies → “sessionKey” (sk-ant-…).",
-  copilot: "GitHub → Settings → Developer settings → token, or your Copilot session token.",
+  copilot: "A GitHub token with Copilot access: gho_ (OAuth), ghu_ (GitHub App), or github_pat_ (fine-grained PAT with the “Copilot Requests” permission). Classic ghp_ tokens do NOT work.",
   zai: "Paste your z.ai GLM API key or session key.",
 };
 
@@ -97,6 +104,22 @@ export function AddAccountDialog({
     };
   }, [onChanged, onOpenChange]);
 
+  // Device-code OAuth — used directly for non-session/non-browser providers
+  // AND as a fallback for SESSION_KEY_WITH_OAUTH providers (e.g. Copilot).
+  async function startDeviceCode(p: Provider) {
+    setBusy(p);
+    setSessionFor(null);
+    try {
+      const i = await startLogin(p);
+      setInfo(i);
+      await openUrl(i.verification_url);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function start(p: Provider) {
     setError(null);
     setInfo(null);
@@ -107,18 +130,17 @@ export function AddAccountDialog({
         setBusy(null);
         setSessionFor(p);
       } else if (BROWSER_OAUTH.includes(p)) {
+        // Codex (OpenAI PKCE) and Gemini (Google Authorization Code + loopback,
+        // matching gemini-cli — Google's installed-app client_id does NOT
+        // support the device-code grant).
         setBusy(p);
         const url = await loginOAuth(p);
         setInfo({ provider: p, verification_url: url, user_code: "", expires_in: 300 });
         await openUrl(url);
         setBusy(null);
       } else {
-        // Device-code OAuth (Gemini, and any future provider not above).
-        setBusy(p);
-        const i = await startLogin(p);
-        setInfo(i);
-        await openUrl(i.verification_url);
-        setBusy(null);
+        // Device-code OAuth fallback.
+        await startDeviceCode(p);
       }
     } catch (e) {
       setError(String(e));
@@ -221,6 +243,17 @@ export function AddAccountDialog({
                 <p className="mt-2 leading-relaxed text-text-faint" style={{ fontSize: 11 }}>
                   {SESSION_HINT[sessionFor]}
                 </p>
+              )}
+              {SESSION_KEY_WITH_OAUTH.includes(sessionFor) && (
+                <button
+                  type="button"
+                  disabled={busy !== null}
+                  onClick={() => startDeviceCode(sessionFor)}
+                  className="mt-2 text-text-faint underline-offset-2 transition-colors hover:text-signal disabled:opacity-50"
+                  style={{ fontSize: 11 }}
+                >
+                  Or sign in with {PROVIDER_LABEL[sessionFor]} instead →
+                </button>
               )}
             </Panel>
           )}

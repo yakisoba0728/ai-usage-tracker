@@ -25,9 +25,12 @@ pub fn default_config_store() -> ConfigStore {
 
 pub fn build_providers(cfg: &AppConfig) -> Vec<Box<dyn ProviderApi>> {
     let mut v: Vec<Box<dyn ProviderApi>> = Vec::new();
-    // Order MUST match [Claude, Codex, Gemini, Copilot, Cursor].
-    // Claude is NOT auto-built — it uses a manually-added session key (OAuth
-    // token exchange is blocked/rate-limited by Anthropic).
+    // Order MUST match [Claude, Codex, Gemini, Copilot, Cursor]. Local parsing
+    // (keychain / credential files) stays for ALL providers; Claude additionally
+    // supports a pasted session key via "Add account".
+    if cfg.enabled[0] {
+        v.push(Box::new(crate::providers::claude::ClaudeProvider::new()));
+    }
     if cfg.enabled[1] {
         v.push(Box::new(crate::providers::codex::CodexProvider::new()));
     }

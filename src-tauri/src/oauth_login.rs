@@ -57,7 +57,7 @@ fn spec_for(p: Provider) -> Option<OAuthSpec> {
         }),
         Provider::Claude => Some(OAuthSpec {
             authorize_url: "https://claude.com/cai/oauth/authorize".into(),
-            token_url: "https://console.anthropic.com/v1/oauth/token".into(),
+            token_url: "https://platform.claude.com/v1/oauth/token".into(),
             client_id: "9d1c250a-e61b-44d9-88ed-5944d1962f5e".into(),
             scope:
                 "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
@@ -283,7 +283,7 @@ async fn exchange(
     let client = reqwest::Client::new();
     // Anthropic's token endpoint rejects form-encoding ("Invalid request
     // format"); it wants JSON. OpenAI accepts form-encoding.
-    let resp = if token_url.contains("anthropic.com") {
+    let resp = if !token_url.contains("openai.com") {
         let body = serde_json::json!({
             "grant_type": "authorization_code",
             "code": code,

@@ -404,6 +404,21 @@ struct WebUsage {
     #[serde(default)] seven_day_opus: Option<WebWindow>,
 }
 
+#[derive(Deserialize)]
+struct WebAccount {
+    #[serde(default, rename = "email_address")] email_address: Option<String>,
+    #[serde(default)] memberships: Vec<WebMembership>,
+}
+#[derive(Deserialize)]
+struct WebMembership {
+    #[serde(default)] organization: Option<WebMemberOrg>,
+}
+#[derive(Deserialize)]
+struct WebMemberOrg {
+    #[serde(default)] uuid: Option<String>,
+    #[serde(default)] rate_limit_tier: Option<String>,
+}
+
 pub(crate) async fn fetch_with_session_key(
     http: &reqwest::Client,
     session_key: &str,
@@ -436,6 +451,33 @@ pub(crate) async fn fetch_with_session_key(
     let u: WebUsage =
         serde_json::from_value(v).map_err(|e| ProviderError::Parse(format!("usage: {e}")))?;
 
+    // Best-effort: enrich with email + plan tier so the card matches the
+    // locally-parsed Claude card (plan badge + account line).
+    let (email, tier) = match http
+        .get(format!("https://claude.ai/api/organizations/{}/account", org.uuid))
+        .header("Cookie", &cookie)
+        .header("Accept", "application/json")
+        .send()
+        .await
+    {
+        Ok(r) => crate::http::send_for_json(r, "claude.ai/account")
+            .await
+            .ok()
+            .and_then(|v| serde_json::from_value::<WebAccount>(v).ok())
+            .map(|a| {
+                let tier = a
+                    .memberships
+                    .iter()
+                    .filter_map(|m| m.organization.as_ref())
+                    .find(|o| o.uuid.as_deref() == Some(org.uuid.as_str()))
+                    .or_else(|| a.memberships.iter().filter_map(|m| m.organization.as_ref()).next())
+                    .and_then(|o| o.rate_limit_tier.clone());
+                (a.email_address, tier)
+            })
+            .unwrap_or((None, None)),
+        Err(_) => (None, None),
+    };
+
     let win = |label: &str, w: &Option<WebWindow>| -> Option<LimitWindow> {
         w.as_ref().map(|w| LimitWindow {
             label: label.into(),
@@ -462,8 +504,8 @@ pub(crate) async fn fetch_with_session_key(
     Ok(ServiceUsage {
         provider: Provider::Claude,
         connected: true,
-        plan: org.name,
-        account: None,
+        plan: format_plan(&tier, &None).or(org.name),
+        account: email,
         error: None,
         windows,
         detail_windows: detail,

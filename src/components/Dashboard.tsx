@@ -1,4 +1,3 @@
-import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 
 import { Header } from "@/components/Header";
@@ -6,25 +5,16 @@ import { ServiceCard } from "@/components/ServiceCard";
 import { AddAccountDialog } from "@/components/AddAccountDialog";
 import { useNow } from "@/hooks/useNow";
 import { useUsage } from "@/hooks/useUsage";
-import { loginOptions } from "@/lib/ipc";
-import type { Provider } from "@/lib/types";
 
 export function Dashboard() {
   const { snapshot, loading, refresh } = useUsage();
   const nowMs = useNow(1000);
-  const [loginable, setLoginable] = useState<Provider[]>([]);
 
-  useEffect(() => {
-    loginOptions().then(setLoginable).catch(() => undefined);
-  }, []);
-
-  // Show a card if the provider connected OR can be logged in from the app
-  // (so an expired/missing token — e.g. Claude — stays visible + re-authable,
-  // while providers with no login path stay hidden).
-  const services = (snapshot?.services ?? []).filter(
-    (s) => s.connected || loginable.includes(s.provider),
-  );
-  const connectedCount = services.filter((s) => s.connected).length;
+  // Only show connected/detected providers. Not-yet-detected ones stay hidden
+  // and appear automatically once a token is found (local parsing) or an
+  // account is added.
+  const services = (snapshot?.services ?? []).filter((s) => s.connected);
+  const connectedCount = services.length;
 
   // Highest used_percent across every window of every connected service
   // (primary + detail) — the honest "peak" surfaced in the header.

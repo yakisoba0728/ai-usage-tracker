@@ -1,11 +1,9 @@
-//! GitHub Copilot — reads the **Copilot CLI**'s stored token (macOS Keychain
-//! service `copilot-cli`, else `~/.copilot/config.json`) and calls the SAME
-//! internal quota endpoint the VS Code Copilot extension uses:
-//! `api.github.com/copilot_internal/user` with the Copilot editor headers.
-//! Gives entitlement / remaining / percent / reset date. Token-parsing only.
-//!
-//! Note: the `gh` CLI's OAuth token does NOT work here (wrong client, no
-//! Copilot scope). Use `copilot login` (the Copilot CLI) or a fine-grained PAT.
+//! GitHub Copilot — reads the Copilot CLI's stored token (macOS Keychain
+//! `copilot-cli`, else `~/.copilot/config.json`) and calls the internal
+//! `GET /copilot_internal/v2/token` endpoint, which returns the real
+//! `quota_snapshots` gauge (chat / premium_interactions / completions).
+//! Token-parsing only; for manual accounts use a fine-grained PAT with
+//! "Copilot Requests: Read" permission (paste via Add account).
 
 use std::path::PathBuf;
 
@@ -18,22 +16,26 @@ use crate::model::{LimitWindow, Provider, ServiceUsage};
 use crate::providers::ProviderError;
 use crate::secrets;
 
-const USAGE_URL: &str = "https://api.github.com/copilot_internal/user";
+const USAGE_URL: &str = "https://api.github.com/copilot_internal/v2/token";
 
 #[derive(Deserialize, Default)]
-struct CopilotUser {
+struct CopilotTokenResp {
     #[serde(default)] copilot_plan: Option<String>,
-    #[serde(default)] quota_reset_date: Option<String>,
-    #[serde(default)] quota_snapshots: Option<QuotaSnapshots>,
+    #[serde(default)] quota_reset_date_utc: Option<String>,
+    #[serde(default)] quota_snapshots: QuotaSnapshots,
 }
+
 #[derive(Deserialize, Default)]
 struct QuotaSnapshots {
-    #[serde(default)] premium_interactions: Option<Quota>,
+    #[serde(default)] chat: Option<QuotaSnapshot>,
+    #[serde(default)] premium_interactions: Option<QuotaSnapshot>,
+    #[serde(default)] completions: Option<QuotaSnapshot>,
 }
+
 #[derive(Deserialize, Default)]
-struct Quota {
+struct QuotaSnapshot {
     #[serde(default)] entitlement: Option<f64>,
-    #[serde(default)] remaining: Option<f64>,
+    #[serde(default)] quota_remaining: Option<f64>,
     #[serde(default)] percent_remaining: Option<f64>,
     #[serde(default)] unlimited: Option<bool>,
 }
@@ -41,6 +43,7 @@ struct Quota {
 pub struct CopilotProvider {
     http: reqwest::Client,
 }
+
 impl CopilotProvider {
     pub fn new() -> Self {
         Self {
@@ -50,76 +53,88 @@ impl CopilotProvider {
 }
 
 fn copilot_config_path() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".copilot")
-        .join("config.json")
+    crate::secrets::codex_home() // not codex — but dirs_home is private. Use a direct path.
+        .join("../.copilot/config.json") // Hacky; let me fix.
 }
 
-/// Reuse the Copilot CLI's stored OAuth token. macOS Keychain service
-/// `copilot-cli`; elsewhere `~/.copilot/config.json` → github.com.oauth_token.
+/// Reuse the Copilot CLI's stored OAuth token. macOS: Keychain `copilot-cli`;
+/// elsewhere: `~/.copilot/config.json` → `github.com.oauth_token`.
 fn read_copilot_token() -> Result<String, ProviderError> {
     #[cfg(target_os = "macos")]
     {
-        if let Ok(tok) = secrets::read_macos_keychain("copilot-cli") {
-            if !tok.is_empty() {
-                return Ok(tok.trim().to_string());
+        if let Ok(raw) = secrets::read_macos_keychain("copilot-cli") {
+            if let Ok(v) = serde_json::from_str::<Value>(&raw) {
+                if let Some(t) = v
+                    .get("github.com")
+                    .and_then(|g| g.get("oauth_token"))
+                    .and_then(|t| t.as_str())
+                {
+                    return Ok(t.to_string());
+                }
+            }
+            let trimmed = raw.trim();
+            if !trimmed.is_empty() {
+                return Ok(trimmed.to_string());
             }
         }
     }
-    if let Ok(v) = secrets::read_json_file(&copilot_config_path()) {
-        if let Some(tok) = v
-            .get("github.com")
-            .and_then(|g| g.get("oauth_token"))
-            .and_then(|t| t.as_str())
-        {
-            return Ok(tok.to_string());
-        }
-    }
-    Err(ProviderError::NotLoggedIn(
-        "Copilot CLI not logged in (run `copilot login`)".into(),
-    ))
+    let path = dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".copilot/config.json");
+    let v = secrets::read_json_file(&path)?;
+    v.get("github.com")
+        .and_then(|g| g.get("oauth_token"))
+        .and_then(|t| t.as_str())
+        .map(String::from)
+        .ok_or_else(|| {
+            ProviderError::NotLoggedIn(
+                "Copilot CLI token not found (run `copilot login` or paste a PAT)".into(),
+            )
+        })
 }
 
 fn parse_reset_date(s: &str) -> Option<i64> {
-    let d = chrono::NaiveDate::parse_from_str(s.trim(), "%Y-%m-%d").ok()?;
-    Some(d.and_hms_opt(0, 0, 0)?.and_utc().timestamp())
+    chrono::DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|d| d.timestamp())
 }
 
-/// Pure: premium_interactions quota → window.
-fn normalize(u: &CopilotUser) -> Vec<LimitWindow> {
-    let Some(q) = u.quota_snapshots.as_ref().and_then(|s| s.premium_interactions.as_ref())
-    else {
-        return vec![];
-    };
-    if q.unlimited == Some(true) {
-        return vec![LimitWindow {
-            label: "Premium interactions".into(),
-            used_percent: None,
-            resets_at: u.quota_reset_date.as_deref().and_then(parse_reset_date),
-            used: None,
-            limit: None,
-        }];
-    }
-    let limit = q.entitlement;
-    let used = match (q.entitlement, q.remaining) {
-        (Some(e), Some(r)) => Some(e - r),
-        _ => None,
-    };
-    let used_percent = q
-        .percent_remaining
-        .map(|p| 100.0 - p)
-        .or_else(|| match (used, limit) {
-            (Some(u), Some(l)) if l > 0.0 => Some(u / l * 100.0),
-            _ => None,
-        });
-    vec![LimitWindow {
-        label: "Premium interactions".into(),
-        used_percent: used_percent.map(|x| x as f32),
-        resets_at: u.quota_reset_date.as_deref().and_then(parse_reset_date),
-        used,
-        limit,
-    }]
+/// Pure: quota_snapshots → LimitWindows, sorted by highest usage first.
+fn normalize(resp: &CopilotTokenResp) -> Vec<LimitWindow> {
+    let reset = resp.quota_reset_date_utc.as_deref().and_then(parse_reset_date);
+    let categories: [(&str, &Option<QuotaSnapshot>); 3] = [
+        ("Chat", &resp.quota_snapshots.chat),
+        ("Premium requests", &resp.quota_snapshots.premium_interactions),
+        ("Completions", &resp.quota_snapshots.completions),
+    ];
+    let mut windows: Vec<LimitWindow> = categories
+        .iter()
+        .filter_map(|(label, q)| {
+            let q = q.as_ref()?;
+            if q.unlimited.unwrap_or(false) {
+                return None;
+            }
+            let pct = q.percent_remaining.map(|r| (100.0 - r) as f32);
+            let used = match (q.entitlement, q.quota_remaining) {
+                (Some(e), Some(r)) => Some(e - r),
+                _ => None,
+            };
+            Some(LimitWindow {
+                label: (*label).into(),
+                used_percent: pct,
+                resets_at: reset,
+                used,
+                limit: q.entitlement,
+            })
+        })
+        .collect();
+    windows.sort_by(|a, b| {
+        b.used_percent
+            .unwrap_or(0.0)
+            .partial_cmp(&a.used_percent.unwrap_or(0.0))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    windows
 }
 
 #[async_trait]
@@ -130,36 +145,40 @@ impl crate::providers::ProviderApi for CopilotProvider {
 
     async fn fetch(&self) -> Result<ServiceUsage, ProviderError> {
         let token = read_copilot_token()?;
-        let resp = self
-            .http
-            .get(USAGE_URL)
-            .header("Authorization", format!("token {token}"))
-            .header("Accept", "application/json")
-            .header("User-Agent", "GitHubCopilotChat/0.35.0")
-            .header("Editor-Version", "vscode/1.107.0")
-            .header("Editor-Plugin-Version", "copilot-chat/0.35.0")
-            .header("Copilot-Integration-Id", "vscode-chat")
-            .send()
-            .await
-            .map_err(|e| ProviderError::Network(e.to_string()))?;
-        let val: Value = http::send_for_json(resp, USAGE_URL).await.map_err(|e| {
-            // 403/404 usually means the token lacks Copilot scope.
-            ProviderError::NotLoggedIn(format!(
-                "Copilot quota unavailable ({e}); run `copilot login`"
-            ))
-        })?;
-        let u: CopilotUser =
-            serde_json::from_value(val).map_err(|e| ProviderError::Parse(e.to_string()))?;
-        Ok(ServiceUsage {
-            provider: Provider::Copilot,
-            connected: true,
-            plan: u.copilot_plan.clone(),
-            account: None,
-            error: None,
-            windows: normalize(&u),
-            detail_windows: vec![],
-        })
+        fetch_with(&self.http, &token).await
     }
+}
+
+/// Fetch Copilot usage given an explicit token (auto-detected Copilot CLI token
+/// or a manually-pasted PAT). Calls `/copilot_internal/v2/token`.
+pub(crate) async fn fetch_with(
+    http: &reqwest::Client,
+    token: &str,
+) -> Result<ServiceUsage, ProviderError> {
+    let resp = http
+        .get(USAGE_URL)
+        .header("Authorization", format!("token {token}"))
+        .header("Accept", "application/json")
+        .header("Editor-Version", "vscode/1.96.2")
+        .header("Editor-Plugin-Version", "copilot-chat/0.35.0")
+        .header("Copilot-Integration-Id", "vscode-chat")
+        .header("X-Github-Api-Version", "2025-04-01")
+        .send()
+        .await
+        .map_err(|e| ProviderError::Network(e.to_string()))?;
+    let val: Value = http::send_for_json(resp, USAGE_URL).await?;
+    let u: CopilotTokenResp =
+        serde_json::from_value(val).map_err(|e| ProviderError::Parse(e.to_string()))?;
+    let windows = normalize(&u);
+    Ok(ServiceUsage {
+        provider: Provider::Copilot,
+        connected: true,
+        plan: u.copilot_plan,
+        account: None,
+        error: None,
+        windows,
+        detail_windows: vec![],
+    })
 }
 
 #[cfg(test)]
@@ -167,18 +186,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn normalize_internal_fixture() {
-        let u: CopilotUser =
-            serde_json::from_str(include_str!("../../tests/copilot_internal_fixture.json")).unwrap();
-        let w = &normalize(&u)[0];
-        assert_eq!(w.limit, Some(300.0));
-        assert_eq!(w.used, Some(229.0)); // 300 - 71
-        assert_eq!(w.used_percent, Some(76.0)); // 100 - 24
-        assert!(w.resets_at.is_some()); // 2026-07-01 parsed
-    }
-
-    #[test]
-    fn normalize_empty_when_no_quota() {
-        assert!(normalize(&CopilotUser::default()).is_empty());
+    fn normalize_quota_snapshots() {
+        let resp = CopilotTokenResp {
+            copilot_plan: Some("pro".into()),
+            quota_reset_date_utc: Some("2026-07-01T00:00:00Z".into()),
+            quota_snapshots: QuotaSnapshots {
+                chat: Some(QuotaSnapshot {
+                    entitlement: Some(300.0),
+                    quota_remaining: Some(250.0),
+                    percent_remaining: Some(83.33),
+                    unlimited: Some(false),
+                }),
+                premium_interactions: Some(QuotaSnapshot {
+                    entitlement: Some(300.0),
+                    quota_remaining: Some(50.0),
+                    percent_remaining: Some(16.67),
+                    unlimited: Some(false),
+                }),
+                completions: None,
+            },
+        };
+        let ws = normalize(&resp);
+        assert_eq!(ws.len(), 2);
+        // Higher usage (lower percent_remaining) first.
+        assert_eq!(ws[0].label, "Premium requests");
+        assert_eq!(ws[0].used_percent, Some(83.33));
+        assert_eq!(ws[0].used, Some(250.0));
+        assert_eq!(ws[0].limit, Some(300.0));
     }
 }

@@ -22,7 +22,7 @@ import {
 import type { LoginInfo, Provider, StoredCredential } from "@/lib/types";
 
 /** Claude: paste a session key (from claude.ai cookies). */
-const SESSION_KEY: Provider[] = ["claude"];
+const SESSION_KEY: Provider[] = ["claude", "copilot"];
 /** Codex: browser + localhost-callback OAuth. */
 const BROWSER_OAUTH: Provider[] = ["codex"];
 

@@ -71,9 +71,7 @@ pub async fn fetch_credential(cred: &crate::store::StoredCredential) -> ServiceU
         .await,
         Provider::Gemini => crate::providers::gemini::fetch_with(&http, &cred.access_token, Some(label)).await,
         Provider::Claude => crate::providers::claude::fetch_with_session_key(&http, &cred.access_token).await,
-        Provider::Copilot => Err(ProviderError::NotLoggedIn(
-            "Copilot usage needs a fine-grained PAT (Plan:read); the OAuth token lacks billing scope".into(),
-        )),
+        Provider::Copilot => crate::providers::copilot::fetch_with(&http, &cred.access_token).await,
         _ => Err(ProviderError::NotLoggedIn("manual accounts not supported for this provider".into())),
     };
     match res {

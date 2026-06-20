@@ -1,4 +1,6 @@
-import { formatUsedLimit } from "@/lib/format";
+import type { TFunction } from "i18next";
+
+import { formatResetShort, formatUsedLimit } from "@/lib/format";
 import {
   providerDisplayName,
   providerIndex,
@@ -20,7 +22,6 @@ export interface AccountRow {
   subtitle: string | null;
   providerName: string;
   status: ServiceStatus;
-  statusLabel: string;
   headline: LimitWindow | null;
   headlinePercent: number | null;
   resetLabel: string | null;
@@ -29,7 +30,6 @@ export interface AccountRow {
 
 export interface AccountSection {
   key: "online" | "offline";
-  title: string;
   count: number;
   rows: AccountRow[];
 }
@@ -44,20 +44,15 @@ export interface InspectorMetric {
 export interface InspectorSummary {
   title: string;
   accountId: string;
-  sourceLabel: string;
-  status: string;
   overallPercent: number | null;
   resetLabel: string | null;
   primaryUsedLimit: string | null;
   metricCards: InspectorMetric[];
 }
 
-const SECTION_META: Record<
-  AccountSection["key"],
-  { title: string; order: number }
-> = {
-  online: { title: "Online", order: 0 },
-  offline: { title: "Offline", order: 1 },
+const SECTION_ORDER: Record<AccountSection["key"], number> = {
+  online: 0,
+  offline: 1,
 };
 
 export function buildAccountSections(
@@ -84,14 +79,9 @@ export function buildAccountSections(
       sectionRows.sort((a, b) =>
         compareAccountRows(a, b, options.sortBy ?? "usage", config),
       );
-      return {
-        key,
-        title: SECTION_META[key].title,
-        count: sectionRows.length,
-        rows: sectionRows,
-      };
+      return { key, count: sectionRows.length, rows: sectionRows };
     })
-    .sort((a, b) => SECTION_META[a.key].order - SECTION_META[b.key].order);
+    .sort((a, b) => SECTION_ORDER[a.key] - SECTION_ORDER[b.key]);
 }
 
 export function selectVisibleServiceId(
@@ -107,6 +97,7 @@ export function buildInspectorSummary(
   service: ServiceUsage,
   config: AppConfig | null,
   nowMs: number,
+  t: TFunction,
 ): InspectorSummary {
   const headline = resolveHeadlineWindow(service, config);
   const detail = service.detail_windows ?? [];
@@ -115,17 +106,14 @@ export function buildInspectorSummary(
   return {
     title: providerDisplayName(config, service.provider),
     accountId: service.account ?? service.id,
-    sourceLabel:
-      service.source === "stored" ? "Stored credential" : "Local session",
-    status: statusLabel(serviceStatus(service, config)),
     overallPercent: headline?.used_percent ?? null,
-    resetLabel: formatResetShort(headline?.resets_at ?? null, nowMs),
+    resetLabel: formatResetShort(headline?.resets_at ?? null, nowMs, t),
     primaryUsedLimit: headline ? formatUsedLimit(headline) : null,
     metricCards: metricSource.map((window) => ({
       label: window.label,
       percent: window.used_percent,
       usedLimit: formatUsedLimit(window),
-      resetLabel: formatResetShort(window.resets_at, nowMs),
+      resetLabel: formatResetShort(window.resets_at, nowMs, t),
     })),
   };
 }
@@ -136,15 +124,13 @@ function toAccountRow(
 ): AccountRow {
   const headline = resolveHeadlineWindow(service, config);
   const providerName = providerDisplayName(config, service.provider);
-  const status = serviceStatus(service, config);
   return {
     id: service.id,
     service,
     title: providerName,
     subtitle: service.account,
     providerName,
-    status,
-    statusLabel: statusLabel(status),
+    status: serviceStatus(service, config),
     headline,
     headlinePercent: headline?.used_percent ?? null,
     resetLabel: null,
@@ -190,33 +176,4 @@ function rowMatchesQuery(row: AccountRow, query: string): boolean {
   ]
     .filter(Boolean)
     .some((value) => String(value).toLocaleLowerCase().includes(query));
-}
-
-function statusLabel(status: ServiceStatus): string {
-  switch (status) {
-    case "critical":
-      return "Critical";
-    case "warning":
-      return "Warning";
-    case "ok":
-      return "Healthy";
-    case "offline":
-      return "Offline";
-    default:
-      return "Unknown";
-  }
-}
-
-function formatResetShort(epoch: number | null, nowMs: number): string | null {
-  if (epoch == null) return null;
-  const diff = epoch * 1000 - nowMs;
-  if (diff <= 0) return "soon";
-  const mins = Math.round(diff / 60000);
-  if (mins < 60) return `${mins}m`;
-  const hours = Math.floor(mins / 60);
-  const remM = mins % 60;
-  if (hours < 48) return remM > 0 ? `${hours}h ${remM}m` : `${hours}h`;
-  const days = Math.floor(hours / 24);
-  const remH = hours % 24;
-  return remH > 0 ? `${days}d ${remH}h` : `${days}d`;
 }

@@ -1,3 +1,4 @@
+import type { TFunction } from "i18next";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -6,6 +7,9 @@ import {
   selectVisibleServiceId,
 } from "@/lib/inspectorModel";
 import type { AppConfig, Provider, ServiceUsage } from "@/lib/types";
+
+const t = ((key: string, opts?: Record<string, unknown>) =>
+  opts ? `${key}:${JSON.stringify(opts)}` : key) as unknown as TFunction;
 
 const providers: Provider[] = [
   "claude",
@@ -34,7 +38,7 @@ describe("inspector model", () => {
       showOffline: true,
     });
 
-    expect(sections.map((section) => section.title)).toEqual(["Online", "Offline"]);
+    expect(sections.map((section) => section.key)).toEqual(["online", "offline"]);
     expect(sections.map((section) => section.count)).toEqual([4, 1]);
     expect(sections.flatMap((section) => section.rows.map((row) => row.id))).toEqual([
       "stored:claude-work",
@@ -52,7 +56,7 @@ describe("inspector model", () => {
     });
 
     expect(sections).toHaveLength(1);
-    expect(sections[0]?.title).toBe("Online");
+    expect(sections[0]?.key).toBe("online");
     expect(sections[0]?.rows[0]?.id).toBe("auto:codex");
   });
 
@@ -63,7 +67,7 @@ describe("inspector model", () => {
       sortBy: "name",
     });
 
-    const online = sections.find((section) => section.title === "Online");
+    const online = sections.find((section) => section.key === "online");
     expect(online?.rows.map((row) => row.id)).toEqual([
       "stored:claude-work",
       "auto:codex",
@@ -84,11 +88,10 @@ describe("inspector model", () => {
   });
 
   it("projects the selected service into inspector metrics", () => {
-    const summary = buildInspectorSummary(sampleServices()[0]!, config, 1_000_000);
+    const summary = buildInspectorSummary(sampleServices()[0]!, config, 1_000_000, t);
 
-    expect(summary.status).toBe("Critical");
     expect(summary.overallPercent).toBe(98);
-    expect(summary.resetLabel).toBe("15m");
+    expect(summary.resetLabel).toBe('time.reset.minutes:{"m":15}');
     expect(summary.primaryUsedLimit).toBe("4,900 / 5,000");
     expect(summary.metricCards.map((metric) => metric.label)).toEqual([
       "Messages",

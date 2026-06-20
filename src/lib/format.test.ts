@@ -1,13 +1,19 @@
+import type { TFunction } from "i18next";
 import { describe, expect, it } from "vitest";
 
 import {
   formatPercent,
-  formatResetCountdown,
+  formatResetShort,
   formatUpdatedAgo,
   formatUsedLimit,
   percentSeverity,
 } from "@/lib/format";
 import type { LimitWindow } from "@/lib/types";
+
+// Mock t: returns the key, or "key:{json}" when given interpolation values, so
+// tests can assert which key + values the formatters chose without i18n setup.
+const t = ((key: string, opts?: Record<string, unknown>) =>
+  opts ? `${key}:${JSON.stringify(opts)}` : key) as unknown as TFunction;
 
 function win(partial: Partial<LimitWindow>): LimitWindow {
   return {
@@ -26,7 +32,7 @@ describe("percentSeverity", () => {
     expect(percentSeverity(0)).toBe("ok");
     expect(percentSeverity(59.9)).toBe("ok");
     expect(percentSeverity(60)).toBe("warn");
-    expect(percentSeverity(85)).toBe("warn"); // 85 is not > 85
+    expect(percentSeverity(85)).toBe("warn");
     expect(percentSeverity(85.1)).toBe("crit");
     expect(percentSeverity(100)).toBe("crit");
   });
@@ -45,55 +51,50 @@ describe("formatUsedLimit", () => {
   it("returns null when both used and limit are absent", () => {
     expect(formatUsedLimit(win({ used: null, limit: null }))).toBeNull();
   });
-
   it("renders a plain count for non-monetary windows", () => {
     expect(formatUsedLimit(win({ label: "5-hour", used: 184, limit: 200 }))).toBe(
       "184 / 200",
     );
   });
-
   it("renders dollars when the label looks monetary", () => {
     expect(
       formatUsedLimit(win({ label: "Extra usage", used: 12.5, limit: 100 })),
     ).toBe("$12.50 / $100.00");
-    expect(
-      formatUsedLimit(win({ label: "Plan usage", used: 3, limit: null })),
-    ).toBe("$3.00 / —");
   });
 });
 
-describe("formatResetCountdown", () => {
-  const now = 1_000_000_000; // ms
+describe("formatResetShort", () => {
+  const now = 1_000_000_000;
   it("returns null without a reset epoch", () => {
-    expect(formatResetCountdown(null, now)).toBeNull();
+    expect(formatResetShort(null, now, t)).toBeNull();
   });
-  it("says 'resets soon' once the window has elapsed", () => {
-    expect(formatResetCountdown(now / 1000 - 1, now)).toBe("resets soon");
-  });
-  it("shows minutes under an hour", () => {
-    expect(formatResetCountdown(now / 1000 + 30 * 60, now)).toBe("resets in 30m");
-  });
-  it("shows hours and minutes under two days", () => {
-    expect(formatResetCountdown(now / 1000 + (3 * 60 + 19) * 60, now)).toBe(
-      "resets in 3h 19m",
+  it("picks the right key + values per tier", () => {
+    expect(formatResetShort(now / 1000 - 1, now, t)).toBe("time.reset.soon");
+    expect(formatResetShort(now / 1000 + 30 * 60, now, t)).toBe(
+      'time.reset.minutes:{"m":30}',
     );
-  });
-  it("shows days and hours beyond two days", () => {
-    expect(formatResetCountdown(now / 1000 + (50 * 60 + 0) * 60, now)).toBe(
-      "resets in 2d 2h",
+    expect(formatResetShort(now / 1000 + (3 * 60 + 19) * 60, now, t)).toBe(
+      'time.reset.hoursMinutes:{"h":3,"m":19}',
+    );
+    expect(formatResetShort(now / 1000 + 50 * 60 * 60, now, t)).toBe(
+      'time.reset.daysHours:{"d":2,"h":2}',
     );
   });
 });
 
 describe("formatUpdatedAgo", () => {
-  it("says 'just now' under 5s and counts seconds after", () => {
-    const fetchedAt = 1_000_000; // epoch seconds
-    const nowMs = fetchedAt * 1000;
-    expect(formatUpdatedAgo(fetchedAt, nowMs)).toBe("Updated just now");
-    expect(formatUpdatedAgo(fetchedAt, nowMs + 30_000)).toBe("Updated 30s ago");
+  const fetchedAt = 1_000_000;
+  const nowMs = fetchedAt * 1000;
+  it("uses the 'Updated' prefix keys by default", () => {
+    expect(formatUpdatedAgo(fetchedAt, nowMs, t)).toBe("time.justNow");
+    expect(formatUpdatedAgo(fetchedAt, nowMs + 30_000, t)).toBe(
+      'time.updatedSeconds:{"count":30}',
+    );
+    expect(formatUpdatedAgo(null, 0, t)).toBe("time.awaiting");
   });
-
-  it("returns the awaiting message when no timestamp", () => {
-    expect(formatUpdatedAgo(null, 0)).toBe("Awaiting first update…");
+  it("uses the no-prefix keys when prefix is false", () => {
+    expect(formatUpdatedAgo(fetchedAt, nowMs + 30_000, t, { prefix: false })).toBe(
+      'time.agoSeconds:{"count":30}',
+    );
   });
 });

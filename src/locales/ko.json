@@ -191,5 +191,30 @@
     "defaultName": "기본 제공자 이름",
     "addProviderAccount": "제공자 계정 추가",
     "scanLocal": "로컬 세션 검색"
+  },
+  "toast": {
+    "removed": "저장된 계정이 제거되었습니다.",
+    "removeFailed": "제거 실패: {{error}}",
+    "reached": "{{provider}}이(가) {{percent}}%에 도달했습니다.",
+    "scanning": "로컬 세션을 다시 검색하는 중입니다."
+  },
+  "time": {
+    "justNow": "방금 업데이트됨",
+    "updatedSeconds": "{{count}}초 전 업데이트",
+    "updatedMinutes": "{{m}}분 {{s}}초 전 업데이트",
+    "updatedHours": "{{h}}시간 {{m}}분 전 업데이트",
+    "awaiting": "첫 업데이트 대기 중…",
+    "agoJustNow": "방금",
+    "agoSeconds": "{{count}}초 전",
+    "agoMinutes": "{{m}}분 {{s}}초 전",
+    "agoHours": "{{h}}시간 {{m}}분 전",
+    "reset": {
+      "soon": "곧",
+      "minutes": "{{m}}분",
+      "hoursMinutes": "{{h}}시간 {{m}}분",
+      "hours": "{{h}}시간",
+      "daysHours": "{{d}}일 {{h}}시간",
+      "days": "{{d}}일"
+    }
   }
 }

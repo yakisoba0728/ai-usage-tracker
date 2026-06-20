@@ -70,7 +70,7 @@ export function TrayPopover() {
           </button>
         </div>
         <div className="num mt-0.5 text-text-faint" style={{ fontSize: 11 }}>
-          {formatUpdatedAgo(snapshot?.fetched_at ?? null, nowMs)}
+          {formatUpdatedAgo(snapshot?.fetched_at ?? null, nowMs, t)}
         </div>
       </header>
 

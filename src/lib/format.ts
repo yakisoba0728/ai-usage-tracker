@@ -1,3 +1,5 @@
+import type { TFunction } from "i18next";
+
 import type { LimitWindow } from "@/lib/types";
 
 export type Severity = "ok" | "warn" | "crit";
@@ -39,37 +41,65 @@ export function formatUsedLimit(w: LimitWindow): string | null {
   return `${fmt(w.used)} / ${fmt(w.limit)}`;
 }
 
-/** Live countdown only (e.g. "resets in 3h 19m"). null when there is no reset. */
-export function formatResetCountdown(
+/**
+ * Localized "time until reset" (e.g. "3h 19m" / "soon"). Compact form used in
+ * cards and the detail modal. `null` when there is no reset epoch.
+ */
+export function formatResetShort(
   epoch: number | null,
   nowMs: number,
+  t: TFunction,
 ): string | null {
   if (epoch == null) return null;
   const diff = epoch * 1000 - nowMs;
-  if (diff <= 0) return "resets soon";
+  if (diff <= 0) return t("time.reset.soon");
   const mins = Math.round(diff / 60000);
-  if (mins < 60) return `resets in ${mins}m`;
+  if (mins < 60) return t("time.reset.minutes", { m: mins });
   const hours = Math.floor(mins / 60);
   const remM = mins % 60;
-  if (hours < 48) return `resets in ${hours}h ${remM}m`;
+  if (hours < 48) {
+    return remM > 0
+      ? t("time.reset.hoursMinutes", { h: hours, m: remM })
+      : t("time.reset.hours", { h: hours });
+  }
   const days = Math.floor(hours / 24);
   const remH = hours % 24;
-  return `resets in ${days}d ${remH}h`;
+  return remH > 0
+    ? t("time.reset.daysHours", { d: days, h: remH })
+    : t("time.reset.days", { d: days });
 }
 
-/** "Updated just now" / "Updated 3m 12s ago" / "Updated 1h 4m ago". */
+/**
+ * Localized "updated X ago". With `prefix` (default) it includes the "Updated"
+ * lead-in (footer/tray); without it, just "X ago" (detail header / sessions).
+ */
 export function formatUpdatedAgo(
   fetchedAtSec: number | null,
   nowMs: number,
+  t: TFunction,
+  opts?: { prefix?: boolean },
 ): string {
-  if (fetchedAtSec == null) return "Awaiting first update…";
+  const prefix = opts?.prefix ?? true;
+  if (fetchedAtSec == null) return t("time.awaiting");
   const elapsed = Math.max(0, Math.floor(nowMs / 1000) - fetchedAtSec);
-  if (elapsed < 5) return "Updated just now";
-  if (elapsed < 60) return `Updated ${elapsed}s ago`;
+  if (elapsed < 5) return prefix ? t("time.justNow") : t("time.agoJustNow");
+  if (elapsed < 60) {
+    return t(prefix ? "time.updatedSeconds" : "time.agoSeconds", {
+      count: elapsed,
+    });
+  }
   const mins = Math.floor(elapsed / 60);
   const secs = elapsed % 60;
-  if (mins < 60) return `Updated ${mins}m ${secs}s ago`;
+  if (mins < 60) {
+    return t(prefix ? "time.updatedMinutes" : "time.agoMinutes", {
+      m: mins,
+      s: secs,
+    });
+  }
   const hours = Math.floor(mins / 60);
   const remM = mins % 60;
-  return `Updated ${hours}h ${remM}m ago`;
+  return t(prefix ? "time.updatedHours" : "time.agoHours", {
+    h: hours,
+    m: remM,
+  });
 }

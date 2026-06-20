@@ -40,7 +40,12 @@ import {
 } from "@/components/ui/dialog";
 import { useNow } from "@/hooks/useNow";
 import { useSnapshot } from "@/hooks/useSnapshot";
-import { formatPercent, formatUpdatedAgo, formatUsedLimit } from "@/lib/format";
+import {
+  formatPercent,
+  formatResetShort,
+  formatUpdatedAgo,
+  formatUsedLimit,
+} from "@/lib/format";
 import {
   buildAccountSections,
   buildInspectorSummary,
@@ -194,7 +199,10 @@ export function Dashboard() {
         .sort((a, b) => b - a)[0];
       if (crossed != null) {
         pushToast(
-          `${providerDisplayName(config, service.provider)} reached ${Math.round(crossed)}%.`,
+          t("toast.reached", {
+            provider: providerDisplayName(config, service.provider),
+            percent: Math.round(crossed),
+          }),
         );
       }
     }
@@ -212,9 +220,9 @@ export function Dashboard() {
       setMoreMenuOpen(false);
       setOpenServiceId(null);
       await refresh();
-      pushToast("Stored account removed.");
+      pushToast(t("toast.removed"));
     } catch (e) {
-      pushToast(`Remove failed: ${String(e)}`);
+      pushToast(t("toast.removeFailed", { error: String(e) }));
     }
   }
 
@@ -318,7 +326,7 @@ export function Dashboard() {
         onShowOfflineChange={setShowOffline}
         onReuseLocalSession={() => {
           void refresh();
-          pushToast("Local sessions are being scanned again.");
+          pushToast(t("toast.scanning"));
         }}
         onOpenAddAccount={() => setAddOpen(true)}
       />
@@ -416,8 +424,9 @@ function AccountToolbar({
  * node re-renders each second instead of the whole dashboard tree.
  */
 function LiveUpdatedAgo({ fetchedAt }: { fetchedAt: number | null }) {
+  const { t } = useTranslation();
   const now = useNow(1000);
-  return <>{formatUpdatedAgo(fetchedAt, now)}</>;
+  return <>{formatUpdatedAgo(fetchedAt, now, t)}</>;
 }
 
 function AccountSections({
@@ -479,7 +488,7 @@ const AccountCardButton = memo(function AccountCardButton({
 }) {
   const { t } = useTranslation();
   const reset = row.headline?.resets_at
-    ? compactReset(row.headline.resets_at, nowMs)
+    ? formatResetShort(row.headline.resets_at, nowMs, t)
     : null;
   const percent = row.headlinePercent;
   const width = `${clamp(percent ?? 0, 0, 100)}%`;
@@ -717,7 +726,7 @@ function DetailPanelContent({
   onRemove: () => void;
 }) {
   const { t } = useTranslation();
-  const summary = buildInspectorSummary(service, config, nowMs);
+  const summary = buildInspectorSummary(service, config, nowMs, t);
   const accountId = storedAccountId(service);
   const allWindows = [...(service.windows ?? []), ...(service.detail_windows ?? [])];
 
@@ -737,8 +746,16 @@ function DetailPanelContent({
               </div>
               <div className="num mt-2 grid gap-x-5 gap-y-1 text-xs text-text-faint sm:grid-cols-2">
                 <span>{t("detail.accountId")}&nbsp;&nbsp;{summary.accountId}</span>
-                <span>{t("detail.source")}&nbsp;&nbsp;{summary.sourceLabel}</span>
-                <span>{t("detail.lastRefresh")}&nbsp;&nbsp;{formatUpdatedAgo(fetchedAt, nowMs).replace("Updated ", "")}</span>
+                <span>
+                  {t("detail.source")}&nbsp;&nbsp;
+                  {service.source === "stored"
+                    ? t("detail.sessions.storedCredential")
+                    : t("detail.sessions.autoDetected")}
+                </span>
+                <span>
+                  {t("detail.lastRefresh")}&nbsp;&nbsp;
+                  {formatUpdatedAgo(fetchedAt, nowMs, t, { prefix: false })}
+                </span>
                 <span>{t("detail.plan")}&nbsp;&nbsp;{service.plan ?? "—"}</span>
               </div>
             </div>
@@ -1005,7 +1022,7 @@ function WindowRow({
       <p className="num mt-3 text-xs text-text-faint">
         {window.resets_at
           ? t("detail.limits.resetsIn", {
-              time: compactReset(window.resets_at, nowMs),
+              time: formatResetShort(window.resets_at, nowMs, t),
             })
           : t("detail.limits.noResetReported")}
       </p>
@@ -1050,7 +1067,7 @@ function SessionsTab({
           />
           <InfoLine
             label={t("detail.sessions.lastParsed")}
-            value={formatUpdatedAgo(fetchedAt, nowMs).replace("Updated ", "")}
+            value={formatUpdatedAgo(fetchedAt, nowMs, t, { prefix: false })}
             mono
           />
         </div>
@@ -1360,19 +1377,6 @@ function statusFillClass(status: ReturnType<typeof serviceStatus>): string {
   if (status === "warning") return "bg-warn";
   if (status === "ok") return "bg-ok";
   return "bg-text-faint";
-}
-
-function compactReset(epoch: number, nowMs: number): string {
-  const diff = epoch * 1000 - nowMs;
-  if (diff <= 0) return "soon";
-  const mins = Math.round(diff / 60000);
-  if (mins < 60) return `${mins}m`;
-  const hours = Math.floor(mins / 60);
-  const remM = mins % 60;
-  if (hours < 48) return remM > 0 ? `${hours}h ${remM}m` : `${hours}h`;
-  const days = Math.floor(hours / 24);
-  const remH = hours % 24;
-  return remH > 0 ? `${days}d ${remH}h` : `${days}d`;
 }
 
 function storedAccountId(service: ServiceUsage): string | null {

@@ -191,5 +191,30 @@
     "defaultName": "Default provider name",
     "addProviderAccount": "Add provider account",
     "scanLocal": "Scan local sessions"
+  },
+  "toast": {
+    "removed": "Stored account removed.",
+    "removeFailed": "Remove failed: {{error}}",
+    "reached": "{{provider}} reached {{percent}}%.",
+    "scanning": "Local sessions are being scanned again."
+  },
+  "time": {
+    "justNow": "Updated just now",
+    "updatedSeconds": "Updated {{count}}s ago",
+    "updatedMinutes": "Updated {{m}}m {{s}}s ago",
+    "updatedHours": "Updated {{h}}h {{m}}m ago",
+    "awaiting": "Awaiting first update…",
+    "agoJustNow": "just now",
+    "agoSeconds": "{{count}}s ago",
+    "agoMinutes": "{{m}}m {{s}}s ago",
+    "agoHours": "{{h}}h {{m}}m ago",
+    "reset": {
+      "soon": "soon",
+      "minutes": "{{m}}m",
+      "hoursMinutes": "{{h}}h {{m}}m",
+      "hours": "{{h}}h",
+      "daysHours": "{{d}}d {{h}}h",
+      "days": "{{d}}d"
+    }
   }
 }

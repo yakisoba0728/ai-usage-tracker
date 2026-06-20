@@ -8,17 +8,12 @@ import {
   type ReactNode,
 } from "react";
 import {
-  Activity,
   Check,
   ChevronDown,
   Cloud,
-  Code2,
   Command,
-  Database,
   Edit3,
   Filter,
-  Flag,
-  Gauge,
   Languages,
   LayoutList,
   Loader2,
@@ -28,7 +23,6 @@ import {
   Search,
   Settings,
   Trash2,
-  Users,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -68,7 +62,7 @@ import {
   providerDisplayName,
   resolveHeadlineWindow,
 } from "@/lib/providers";
-import { serviceStatus, summarizeServices } from "@/lib/status";
+import { serviceStatus } from "@/lib/status";
 import { cn, clamp } from "@/lib/utils";
 import type { AppConfig, LimitWindow, Provider, ProviderConfig, ServiceUsage } from "@/lib/types";
 
@@ -80,21 +74,6 @@ const INSPECTOR_TABS: { id: InspectorTab; label: string }[] = [
   { id: "sessions", label: "Sessions" },
   { id: "settings", label: "Settings" },
 ];
-
-const NAV_PRIMARY = [
-  { id: "monitor", label: "Monitor", icon: <Activity className="size-4" /> },
-  { id: "activity", label: "Activity", icon: <Gauge className="size-4" /> },
-  { id: "accounts", label: "Accounts", icon: <Users className="size-4" /> },
-  { id: "rules", label: "Rules", icon: <Flag className="size-4" /> },
-  { id: "settings", label: "Settings", icon: <Settings className="size-4" /> },
-] as const;
-
-const NAV_WORKSPACE = [
-  { id: "overview", label: "Overview", icon: <Gauge className="size-4" /> },
-  { id: "members", label: "Members", icon: <Users className="size-4" />, count: 3 },
-  { id: "api", label: "API & Export", icon: <Code2 className="size-4" /> },
-  { id: "billing", label: "Billing", icon: <Database className="size-4" /> },
-] as const;
 
 export function Dashboard() {
   const { snapshot, loading, refreshing, error, loadingProviders, refresh } =
@@ -108,7 +87,6 @@ export function Dashboard() {
   const [addOpen, setAddOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
-  const [activeNav, setActiveNav] = useState("monitor");
   const [query, setQuery] = useState("");
   const [openServiceId, setOpenServiceId] = useState<string | null>(null);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("overview");
@@ -177,10 +155,6 @@ export function Dashboard() {
     }
   }, [openServiceId, visibleServiceId]);
 
-  const summary = useMemo(
-    () => summarizeServices(allServices, config),
-    [allServices, config],
-  );
 
   const [toasts, setToasts] = useState<Toast[]>([]);
   const toastIdRef = useRef(0);
@@ -247,19 +221,6 @@ export function Dashboard() {
   return (
     <div className="min-h-dvh overflow-hidden bg-canvas text-text">
       <div className="flex min-h-dvh">
-        <ControlSidebar
-          activeNav={activeNav}
-          onNav={(id) => {
-            setActiveNav(id);
-            if (id === "settings") setSettingsOpen(true);
-          }}
-          fetchedAt={fetchedAt}
-          nowMs={nowMs}
-          refreshing={refreshing}
-          onRefresh={() => void refresh()}
-          connectedCount={summary.connected}
-        />
-
         <div className="flex min-w-0 flex-1 flex-col">
           <section className="flex min-h-dvh min-w-0 flex-col bg-canvas/95">
             <MobileHeader
@@ -367,149 +328,6 @@ export function Dashboard() {
   );
 }
 
-function ControlSidebar({
-  activeNav,
-  onNav,
-  fetchedAt,
-  nowMs,
-  refreshing,
-  onRefresh,
-  connectedCount,
-}: {
-  activeNav: string;
-  onNav: (id: string) => void;
-  fetchedAt: number | null;
-  nowMs: number;
-  refreshing: boolean;
-  onRefresh: () => void;
-  connectedCount: number;
-}) {
-  return (
-    <aside className="hidden w-[230px] shrink-0 flex-col border-r border-border bg-[#171a1d] lg:flex">
-      <div className="flex h-12 items-center gap-2 px-4">
-        <span className="size-3 rounded-full bg-[#ff605c]" />
-        <span className="size-3 rounded-full bg-[#ffbd44]" />
-        <span className="size-3 rounded-full bg-[#00ca4e]" />
-      </div>
-
-      <div className="px-4 pb-5 pt-2">
-        <div className="flex items-center gap-3">
-          <span className="flex size-9 items-center justify-center rounded-lg border border-border bg-surface-2 text-text">
-            <Command className="size-5" />
-          </span>
-          <div className="min-w-0">
-            <div className="truncate text-base font-semibold">Control Plane</div>
-            <div className="num text-xs text-text-faint">v1.2.0</div>
-          </div>
-        </div>
-      </div>
-
-      <nav className="space-y-1 px-3">
-        {NAV_PRIMARY.map((item) => (
-          <SidebarButton
-            key={item.id}
-            active={activeNav === item.id}
-            icon={item.icon}
-            label={item.label}
-            onClick={() => onNav(item.id)}
-          />
-        ))}
-      </nav>
-
-      <div className="mx-4 my-5 h-px bg-border" />
-
-      <div className="px-4">
-        <div className="mb-3 text-xs font-medium uppercase text-text-faint">
-          Workspace
-        </div>
-        <button
-          type="button"
-          className="flex w-full items-center justify-between rounded-lg border border-border bg-surface/70 px-3 py-2 text-left transition-colors hover:border-border-strong hover:bg-surface-2"
-        >
-          <span className="flex min-w-0 items-center gap-2">
-            <span className="size-2 rounded-full bg-ok" />
-            <span className="truncate text-sm">My Workspace</span>
-          </span>
-          <ChevronDown className="size-4 text-text-faint" />
-        </button>
-      </div>
-
-      <nav className="mt-5 space-y-1 px-3">
-        {NAV_WORKSPACE.map((item) => (
-          <SidebarButton
-            key={item.id}
-            active={false}
-            icon={item.icon}
-            label={item.label}
-            count={"count" in item ? item.count : undefined}
-            onClick={() => undefined}
-          />
-        ))}
-      </nav>
-
-      <div className="mt-auto border-t border-border p-4">
-        <div className="mb-3 flex items-center justify-between text-xs text-text-faint">
-          <span>Last refresh</span>
-          <span className="num flex items-center gap-2">
-            {formatUpdatedAgo(fetchedAt, nowMs).replace("Updated ", "")}
-            <span className="size-2 rounded-full bg-ok" />
-          </span>
-        </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={onRefresh}
-          disabled={refreshing}
-          className="w-full justify-between border-border bg-surface/80 text-text"
-        >
-          <span className="flex items-center gap-2">
-            <RefreshCw className={refreshing ? "size-4 animate-spin" : "size-4"} />
-            Refresh Now
-          </span>
-          <span className="num rounded bg-surface-2 px-1.5 py-0.5 text-[10px] text-text-faint">
-            {connectedCount}
-          </span>
-        </Button>
-      </div>
-    </aside>
-  );
-}
-
-function SidebarButton({
-  active,
-  icon,
-  label,
-  count,
-  onClick,
-}: {
-  active: boolean;
-  icon: ReactNode;
-  label: string;
-  count?: number;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition-colors",
-        active
-          ? "bg-[#1f4261] text-text"
-          : "text-text-dim hover:bg-surface/70 hover:text-text",
-      )}
-    >
-      <span className={active ? "text-[#73b8f4]" : "text-text-faint"}>{icon}</span>
-      <span className="min-w-0 flex-1 truncate">{label}</span>
-      {count != null && (
-        <span className="num rounded-md bg-surface-2 px-1.5 py-0.5 text-xs text-text-faint">
-          {count}
-        </span>
-      )}
-    </button>
-  );
-}
-
 function MobileHeader({
   refreshing,
   onRefresh,
@@ -522,7 +340,7 @@ function MobileHeader({
   const { i18n } = useTranslation();
   const nextLang = i18n.resolvedLanguage === "ko" ? "en" : "ko";
   return (
-    <header className="flex h-12 items-center justify-between border-b border-border px-4 lg:hidden">
+    <header className="flex h-12 items-center justify-between border-b border-border px-4">
       <div className="flex items-center gap-2 font-semibold">
         <Command className="size-5 text-[#73b8f4]" />
         Control Plane

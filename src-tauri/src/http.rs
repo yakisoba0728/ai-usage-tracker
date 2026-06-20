@@ -66,21 +66,72 @@ async fn decode_json<T: serde::de::DeserializeOwned>(
     let body = resp.text().await.unwrap_or_default();
     if !status.is_success() {
         // Don't leak raw HTML (Cloudflare challenges, error pages) to the UI.
-        let snippet = if body.trim_start().starts_with('<') {
-            match status.as_u16() {
-                401 | 403 => "access denied — token expired or invalid".to_string(),
-                404 => "endpoint not found".to_string(),
-                429 => "rate limited — try again later".to_string(),
-                500..=599 => "server error".to_string(),
-                _ => "unexpected response".to_string(),
-            }
-        } else {
-            body.chars().take(200).collect()
-        };
+        let snippet = sanitize_error_body(status.as_u16(), &body);
         return Err(ProviderError::Status {
             status: status.as_u16(),
             body: format!("{url}: {snippet}"),
         });
     }
     serde_json::from_str::<T>(&body).map_err(|e| ProviderError::Parse(format!("{url}: {e}")))
+}
+
+/// Build a safe error snippet for a non-2xx response body. Raw HTML (Cloudflare
+/// challenges, provider error pages) is redacted to a short status-specific
+/// message so it never reaches the UI; any other body passes through truncated
+/// to 200 chars.
+fn sanitize_error_body(status: u16, body: &str) -> String {
+    if body.trim_start().starts_with('<') {
+        match status {
+            401 | 403 => "access denied — token expired or invalid".to_string(),
+            404 => "endpoint not found".to_string(),
+            429 => "rate limited — try again later".to_string(),
+            500..=599 => "server error".to_string(),
+            _ => "unexpected response".to_string(),
+        }
+    } else {
+        body.chars().take(200).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn redacts_html_by_status() {
+        let html = "<!DOCTYPE html><html>cloudflare challenge</html>";
+        assert_eq!(
+            sanitize_error_body(401, html),
+            "access denied — token expired or invalid"
+        );
+        assert_eq!(
+            sanitize_error_body(403, html),
+            "access denied — token expired or invalid"
+        );
+        assert_eq!(sanitize_error_body(404, html), "endpoint not found");
+        assert_eq!(
+            sanitize_error_body(429, html),
+            "rate limited — try again later"
+        );
+        assert_eq!(sanitize_error_body(503, html), "server error");
+        assert_eq!(sanitize_error_body(418, html), "unexpected response");
+    }
+
+    #[test]
+    fn detects_html_after_leading_whitespace() {
+        assert_eq!(
+            sanitize_error_body(403, "   \n<html></html>"),
+            "access denied — token expired or invalid"
+        );
+    }
+
+    #[test]
+    fn passes_non_html_through_truncated_to_200() {
+        assert_eq!(
+            sanitize_error_body(400, r#"{"error":"bad request"}"#),
+            r#"{"error":"bad request"}"#
+        );
+        let long = "x".repeat(500);
+        assert_eq!(sanitize_error_body(400, &long).chars().count(), 200);
+    }
 }

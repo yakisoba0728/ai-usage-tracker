@@ -100,4 +100,82 @@ mod tests {
             "\"copilot\""
         );
     }
+
+    /// Guards the IPC contract: the serialized field set must match
+    /// `src/lib/types.ts` (`ServiceUsage` / `LimitWindow`). A Rust-side rename or
+    /// serde-attr change that diverges from the frontend types fails here.
+    #[test]
+    fn service_usage_json_shape_matches_ts_contract() {
+        let u = ServiceUsage {
+            id: "auto:claude".into(),
+            source: ServiceSource::Auto,
+            provider: Provider::Claude,
+            connected: true,
+            plan: Some("Max".into()),
+            account: Some("a@b.c".into()),
+            error: None,
+            windows: vec![LimitWindow {
+                label: "5-hour".into(),
+                used_percent: Some(92.0),
+                resets_at: Some(123),
+                used: Some(184.0),
+                limit: Some(200.0),
+            }],
+            detail_windows: vec![],
+            raw_response: Some("{}".into()),
+        };
+        let v = serde_json::to_value(&u).unwrap();
+        let obj = v.as_object().unwrap();
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            vec![
+                "account",
+                "connected",
+                "detail_windows",
+                "error",
+                "id",
+                "plan",
+                "provider",
+                "raw_response",
+                "source",
+                "windows",
+            ]
+        );
+        assert_eq!(obj["source"], "auto");
+        assert_eq!(obj["provider"], "claude");
+
+        let mut wkeys: Vec<&str> = obj["windows"][0]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        wkeys.sort_unstable();
+        assert_eq!(
+            wkeys,
+            vec!["label", "limit", "resets_at", "used", "used_percent"]
+        );
+    }
+
+    /// `raw_response` is `skip_serializing_if = "Option::is_none"`, so it must be
+    /// absent (not null) when there was no HTTP response.
+    #[test]
+    fn raw_response_is_omitted_when_none() {
+        let u = ServiceUsage {
+            id: "auto:cursor".into(),
+            source: ServiceSource::Auto,
+            provider: Provider::Cursor,
+            connected: false,
+            plan: None,
+            account: None,
+            error: Some("offline".into()),
+            windows: vec![],
+            detail_windows: vec![],
+            raw_response: None,
+        };
+        let v = serde_json::to_value(&u).unwrap();
+        assert!(!v.as_object().unwrap().contains_key("raw_response"));
+    }
 }

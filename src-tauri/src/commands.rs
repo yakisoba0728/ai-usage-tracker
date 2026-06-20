@@ -333,4 +333,38 @@ mod tests {
             limit: None,
         };
     }
+
+    #[test]
+    fn build_providers_respects_enabled_flags_and_canonical_order() {
+        let keys = |cfg: &crate::config::AppConfig| -> Vec<Provider> {
+            build_providers(cfg).iter().map(|p| p.key()).collect()
+        };
+
+        // All enabled → every provider in canonical order.
+        assert_eq!(
+            keys(&crate::config::AppConfig::default()),
+            vec![
+                Provider::Claude,
+                Provider::Codex,
+                Provider::Gemini,
+                Provider::Copilot,
+                Provider::Cursor,
+                Provider::Zai,
+            ],
+        );
+
+        // Disabling index 2 (Gemini) drops exactly that provider, order intact.
+        let mut cfg = crate::config::AppConfig::default();
+        cfg.providers[2].enabled = false;
+        assert_eq!(
+            keys(&cfg),
+            vec![
+                Provider::Claude,
+                Provider::Codex,
+                Provider::Copilot,
+                Provider::Cursor,
+                Provider::Zai,
+            ],
+        );
+    }
 }

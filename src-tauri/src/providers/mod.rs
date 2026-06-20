@@ -230,8 +230,45 @@ mod tests {
         assert!(out[0].connected);
         assert_eq!(out[1].provider, Provider::Codex);
         assert!(!out[1].connected);
-        assert!(out[1].error.is_some());
+        // The failed provider carries a stable, localizable error code.
+        assert_eq!(
+            out[1].error.as_ref().map(|e| e.code.as_str()),
+            Some("not_logged_in")
+        );
         assert_eq!(out[2].provider, Provider::Gemini);
         assert!(out[2].connected);
+    }
+
+    #[test]
+    fn provider_error_codes_are_stable() {
+        assert_eq!(
+            ProviderError::NotLoggedIn("x".into()).code(),
+            "not_logged_in"
+        );
+        assert_eq!(ProviderError::Expired("x".into()).code(), "token_expired");
+        assert_eq!(ProviderError::Network("x".into()).code(), "network");
+        assert_eq!(
+            ProviderError::Status {
+                status: 429,
+                body: "rl".into()
+            }
+            .code(),
+            "server_error"
+        );
+        assert_eq!(ProviderError::Parse("x".into()).code(), "parse_error");
+    }
+
+    #[test]
+    fn service_error_conversion_keeps_code_and_display_detail() {
+        let se: crate::model::ServiceError = ProviderError::Status {
+            status: 429,
+            body: "rate limited".into(),
+        }
+        .into();
+        assert_eq!(se.code, "server_error");
+        assert_eq!(
+            se.detail.as_deref(),
+            Some("unexpected response (429): rate limited")
+        );
     }
 }

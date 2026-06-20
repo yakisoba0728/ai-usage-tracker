@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatPercent,
   formatResetShort,
+  formatServiceError,
   formatUpdatedAgo,
   formatUsedLimit,
   percentSeverity,
@@ -95,6 +96,19 @@ describe("formatUpdatedAgo", () => {
   it("uses the no-prefix keys when prefix is false", () => {
     expect(formatUpdatedAgo(fetchedAt, nowMs + 30_000, t, { prefix: false })).toBe(
       'time.agoSeconds:{"count":30}',
+    );
+  });
+});
+
+describe("formatServiceError", () => {
+  it("maps the code to error.<code> with the detail as fallback", () => {
+    expect(formatServiceError({ code: "network", detail: "timeout" }, t)).toBe(
+      'error.network:{"defaultValue":"timeout"}',
+    );
+  });
+  it("falls back to error.unknown when no detail is present", () => {
+    expect(formatServiceError({ code: "server_error" }, t)).toBe(
+      'error.server_error:{"defaultValue":"error.unknown"}',
     );
   });
 });

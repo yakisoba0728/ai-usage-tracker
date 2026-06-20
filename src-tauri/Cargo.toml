@@ -31,3 +31,12 @@ sha2 = "0.11.0"
 rand = "0.10.1"
 url = "2.5.8"
 urlencoding = "2.1.3"
+
+[profile.release]
+opt-level = "z"      # optimize for size (menu-bar utility, not CPU-bound)
+lto = true           # link-time optimization
+codegen-units = 1    # better optimization at the cost of compile time
+strip = true         # strip symbols from the binary
+# NOTE: deliberately NOT setting `panic = "abort"`. The app relies on
+# unwinding so a panic in one provider fetch does not abort the whole
+# process (preserves the per-provider isolation invariant in fetch_all).

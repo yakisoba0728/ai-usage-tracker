@@ -317,8 +317,8 @@ async fn post_refresh(
 /// Refresh the OAuth token using the public Claude Code client_id. The usage-API
 /// 429 is per access token (see anthropics/claude-code#31021), so a fresh token
 /// reopens the rate-limit window. Refresh tokens rotate — callers write the new
-/// pair back so the CLI and app stay in sync. Tries console.anthropic.com first,
-/// then platform.claude.com on a hard (network / non-2xx) failure.
+/// pair back so the CLI and app stay in sync. Tries platform.claude.com first,
+/// then api.anthropic.com on a hard (network / non-2xx) failure.
 async fn refresh_oauth(http: &reqwest::Client, rt: &str) -> Result<Refreshed, ProviderError> {
     let body = refresh_request_body(rt);
     match post_refresh(http, CLAUDE_TOKEN_URL, &body).await {

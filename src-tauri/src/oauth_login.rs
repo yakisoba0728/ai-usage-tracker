@@ -285,7 +285,7 @@ async fn exchange(
     if !status.is_success() {
         return Err(format!(
             "{token_url} ({status}): {}",
-            &text[..text.len().min(200)]
+            text.chars().take(200).collect::<String>()
         ));
     }
     serde_json::from_str::<Value>(&text).map_err(|e| format!("parse: {e}"))

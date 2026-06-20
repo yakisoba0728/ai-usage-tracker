@@ -197,6 +197,9 @@ impl crate::providers::ProviderApi for GeminiProvider {
                         }
                         creds.access_token = fresh.access_token;
                         creds.expiry_date = new_exp;
+                        if let Some(new_rt) = fresh.refresh_token {
+                            creds.refresh_token = Some(new_rt);
+                        }
                     }
                     Err(_) => {
                         return Err(ProviderError::Expired(

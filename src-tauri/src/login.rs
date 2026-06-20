@@ -87,13 +87,13 @@ async fn read<T: DeserializeOwned>(resp: reqwest::Response, url: &str) -> Result
     if !status.is_success() {
         return Err(format!(
             "{url} ({status}): {}",
-            &text[..text.len().min(200)]
+            text.chars().take(200).collect::<String>()
         ));
     }
     serde_json::from_str(&text).map_err(|e| {
         format!(
             "parse {url}: {e} (body was: {})",
-            &text[..text.len().min(200)]
+            text.chars().take(200).collect::<String>()
         )
     })
 }

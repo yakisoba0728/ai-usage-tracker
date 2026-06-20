@@ -19,6 +19,7 @@ import {
   Filter,
   Flag,
   Gauge,
+  Languages,
   LayoutList,
   Loader2,
   MoreHorizontal,
@@ -29,6 +30,7 @@ import {
   Trash2,
   Users,
 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { AddAccountDialog } from "@/components/AddAccountDialog";
 import { EmptyState } from "@/components/EmptyState";
@@ -101,6 +103,7 @@ export function Dashboard() {
   // so a 10s tick is plenty and cuts idle re-renders ~10x. The per-second
   // "Updated Xs ago" footer keeps its own isolated 1s clock (LiveUpdatedAgo).
   const nowMs = useNow(10000);
+  const { t } = useTranslation();
 
   const [addOpen, setAddOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -273,7 +276,7 @@ export function Dashboard() {
 
             <div className="px-5 pb-2 pt-1 text-text-dim">
               <span className="num text-sm">{visibleRows.length}</span>
-              <span className="ml-1 text-sm">Accounts</span>
+              <span className="ml-1 text-sm">{t("nav.accounts")}</span>
             </div>
 
             <div className="scroll-area min-h-0 flex-1 overflow-y-auto px-4 pb-5">
@@ -306,7 +309,7 @@ export function Dashboard() {
                 onClick={() => setShowOffline((value) => !value)}
                 className="rounded-md px-2 py-1 transition-colors hover:bg-surface-2 hover:text-text"
               >
-                {showOffline ? "Hide offline" : "Show offline"}
+                {showOffline ? t("footer.hideOffline") : t("footer.showOffline")}
               </button>
             </div>
           </section>
@@ -516,6 +519,8 @@ function MobileHeader({
   onRefresh: () => void;
   onOpenSettings: () => void;
 }) {
+  const { i18n } = useTranslation();
+  const nextLang = i18n.resolvedLanguage === "ko" ? "en" : "ko";
   return (
     <header className="flex h-12 items-center justify-between border-b border-border px-4 lg:hidden">
       <div className="flex items-center gap-2 font-semibold">
@@ -523,6 +528,15 @@ function MobileHeader({
         Control Plane
       </div>
       <div className="flex items-center gap-1">
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => void i18n.changeLanguage(nextLang)}
+          aria-label="Language"
+          title={nextLang === "ko" ? "한국어" : "English"}
+        >
+          <Languages className="size-4" />
+        </Button>
         <Button variant="ghost" size="icon" onClick={onRefresh} disabled={refreshing}>
           <RefreshCw className={refreshing ? "size-4 animate-spin" : "size-4"} />
         </Button>
@@ -543,6 +557,7 @@ function AccountToolbar({
   onQueryChange: (query: string) => void;
   onAddAccount: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="flex items-center gap-2 px-4 py-5">
       <label className="relative min-w-0 flex-1">
@@ -550,7 +565,7 @@ function AccountToolbar({
         <input
           value={query}
           onChange={(event) => onQueryChange(event.target.value)}
-          placeholder="Search accounts, providers, tags..."
+          placeholder={t("toolbar.searchPlaceholder")}
           className="h-10 w-full rounded-lg border border-border bg-surface/60 pl-9 pr-12 text-sm text-text placeholder:text-text-faint outline-none transition-colors focus:border-border-strong focus:bg-surface"
         />
         <span className="num absolute right-3 top-1/2 -translate-y-1/2 rounded border border-border bg-surface-2 px-1.5 py-0.5 text-[10px] text-text-faint">
@@ -565,7 +580,7 @@ function AccountToolbar({
         className="h-10 gap-2 border-border bg-surface/80"
       >
         <Plus className="size-4" />
-        <span className="hidden sm:inline">Add Account</span>
+        <span className="hidden sm:inline">{t("toolbar.addAccount")}</span>
       </Button>
 
       <Button variant="ghost" size="icon" className="h-10 w-10 border border-border bg-surface/50">
@@ -600,13 +615,14 @@ function AccountSections({
   loadingProviders: Set<Provider>;
   onSelect: (id: string) => void;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="space-y-5">
       {sections.map((section) => (
         <section key={section.key}>
           <div className="mb-3 flex items-center gap-2 px-1">
             <h2 className="text-xs font-semibold uppercase text-text-faint">
-              {section.title}
+              {t(`section.${section.key}`)}
             </h2>
             <span className="num rounded-md bg-surface-2 px-1.5 py-0.5 text-xs text-text-faint">
               {section.count}
@@ -643,6 +659,7 @@ const AccountCardButton = memo(function AccountCardButton({
   loading: boolean;
   onSelect: (id: string) => void;
 }) {
+  const { t } = useTranslation();
   const reset = row.headline?.resets_at
     ? compactReset(row.headline.resets_at, nowMs)
     : null;
@@ -674,7 +691,7 @@ const AccountCardButton = memo(function AccountCardButton({
               <span className="truncate text-sm font-semibold">{row.title}</span>
               {row.service.source === "stored" && (
                 <span className="rounded border border-border bg-surface px-1.5 py-0.5 text-[10px] text-text-faint">
-                  Stored
+                  {t("card.stored")}
                 </span>
               )}
             </div>
@@ -686,9 +703,9 @@ const AccountCardButton = memo(function AccountCardButton({
         <span className="rounded-md border border-border bg-surface px-2 py-1 text-xs text-text-dim">
           {row.service.connected
             ? row.service.source === "stored"
-              ? "Session"
-              : "OAuth"
-            : "Offline"}
+              ? t("card.session")
+              : t("card.oauth")
+            : t("card.offline")}
         </span>
       </div>
 
@@ -696,10 +713,10 @@ const AccountCardButton = memo(function AccountCardButton({
         <div className="mb-2 flex items-end justify-between gap-3">
           <div className="min-w-0">
             <div className="truncate text-xs font-medium text-text-faint">
-              {row.headline?.label ?? "No usage window"}
+              {row.headline?.label ?? t("card.noUsageWindow")}
             </div>
             <div className="num mt-1 truncate text-xs text-text-faint">
-              {row.usedLimit ?? (row.service.connected ? "Limit not reported" : row.service.error ?? "Offline")}
+              {row.usedLimit ?? (row.service.connected ? t("card.limitNotReported") : row.service.error ?? t("card.offline"))}
             </div>
           </div>
           <div className={cn("num text-lg font-semibold", statusTextClass(row.status))}>
@@ -722,7 +739,7 @@ const AccountCardButton = memo(function AccountCardButton({
         ))}
         {secondary.length === 0 && (
           <div className="flex items-center justify-between text-xs text-text-faint">
-            <span>{row.service.connected ? "Online" : "Offline"}</span>
+            <span>{row.service.connected ? t("card.online") : t("card.offline")}</span>
             <span className="num">{reset ?? "—"}</span>
           </div>
         )}
@@ -730,10 +747,14 @@ const AccountCardButton = memo(function AccountCardButton({
 
       <div className="mt-auto flex items-center justify-between pt-4 text-xs text-text-faint">
         <span className="num">
-          {reset ? `Resets in ${reset}` : row.service.connected ? "No reset" : "Disconnected"}
+          {reset
+            ? t("card.resetsIn", { time: reset })
+            : row.service.connected
+              ? t("card.noReset")
+              : t("card.disconnected")}
         </span>
         <span className="opacity-0 transition-opacity group-hover:opacity-100">
-          View details
+          {t("card.viewDetails")}
         </span>
       </div>
 
@@ -1461,15 +1482,16 @@ function NoResults({
   query: string;
   onShowOffline: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="rounded-lg border border-border bg-surface/50 px-5 py-12 text-center">
       <Search className="mx-auto mb-3 size-6 text-text-faint" />
-      <h2 className="text-sm font-semibold">No matching accounts</h2>
+      <h2 className="text-sm font-semibold">{t("noResults.title")}</h2>
       <p className="mt-1 text-sm text-text-faint">
-        {query ? "Try a different provider, plan, or account id." : "Offline accounts may be hidden."}
+        {query ? t("noResults.hintQuery") : t("noResults.hintOffline")}
       </p>
       <Button variant="secondary" size="sm" className="mt-4" onClick={onShowOffline}>
-        Show offline accounts
+        {t("noResults.showOffline")}
       </Button>
     </div>
   );

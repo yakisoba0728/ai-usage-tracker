@@ -1,0 +1,46 @@
+{
+  "language": {
+    "label": "Language",
+    "english": "English",
+    "korean": "한국어"
+  },
+  "nav": {
+    "accounts": "Accounts"
+  },
+  "toolbar": {
+    "searchPlaceholder": "Search accounts, providers, tags...",
+    "addAccount": "Add Account"
+  },
+  "section": {
+    "online": "Online",
+    "offline": "Offline"
+  },
+  "card": {
+    "stored": "Stored",
+    "session": "Session",
+    "oauth": "OAuth",
+    "offline": "Offline",
+    "online": "Online",
+    "noUsageWindow": "No usage window",
+    "limitNotReported": "Limit not reported",
+    "resetsIn": "Resets in {{time}}",
+    "noReset": "No reset",
+    "disconnected": "Disconnected",
+    "viewDetails": "View details"
+  },
+  "footer": {
+    "hideOffline": "Hide offline",
+    "showOffline": "Show offline"
+  },
+  "noResults": {
+    "title": "No matching accounts",
+    "hintQuery": "Try a different provider, plan, or account id.",
+    "hintOffline": "Offline accounts may be hidden.",
+    "showOffline": "Show offline accounts"
+  },
+  "empty": {
+    "title": "No accounts connected",
+    "body": "Add an account to start tracking usage, or sign in to a provider's CLI and it'll appear here automatically.",
+    "addAccount": "Add account"
+  }
+}

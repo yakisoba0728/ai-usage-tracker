@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import type { AppConfig, LimitWindow, ServiceUsage } from "@/lib/types";
+import type {
+  AppConfig,
+  LimitWindow,
+  ServiceError,
+  ServiceUsage,
+} from "@/lib/types";
 
 /**
  * Contract guard — the frontend half. Asserts the exact serialized field set the
@@ -50,6 +55,19 @@ describe("IPC contract shape", () => {
       "used",
       "used_percent",
     ]);
+  });
+
+  it("ServiceError is { code, detail? } — detail omitted, not null, when absent", () => {
+    const withDetail: ServiceError = {
+      code: "server_error",
+      detail: "unexpected response (429): rate limited",
+    };
+    expect(Object.keys(withDetail).sort()).toEqual(["code", "detail"]);
+
+    // Rust omits `detail` (skip_serializing_if=None), so the wire object may
+    // carry only `code` — `detail?` must stay optional to mirror that.
+    const codeOnly: ServiceError = { code: "network" };
+    expect(Object.keys(codeOnly)).toEqual(["code"]);
   });
 
   it("AppConfig is a poll interval plus a fixed 6-provider tuple", () => {

@@ -180,6 +180,38 @@ mod tests {
         );
     }
 
+    /// Guards the nested `ServiceError` IPC contract (mirrors TS `ServiceError`).
+    /// `code` is always serialized; `detail` is `skip_serializing_if = None`, so it
+    /// must be ABSENT (not null) when there's no detail — a Rust-side rename of
+    /// either field, or dropping the skip attr, fails here.
+    #[test]
+    fn service_error_json_shape_matches_ts_contract() {
+        let with_detail = serde_json::to_value(ServiceError {
+            code: "server_error".into(),
+            detail: Some("unexpected response (429): rate limited".into()),
+        })
+        .unwrap();
+        let mut keys: Vec<&str> = with_detail
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(keys, vec!["code", "detail"]);
+        assert_eq!(with_detail["code"], "server_error");
+
+        // detail = None → the key is omitted entirely (skip_serializing_if).
+        let no_detail = serde_json::to_value(ServiceError::code("offline")).unwrap();
+        let keys: Vec<&str> = no_detail
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(keys, vec!["code"]);
+    }
+
     /// `raw_response` is `skip_serializing_if = "Option::is_none"`, so it must be
     /// absent (not null) when there was no HTTP response.
     #[test]

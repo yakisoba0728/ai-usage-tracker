@@ -112,7 +112,7 @@ impl Default for ZaiProvider {
 impl ZaiProvider {
     pub fn new() -> Self {
         Self {
-            http: http::build_client(),
+            http: http::shared(),
         }
     }
 }

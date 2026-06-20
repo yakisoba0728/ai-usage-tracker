@@ -205,7 +205,7 @@ impl Default for ClaudeProvider {
 impl ClaudeProvider {
     pub fn new() -> Self {
         Self {
-            http: http::build_client(),
+            http: http::shared(),
         }
     }
 }

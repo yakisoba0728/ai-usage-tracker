@@ -17,6 +17,17 @@ pub fn build_client() -> reqwest::Client {
         .expect("reqwest client")
 }
 
+/// A process-wide shared client. `reqwest::Client` pools connections internally
+/// and is cheap to clone (it is `Arc`-backed), so every provider and the
+/// stored-account refresh path reuse one client instead of building a fresh
+/// TLS/DNS stack on each poll. Per-request headers (auth, user-agent overrides)
+/// are set per call, so a single shared client is safe.
+pub fn shared() -> reqwest::Client {
+    use std::sync::OnceLock;
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(build_client).clone()
+}
+
 /// Authenticated GET that JSON-decodes the body. `extra` adds per-provider
 /// headers (e.g. anthropic-version, chatgpt-account-id).
 pub async fn get_json<T: serde::de::DeserializeOwned>(

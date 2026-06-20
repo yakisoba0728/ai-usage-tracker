@@ -52,7 +52,7 @@ impl Default for CursorProvider {
 impl CursorProvider {
     pub fn new() -> Self {
         Self {
-            http: http::build_client(),
+            http: http::shared(),
         }
     }
 }

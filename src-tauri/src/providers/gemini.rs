@@ -67,7 +67,7 @@ impl Default for GeminiProvider {
 impl GeminiProvider {
     pub fn new() -> Self {
         Self {
-            http: http::build_client(),
+            http: http::shared(),
         }
     }
 

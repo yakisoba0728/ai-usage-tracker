@@ -260,7 +260,7 @@ async fn exchange(
     code: &str,
     _state: Option<&str>,
 ) -> Result<Value, String> {
-    let client = crate::http::build_client();
+    let client = crate::http::shared();
     // Optional client_secret appended after the standard PKCE body (Google
     // installed-app clients require it even with PKCE).
     let mut body = format!(

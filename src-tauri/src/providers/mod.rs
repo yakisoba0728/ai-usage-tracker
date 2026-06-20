@@ -65,7 +65,7 @@ pub async fn fetch_all(providers: Vec<Box<dyn ProviderApi>>) -> Vec<ServiceUsage
 /// Fetch usage for a manually-added (OAuth/API-key) account whose token lives
 /// in the store. Refreshes the access token first if it's near expiry (P0 #3).
 pub async fn fetch_credential(cred: &crate::store::StoredCredential) -> ServiceUsage {
-    let http = crate::http::build_client();
+    let http = crate::http::shared();
     let now_ms = chrono::Utc::now().timestamp_millis();
 
     // P0 #3: refresh expired stored tokens before fetching. Cursor/CoPilot/z.ai

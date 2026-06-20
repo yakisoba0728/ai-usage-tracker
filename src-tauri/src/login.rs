@@ -41,7 +41,7 @@ struct LoginResult {
 /// Request a device code and spawn the background poll. Returns what the UI
 /// needs to show the code + open the browser.
 pub async fn start(app: AppHandle, provider: Provider) -> Result<LoginInfo, String> {
-    let http = crate::http::build_client();
+    let http = crate::http::shared();
     match provider {
         Provider::Codex => start_codex(app, http, provider).await,
         Provider::Copilot => start_github(app, http, provider).await,

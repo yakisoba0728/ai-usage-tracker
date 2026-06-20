@@ -57,10 +57,11 @@ pnpm install
 pnpm tauri dev      # launches the app + tray (Vite HMR)
 ```
 
-Rust unit tests (parsing/normalize/isolation/refresh — the testable surface):
+Tests (parsing/normalize/isolation/refresh + frontend formatters/inspector — the testable surface):
 
 ```bash
-cd src-tauri && cargo test --lib          # 50 tests
+cd src-tauri && cargo test --lib          # 82 tests
+pnpm test                                 # 37 tests (vitest)
 ```
 
 ## Build

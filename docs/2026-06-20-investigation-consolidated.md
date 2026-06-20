@@ -5,6 +5,17 @@
 - **방법**: 8개 영역을 각각 별도 에이전트로 병렬 조사 (보안 / 크로스-OS / 리팩토링 / UI·UX / 테스트·CI / 패키징·서명 / 성능·번들 / 접근성·i18n). 각 에이전트는 read-only.
 - **검증 한계**: macOS만 실검증 가능. Windows/Linux 관련 주장은 모두 `[검증필요]` — context7 Tauri 2 문서 + 정적분석 기반.
 
+> **구현 진행 현황 (업데이트, 2026-06-21)** — 아래 §4 로드맵 중 다수가 이후 라운드에서 반영됨. 이 리포트 본문은 2026-06-20 조사 시점 기록이므로 원문은 보존하고, 완료분만 여기서 정리한다.
+> - ✅ **P0 #1** 회전 토큰 write 실패 처리 (옛 토큰 유지)
+> - ✅ **P0 #2** CI 구축 — `.github/workflows/ci.yml` + `build-smoke.yml`
+> - ✅ **P0 #3** 1Hz 리렌더 완화(memo) + 팝오버 lazy + `[profile.release]`(`opt-level="z"`, `lto`)
+> - ✅ **P0 #4** UI 정직성 수정 (가짜 activity·내비·신호등 제거, `fetchedAt` 바인딩)
+> - ✅ **P0 #5** webview CSP 추가 (`tauri.conf.json`, `default-src 'self'`)
+> - ✅ **P1 #7** OS 키체인 토큰 저장 (`keychain.rs`)
+> - ✅ **P1 #11** 계약 드리프트 가드 + 프론트 순수로직 테스트 + wiremock HTTP 커버리지
+> - ✅ **P1 #13** i18n (react-i18next + en/ko + `format.ts`) — 백엔드 에러 코드 진행 중
+> - ⏳ **P1 #10** 리팩토링 — severity 단일출처·생성자·refresh 통합 반영, **Dashboard 파일분리 진행 중**
+
 ---
 
 ## 1. 종합 요약

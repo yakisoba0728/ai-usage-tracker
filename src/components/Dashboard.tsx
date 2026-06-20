@@ -1,4 +1,5 @@
 import {
+  memo,
   useCallback,
   useEffect,
   useMemo,
@@ -96,7 +97,10 @@ const NAV_WORKSPACE = [
 export function Dashboard() {
   const { snapshot, loading, refreshing, error, loadingProviders, refresh } =
     useSnapshot();
-  const nowMs = useNow(1000);
+  // Coarse clock for the heavy card tree — reset countdowns are minute-granular,
+  // so a 10s tick is plenty and cuts idle re-renders ~10x. The per-second
+  // "Updated Xs ago" footer keeps its own isolated 1s clock (LiveUpdatedAgo).
+  const nowMs = useNow(10000);
 
   const [addOpen, setAddOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -291,7 +295,7 @@ export function Dashboard() {
             <div className="flex items-center justify-between border-t border-border px-5 py-3 text-xs text-text-faint">
               <span className="inline-flex items-center gap-1.5">
                 <Check className="size-3.5" />
-                {formatUpdatedAgo(snapshot?.fetched_at ?? null, nowMs)}
+                <LiveUpdatedAgo fetchedAt={fetchedAt} />
               </span>
               <button
                 type="button"
@@ -570,6 +574,15 @@ function AccountToolbar({
   );
 }
 
+/**
+ * Isolated per-second clock for the "Updated Xs ago" footer, so only this tiny
+ * node re-renders each second instead of the whole dashboard tree.
+ */
+function LiveUpdatedAgo({ fetchedAt }: { fetchedAt: number | null }) {
+  const now = useNow(1000);
+  return <>{formatUpdatedAgo(fetchedAt, now)}</>;
+}
+
 function AccountSections({
   sections,
   selectedId,
@@ -613,7 +626,7 @@ function AccountSections({
   );
 }
 
-function AccountCardButton({
+const AccountCardButton = memo(function AccountCardButton({
   row,
   nowMs,
   selected,
@@ -725,7 +738,7 @@ function AccountCardButton({
       )}
     </button>
   );
-}
+});
 
 function CompactWindowLine({ window }: { window: LimitWindow }) {
   const percent = window.used_percent;

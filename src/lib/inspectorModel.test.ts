@@ -131,7 +131,7 @@ function service(
     connected,
     plan,
     account,
-    error: connected ? null : "Session not found.",
+    error: connected ? null : { code: "not_logged_in", detail: "Session not found." },
     windows:
       pct == null
         ? []

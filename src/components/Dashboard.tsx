@@ -43,6 +43,7 @@ import { useSnapshot } from "@/hooks/useSnapshot";
 import {
   formatPercent,
   formatResetShort,
+  formatServiceError,
   formatUpdatedAgo,
   formatUsedLimit,
 } from "@/lib/format";
@@ -252,7 +253,7 @@ export function Dashboard() {
               {loading && snapshot == null ? (
                 <LoadingState />
               ) : snapshot == null ? (
-                <ErrorState error={error ?? "Couldn't reach the tracker backend."} />
+                <ErrorState error={error ?? t("error.backendUnreachable")} />
               ) : !hasConfigured ? (
                 <EmptyState onAddAccount={() => setAddOpen(true)} />
               ) : accountSections.length === 0 ? (
@@ -543,7 +544,12 @@ const AccountCardButton = memo(function AccountCardButton({
               {row.headline?.label ?? t("card.noUsageWindow")}
             </div>
             <div className="num mt-1 truncate text-xs text-text-faint">
-              {row.usedLimit ?? (row.service.connected ? t("card.limitNotReported") : row.service.error ?? t("card.offline"))}
+              {row.usedLimit ??
+                (row.service.connected
+                  ? t("card.limitNotReported")
+                  : row.service.error
+                    ? formatServiceError(row.service.error, t)
+                    : t("card.offline"))}
             </div>
           </div>
           <div className={cn("num text-lg font-semibold", statusTextClass(row.status))}>

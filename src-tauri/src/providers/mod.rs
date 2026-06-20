@@ -26,9 +26,32 @@ pub enum ProviderError {
     Parse(String),
 }
 
+impl ProviderError {
+    /// Stable machine code for the frontend to localize (`error.<code>`).
+    /// The variant's `Display` string travels alongside as the technical detail.
+    pub fn code(&self) -> &'static str {
+        match self {
+            ProviderError::NotLoggedIn(_) => "not_logged_in",
+            ProviderError::Expired(_) => "token_expired",
+            ProviderError::Network(_) => "network",
+            ProviderError::Status { .. } => "server_error",
+            ProviderError::Parse(_) => "parse_error",
+        }
+    }
+}
+
 impl From<crate::secrets::SecretsError> for ProviderError {
     fn from(e: crate::secrets::SecretsError) -> Self {
         ProviderError::NotLoggedIn(e.to_string())
+    }
+}
+
+impl From<ProviderError> for crate::model::ServiceError {
+    fn from(e: ProviderError) -> Self {
+        crate::model::ServiceError {
+            code: e.code().to_string(),
+            detail: Some(e.to_string()),
+        }
     }
 }
 
@@ -52,7 +75,7 @@ pub async fn fetch_all(providers: Vec<Box<dyn ProviderApi>>) -> Vec<ServiceUsage
                 connected: false,
                 plan: None,
                 account: None,
-                error: Some(e.to_string()),
+                error: Some(e.into()),
                 windows: vec![],
                 detail_windows: vec![],
                 raw_response: None,
@@ -132,7 +155,7 @@ pub async fn fetch_credential(cred: &crate::store::StoredCredential) -> ServiceU
             connected: false,
             plan: None,
             account: Some(active.label.clone()),
-            error: Some(e.to_string()),
+            error: Some(e.into()),
             windows: vec![],
             detail_windows: vec![],
             raw_response: None,

@@ -36,6 +36,27 @@
     "disconnected": "Disconnected",
     "viewDetails": "View details"
   },
+  "error": {
+    "not_logged_in": "Not signed in.",
+    "token_expired": "Session expired.",
+    "network": "Network error.",
+    "server_error": "The provider returned an error.",
+    "parse_error": "Couldn't read the provider response.",
+    "offline": "Not connected.",
+    "unknown": "Something went wrong.",
+    "loadFailed": "Couldn't load usage.",
+    "backendUnreachable": "Couldn't reach the tracker backend.",
+    "checkConnection": "Check the connection and try Refresh.",
+    "hint": {
+      "claude": "Run `claude` to refresh, or re-add the account.",
+      "codex": "Run `codex login`, or re-add the account.",
+      "gemini": "Re-authenticate with Google, or re-add the account.",
+      "copilot": "Re-authorize GitHub Copilot, or re-add the account.",
+      "cursor": "Sign in to Cursor again, or re-add the account.",
+      "zai": "Re-add the z.ai account with a fresh session key.",
+      "generic": "Re-add the account, or refresh its credential."
+    }
+  },
   "footer": {
     "hideOffline": "Hide offline",
     "showOffline": "Show offline"

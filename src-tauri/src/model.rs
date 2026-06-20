@@ -46,6 +46,27 @@ pub struct LimitWindow {
     pub limit: Option<f64>,
 }
 
+/// Structured, localizable error attached to a disconnected/failed service.
+/// `code` is a stable machine key the frontend maps to a localized message
+/// (`error.<code>`); `detail` is the English technical string (HTTP body,
+/// network message) shown as a fallback when no key matches that code.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServiceError {
+    pub code: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+impl ServiceError {
+    /// Code-only error (no technical detail).
+    pub fn code(code: &str) -> Self {
+        Self {
+            code: code.to_string(),
+            detail: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceUsage {
     /// Stable UI key for this reading. Auto-detected sessions use
@@ -57,7 +78,7 @@ pub struct ServiceUsage {
     pub connected: bool,
     pub plan: Option<String>,
     pub account: Option<String>,
-    pub error: Option<String>,
+    pub error: Option<ServiceError>,
     pub windows: Vec<LimitWindow>,
     /// Modal-only windows (Spark / per-model / credits / resets / extra usage).
     /// Hidden on the card, shown when the card is opened.
@@ -170,7 +191,7 @@ mod tests {
             connected: false,
             plan: None,
             account: None,
-            error: Some("offline".into()),
+            error: Some(ServiceError::code("offline")),
             windows: vec![],
             detail_windows: vec![],
             raw_response: None,

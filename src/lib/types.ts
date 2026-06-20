@@ -21,6 +21,16 @@ export interface LimitWindow {
   limit: number | null;
 }
 
+/**
+ * Structured, localizable service error. `code` is a stable machine key the UI
+ * maps to a localized message (`error.<code>`); `detail` is the English
+ * technical string, shown as a fallback when no key matches that code.
+ */
+export interface ServiceError {
+  code: string;
+  detail?: string;
+}
+
 export interface ServiceUsage {
   id: string;
   source: ServiceSource;
@@ -28,7 +38,7 @@ export interface ServiceUsage {
   connected: boolean;
   plan: string | null;
   account: string | null;
-  error: string | null;
+  error: ServiceError | null;
   /** PRIMARY windows — shown on the card (headline ring + secondary bars). */
   windows: LimitWindow[];
   /** MODAL-ONLY windows — hidden on the card, shown in the detail modal. */

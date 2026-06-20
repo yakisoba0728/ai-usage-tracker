@@ -1,6 +1,6 @@
 import type { TFunction } from "i18next";
 
-import type { LimitWindow } from "@/lib/types";
+import type { LimitWindow, ServiceError } from "@/lib/types";
 
 export type Severity = "ok" | "warn" | "crit";
 
@@ -39,6 +39,17 @@ export function formatUsedLimit(w: LimitWindow): string | null {
   const fmt = (n: number | null) =>
     n == null ? "—" : money ? `$${n.toFixed(2)}` : n.toLocaleString();
   return `${fmt(w.used)} / ${fmt(w.limit)}`;
+}
+
+/**
+ * Localized message for a structured service error. Maps the stable `code` to
+ * `error.<code>`, falling back to the backend's English `detail` (then a
+ * generic string) when no translation key matches that code.
+ */
+export function formatServiceError(error: ServiceError, t: TFunction): string {
+  return t(`error.${error.code}`, {
+    defaultValue: error.detail ?? t("error.unknown"),
+  });
 }
 
 /**

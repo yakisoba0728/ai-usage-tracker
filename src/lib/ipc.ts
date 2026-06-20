@@ -235,7 +235,7 @@ function createBrowserSnapshot(): UsageSnapshot {
         connected: false,
         plan: null,
         account: null,
-        error: "Cursor session not found.",
+        error: { code: "not_logged_in", detail: "Cursor session not found." },
         windows: [],
         detail_windows: [],
       },

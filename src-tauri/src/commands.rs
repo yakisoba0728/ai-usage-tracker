@@ -215,7 +215,7 @@ mod tests {
             connected,
             plan: None,
             account: None,
-            error: err.map(String::from),
+            error: err.map(crate::model::ServiceError::code),
             windows: vec![],
             detail_windows: vec![],
             raw_response: None,

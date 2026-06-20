@@ -343,7 +343,7 @@ function MobileHeader({
     <header className="flex h-12 items-center justify-between border-b border-border px-4">
       <div className="flex items-center gap-2 font-semibold">
         <Command className="size-5 text-[#73b8f4]" />
-        Control Plane
+        AI Usage Tracker
       </div>
       <div className="flex items-center gap-1">
         <Button

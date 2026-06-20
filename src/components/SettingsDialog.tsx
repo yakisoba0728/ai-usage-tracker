@@ -146,7 +146,7 @@ export function SettingsDialog({
               <Section title="General" description="Display, refresh, and account visibility.">
                 <SettingsRow
                   icon={<Monitor className="size-4" />}
-                  label="Launch Control Plane at login"
+                  label="Launch AI Usage Tracker at login"
                   description="Start the app automatically when you sign in."
                 >
                   <Toggle checked={launchAtLogin} onChange={setLaunchAtLogin} />

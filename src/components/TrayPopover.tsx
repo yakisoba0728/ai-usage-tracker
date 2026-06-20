@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { RotateCw } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import {
   getAllWindows,
   getCurrentWindow,
@@ -31,6 +32,7 @@ import type { AppConfig, LimitWindow, ServiceUsage } from "@/lib/types";
 export function TrayPopover() {
   const { snapshot, refreshing, refresh } = useSnapshot();
   const nowMs = useNow(1000);
+  const { t } = useTranslation();
   const [config, setConfig] = useState<AppConfig | null>(null);
 
   useEffect(() => {
@@ -60,8 +62,8 @@ export function TrayPopover() {
             type="button"
             onClick={() => void refresh()}
             disabled={refreshing}
-            aria-label="Refresh usage"
-            title="Refresh"
+            aria-label={t("tray.refreshUsage")}
+            title={t("common.refresh")}
             className="rounded-md p-1 text-text-faint transition-colors hover:bg-surface-2 hover:text-text disabled:opacity-50"
           >
             <RotateCw className={refreshing ? "size-3.5 animate-spin" : "size-3.5"} />
@@ -78,7 +80,7 @@ export function TrayPopover() {
       <div className="scroll-area flex-1 overflow-y-auto px-2 py-1">
         {services.length === 0 ? (
           <div className="px-2 py-10 text-center text-text-faint" style={{ fontSize: 12 }}>
-            No connected providers.
+            {t("tray.noConnected")}
           </div>
         ) : (
           services.map((s) => (
@@ -99,7 +101,7 @@ export function TrayPopover() {
           className="w-full rounded-md bg-surface-2 px-3 py-2 text-text transition-colors hover:bg-white/[0.06]"
           style={{ fontSize: 13, fontWeight: 500 }}
         >
-          Open Dashboard →
+          {t("tray.openDashboard")}
         </button>
       </div>
     </div>

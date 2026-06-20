@@ -7,6 +7,14 @@
   "nav": {
     "accounts": "Accounts"
   },
+  "common": {
+    "refresh": "Refresh"
+  },
+  "tray": {
+    "refreshUsage": "Refresh usage",
+    "noConnected": "No connected providers.",
+    "openDashboard": "Open Dashboard →"
+  },
   "toolbar": {
     "searchPlaceholder": "Search accounts, providers, tags...",
     "addAccount": "Add Account"

@@ -50,5 +50,74 @@
     "title": "연결된 계정 없음",
     "body": "계정을 추가해 사용량 추적을 시작하거나, 제공자 CLI에 로그인하면 여기에 자동으로 표시됩니다.",
     "addAccount": "계정 추가"
+  },
+  "detail": {
+    "srTitle": "{{provider}} 상세 정보",
+    "srDesc": "사용량, 한도, 세션, 제공자 설정.",
+    "connected": "연결됨",
+    "offline": "오프라인",
+    "accountId": "계정 ID",
+    "source": "출처",
+    "lastRefresh": "마지막 새로고침",
+    "plan": "플랜",
+    "edit": "편집",
+    "moreActions": "추가 계정 작업",
+    "tab": {
+      "overview": "개요",
+      "limits": "한도",
+      "sessions": "세션",
+      "raw": "원문",
+      "settings": "설정"
+    },
+    "menu": {
+      "refresh": "계정 새로고침",
+      "reauth": "재인증",
+      "settings": "앱 설정",
+      "remove": "계정 제거"
+    },
+    "overview": {
+      "overallUsage": "전체 사용량",
+      "noLimit": "한도 미보고",
+      "resetsIn": "초기화까지",
+      "currentWindow": "현재 창",
+      "noReset": "초기화 없음",
+      "noDetailWindows": "이 제공자는 상세 할당량 창을 보고하지 않았습니다."
+    },
+    "metric": {
+      "used": "사용",
+      "resetsIn": "{{time}} 후 초기화",
+      "noReset": "초기화 없음"
+    },
+    "limits": {
+      "noWindows": "이 계정에 대해 보고된 할당량 창이 없습니다.",
+      "noUsedLimit": "사용량/한도 값 없음",
+      "resetsIn": "{{time}} 후 초기화",
+      "noResetReported": "초기화 정보 미보고"
+    },
+    "sessions": {
+      "source": "세션 출처",
+      "provider": "제공자",
+      "account": "계정",
+      "lastParsed": "마지막 파싱",
+      "storedCredential": "저장된 자격증명",
+      "autoDetected": "자동 감지된 로컬 세션",
+      "notReported": "미보고",
+      "reuseLocal": "로컬 세션 재사용",
+      "reauth": "재인증"
+    },
+    "settings": {
+      "providerDisplay": "제공자 표시",
+      "displayName": "표시 이름",
+      "primaryWindow": "기본 창",
+      "autoWindow": "자동 (첫 보고 창)",
+      "thresholds": "사용량 임계값",
+      "add": "추가",
+      "dangerZone": "위험 구역",
+      "reauthAccount": "계정 재인증"
+    },
+    "raw": {
+      "empty": "원문 응답 없음 — 이 계정은 이번 주기에 HTTP 호출을 하지 않았습니다."
+    },
+    "loading": "사용량 불러오는 중…"
   }
 }

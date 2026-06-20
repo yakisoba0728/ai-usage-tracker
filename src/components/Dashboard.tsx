@@ -9,7 +9,6 @@ import {
 } from "react";
 import {
   Check,
-  ChevronDown,
   Cloud,
   Command,
   Edit3,
@@ -66,13 +65,14 @@ import { serviceStatus } from "@/lib/status";
 import { cn, clamp } from "@/lib/utils";
 import type { AppConfig, LimitWindow, Provider, ProviderConfig, ServiceUsage } from "@/lib/types";
 
-type InspectorTab = "overview" | "limits" | "sessions" | "settings";
+type InspectorTab = "overview" | "limits" | "sessions" | "raw" | "settings";
 
-const INSPECTOR_TABS: { id: InspectorTab; label: string }[] = [
-  { id: "overview", label: "Overview" },
-  { id: "limits", label: "Limits" },
-  { id: "sessions", label: "Sessions" },
-  { id: "settings", label: "Settings" },
+const INSPECTOR_TABS: InspectorTab[] = [
+  "overview",
+  "limits",
+  "sessions",
+  "raw",
+  "settings",
 ];
 
 export function Dashboard() {
@@ -648,16 +648,19 @@ function AccountDetailDialog({
   onConfigChange: (next: AppConfig) => void;
   onRemove: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <Dialog open={open && service != null} onOpenChange={onOpenChange}>
       <DialogContent className="h-[min(760px,86dvh)] w-[min(860px,94vw)] max-w-none gap-0 overflow-hidden rounded-xl border-border bg-[#1b1d20] p-0 shadow-2xl shadow-black/50">
         {service && (
           <>
             <DialogTitle className="sr-only">
-              {providerDisplayName(config, service.provider)} details
+              {t("detail.srTitle", {
+                provider: providerDisplayName(config, service.provider),
+              })}
             </DialogTitle>
             <DialogDescription className="sr-only">
-              Usage, limits, sessions, and provider settings.
+              {t("detail.srDesc")}
             </DialogDescription>
             <DetailPanelContent
               service={service}
@@ -713,6 +716,7 @@ function DetailPanelContent({
   onConfigChange: (next: AppConfig) => void;
   onRemove: () => void;
 }) {
+  const { t } = useTranslation();
   const summary = buildInspectorSummary(service, config, nowMs);
   const accountId = storedAccountId(service);
   const allWindows = [...(service.windows ?? []), ...(service.detail_windows ?? [])];
@@ -728,14 +732,14 @@ function DetailPanelContent({
                 <h1 className="truncate text-xl font-semibold">{summary.title}</h1>
                 <span className={cn("size-2 rounded-full", service.connected ? "bg-ok" : "bg-text-faint")} />
                 <span className="text-xs text-text-dim">
-                  {service.connected ? "Connected" : "Offline"}
+                  {service.connected ? t("detail.connected") : t("detail.offline")}
                 </span>
               </div>
               <div className="num mt-2 grid gap-x-5 gap-y-1 text-xs text-text-faint sm:grid-cols-2">
-                <span>Account ID&nbsp;&nbsp;{summary.accountId}</span>
-                <span>Source&nbsp;&nbsp;{summary.sourceLabel}</span>
-                <span>Last Refresh&nbsp;&nbsp;{formatUpdatedAgo(fetchedAt, nowMs).replace("Updated ", "")}</span>
-                <span>Plan&nbsp;&nbsp;{service.plan ?? "—"}</span>
+                <span>{t("detail.accountId")}&nbsp;&nbsp;{summary.accountId}</span>
+                <span>{t("detail.source")}&nbsp;&nbsp;{summary.sourceLabel}</span>
+                <span>{t("detail.lastRefresh")}&nbsp;&nbsp;{formatUpdatedAgo(fetchedAt, nowMs).replace("Updated ", "")}</span>
+                <span>{t("detail.plan")}&nbsp;&nbsp;{service.plan ?? "—"}</span>
               </div>
             </div>
           </div>
@@ -743,26 +747,26 @@ function DetailPanelContent({
           <div className="relative flex shrink-0 items-center gap-2">
             <Button variant="ghost" size="sm" onClick={() => onTabChange("settings")}>
               <Edit3 className="size-4" />
-              Edit
+              {t("detail.edit")}
             </Button>
             <Button
               variant="ghost"
               size="icon"
               onClick={() => onMoreOpenChange(!moreOpen)}
-              aria-label="More account actions"
+              aria-label={t("detail.moreActions")}
             >
               <MoreHorizontal className="size-4" />
             </Button>
             {moreOpen && (
               <div className="menu-pop absolute right-0 top-10 z-40 w-56 rounded-lg border border-border-strong bg-[#25272b]/95 p-1.5 shadow-2xl shadow-black/40">
                 <MenuItem icon={<RefreshCw className={refreshing ? "size-4 animate-spin" : "size-4"} />} onClick={onRefresh}>
-                  Refresh account
+                  {t("detail.menu.refresh")}
                 </MenuItem>
                 <MenuItem icon={<Cloud className="size-4" />} onClick={onOpenAdd}>
-                  Re-authenticate
+                  {t("detail.menu.reauth")}
                 </MenuItem>
                 <MenuItem icon={<Settings className="size-4" />} onClick={onOpenSettings}>
-                  App settings
+                  {t("detail.menu.settings")}
                 </MenuItem>
                 <MenuItem
                   icon={<Trash2 className="size-4" />}
@@ -770,7 +774,7 @@ function DetailPanelContent({
                   destructive
                   onClick={onRemove}
                 >
-                  Remove account
+                  {t("detail.menu.remove")}
                 </MenuItem>
               </div>
             )}
@@ -778,19 +782,19 @@ function DetailPanelContent({
         </div>
 
         <div className="mt-5 flex gap-5 overflow-x-auto">
-          {INSPECTOR_TABS.map((item) => (
+          {INSPECTOR_TABS.map((id) => (
             <button
-              key={item.id}
+              key={id}
               type="button"
-              onClick={() => onTabChange(item.id)}
+              onClick={() => onTabChange(id)}
               className={cn(
                 "border-b-2 pb-3 text-sm font-medium transition-colors",
-                tab === item.id
+                tab === id
                   ? "border-[#4b9bea] text-text"
                   : "border-transparent text-text-dim hover:text-text",
               )}
             >
-              {item.label}
+              {t(`detail.tab.${id}`)}
             </button>
           ))}
         </div>
@@ -802,8 +806,6 @@ function DetailPanelContent({
             service={service}
             summary={summary}
             metrics={summary.metricCards}
-            nowMs={nowMs}
-            fetchedAt={fetchedAt}
           />
         )}
         {tab === "limits" && (
@@ -818,6 +820,7 @@ function DetailPanelContent({
             onOpenAdd={onOpenAdd}
           />
         )}
+        {tab === "raw" && <RawTab service={service} />}
         {tab === "settings" && (
           <InspectorSettings
             service={service}
@@ -835,69 +838,43 @@ function OverviewTab({
   service,
   summary,
   metrics,
-  nowMs,
-  fetchedAt,
 }: {
   service: ServiceUsage;
   summary: ReturnType<typeof buildInspectorSummary>;
   metrics: InspectorMetric[];
-  nowMs: number;
-  fetchedAt: number | null;
 }) {
+  const { t } = useTranslation();
   const status = serviceStatus(service, null);
-  const daily = service.detail_windows[0]?.used_percent ?? service.windows[1]?.used_percent ?? null;
   return (
     <div className="space-y-5">
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2">
         <OverviewStat
-          label="Overall Usage"
+          label={t("detail.overview.overallUsage")}
           value={formatPercent(summary.overallPercent)}
-          subvalue={summary.primaryUsedLimit ?? "No limit reported"}
+          subvalue={summary.primaryUsedLimit ?? t("detail.overview.noLimit")}
           tone={status}
         />
         <OverviewStat
-          label="Resets In"
+          label={t("detail.overview.resetsIn")}
           value={summary.resetLabel ?? "—"}
-          subvalue={summary.resetLabel ? "Current window" : "No reset"}
-        />
-        <OverviewStat
-          label="Daily Usage"
-          value={formatPercent(daily)}
-          subvalue={daily == null ? "Not reported" : "Latest detail"}
-          tone={daily != null && daily > 85 ? "critical" : daily != null && daily >= 60 ? "warning" : "ok"}
-        />
-        <OverviewStat
-          label="Status"
-          value={summary.status}
-          subvalue={service.connected ? "Daily limit" : "Needs attention"}
-          tone={serviceStatus(service, null)}
+          subvalue={
+            summary.resetLabel
+              ? t("detail.overview.currentWindow")
+              : t("detail.overview.noReset")
+          }
         />
       </div>
 
       <div className="grid gap-3 xl:grid-cols-3">
         {metrics.length > 0 ? (
-          metrics.slice(0, 3).map((metric) => (
-            <MetricCard key={metric.label} metric={metric} />
-          ))
+          metrics
+            .slice(0, 3)
+            .map((metric) => <MetricCard key={metric.label} metric={metric} />)
         ) : (
           <div className="rounded-lg border border-border bg-surface/60 p-4 text-sm text-text-faint xl:col-span-3">
-            This provider did not report detailed quota windows.
+            {t("detail.overview.noDetailWindows")}
           </div>
         )}
-      </div>
-
-      <div className="rounded-lg border border-border bg-surface/50">
-        <div className="border-b border-border px-4 py-3">
-          <h2 className="text-sm font-semibold">Recent Activity</h2>
-        </div>
-        <div className="divide-y divide-border">
-          {recentActivity(service, fetchedAt, nowMs).map((item) => (
-            <div key={`${item.time}-${item.event}`} className="grid grid-cols-[70px_minmax(0,1fr)] gap-4 px-4 py-3 text-sm">
-              <span className="num text-xs text-text-faint">{item.time}</span>
-              <span className="min-w-0 text-text-dim">{item.event}</span>
-            </div>
-          ))}
-        </div>
       </div>
     </div>
   );
@@ -916,10 +893,7 @@ function OverviewStat({
 }) {
   return (
     <div className="rounded-lg border border-border bg-surface/50 p-4">
-      <div className="mb-3 flex items-center gap-2 text-xs font-medium text-text-faint">
-        <ChevronDown className="size-3.5" />
-        {label}
-      </div>
+      <div className="mb-3 text-xs font-medium text-text-faint">{label}</div>
       <div className={cn("num text-2xl font-semibold", statusTextClass(tone))}>
         {value}
       </div>
@@ -929,6 +903,7 @@ function OverviewStat({
 }
 
 function MetricCard({ metric }: { metric: InspectorMetric }) {
+  const { t } = useTranslation();
   const width = `${clamp(metric.percent ?? 0, 0, 100)}%`;
   const tone =
     metric.percent == null
@@ -948,7 +923,9 @@ function MetricCard({ metric }: { metric: InspectorMetric }) {
       </div>
       <div className={cn("num mt-5 text-lg font-semibold", statusTextClass(tone))}>
         {metric.usedLimit?.split(" / ")[0] ?? formatPercent(metric.percent)}
-        <span className="ml-1 text-xs font-medium text-text-dim">used</span>
+        <span className="ml-1 text-xs font-medium text-text-dim">
+          {t("detail.metric.used")}
+        </span>
       </div>
       <div className="mt-2 flex items-center gap-2">
         <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-white/[0.10]">
@@ -961,7 +938,9 @@ function MetricCard({ metric }: { metric: InspectorMetric }) {
         </span>
       </div>
       <div className="num mt-3 text-xs text-text-faint">
-        {metric.resetLabel ? `Resets in ${metric.resetLabel}` : "No reset"}
+        {metric.resetLabel
+          ? t("detail.metric.resetsIn", { time: metric.resetLabel })
+          : t("detail.metric.noReset")}
       </div>
     </div>
   );
@@ -974,10 +953,11 @@ function LimitsTab({
   windows: LimitWindow[];
   nowMs: number;
 }) {
+  const { t } = useTranslation();
   if (windows.length === 0) {
     return (
       <div className="rounded-lg border border-border bg-surface/50 p-5 text-sm text-text-faint">
-        No quota windows were reported for this account.
+        {t("detail.limits.noWindows")}
       </div>
     );
   }
@@ -998,6 +978,7 @@ function WindowRow({
   window: LimitWindow;
   nowMs: number;
 }) {
+  const { t } = useTranslation();
   const percent = window.used_percent;
   const tone =
     percent == null
@@ -1013,7 +994,7 @@ function WindowRow({
         <div className="min-w-0">
           <h3 className="truncate text-sm font-semibold">{window.label}</h3>
           <p className="num mt-1 text-xs text-text-faint">
-            {formatUsedLimit(window) ?? "No used / limit values"}
+            {formatUsedLimit(window) ?? t("detail.limits.noUsedLimit")}
           </p>
         </div>
         <span className={cn("num text-lg font-semibold", statusTextClass(tone))}>
@@ -1022,7 +1003,11 @@ function WindowRow({
       </div>
       <MiniBar percent={percent} tone={tone} />
       <p className="num mt-3 text-xs text-text-faint">
-        {window.resets_at ? `Resets in ${compactReset(window.resets_at, nowMs)}` : "No reset reported"}
+        {window.resets_at
+          ? t("detail.limits.resetsIn", {
+              time: compactReset(window.resets_at, nowMs),
+            })
+          : t("detail.limits.noResetReported")}
       </p>
     </div>
   );
@@ -1041,28 +1026,63 @@ function SessionsTab({
   onRefresh: () => void;
   onOpenAdd: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="space-y-4">
       <div className="rounded-lg border border-border bg-surface/50 p-4">
         <div className="grid gap-4 sm:grid-cols-2">
-          <InfoLine label="Session source" value={service.source === "stored" ? "Stored credential" : "Auto-detected local session"} />
-          <InfoLine label="Provider" value={service.provider} mono />
-          <InfoLine label="Account" value={service.account ?? "Not reported"} />
-          <InfoLine label="Last parsed" value={formatUpdatedAgo(fetchedAt, nowMs).replace("Updated ", "")} mono />
+          <InfoLine
+            label={t("detail.sessions.source")}
+            value={
+              service.source === "stored"
+                ? t("detail.sessions.storedCredential")
+                : t("detail.sessions.autoDetected")
+            }
+          />
+          <InfoLine
+            label={t("detail.sessions.provider")}
+            value={service.provider}
+            mono
+          />
+          <InfoLine
+            label={t("detail.sessions.account")}
+            value={service.account ?? t("detail.sessions.notReported")}
+          />
+          <InfoLine
+            label={t("detail.sessions.lastParsed")}
+            value={formatUpdatedAgo(fetchedAt, nowMs).replace("Updated ", "")}
+            mono
+          />
         </div>
       </div>
 
       <div className="flex flex-wrap gap-2">
         <Button variant="outline" onClick={onRefresh}>
           <RefreshCw className="size-4" />
-          Reuse Local Session
+          {t("detail.sessions.reuseLocal")}
         </Button>
         <Button variant="secondary" onClick={onOpenAdd}>
           <Cloud className="size-4" />
-          Re-authenticate
+          {t("detail.sessions.reauth")}
         </Button>
       </div>
     </div>
+  );
+}
+
+function RawTab({ service }: { service: ServiceUsage }) {
+  const { t } = useTranslation();
+  if (!service.raw_response) {
+    return (
+      <div className="rounded-lg border border-border bg-surface/50 p-5 text-sm text-text-faint">
+        {t("detail.raw.empty")}
+      </div>
+    );
+  }
+  return (
+    <pre className="scroll-area max-h-[460px] overflow-auto rounded-lg border border-border bg-canvas p-4 text-xs leading-relaxed text-text-dim">
+      <code className="num">{service.raw_response}</code>
+    </pre>
   );
 }
 
@@ -1081,6 +1101,7 @@ function InspectorSettings({
   const providerConfig: ProviderConfig | null = config?.providers[idx] ?? null;
   const allWindows = [...(service.windows ?? []), ...(service.detail_windows ?? [])];
   const labels = Array.from(new Set(allWindows.map((window) => window.label)));
+  const { t } = useTranslation();
   const [nameDraft, setNameDraft] = useState(providerConfig?.custom_name ?? "");
   const [thresholdDraft, setThresholdDraft] = useState("");
 
@@ -1112,9 +1133,13 @@ function InspectorSettings({
   return (
     <div className="space-y-5">
       <div className="rounded-lg border border-border bg-surface/50 p-4">
-        <h2 className="mb-4 text-sm font-semibold">Provider Display</h2>
+        <h2 className="mb-4 text-sm font-semibold">
+          {t("detail.settings.providerDisplay")}
+        </h2>
         <label className="block">
-          <span className="mb-1.5 block text-xs text-text-faint">Display name</span>
+          <span className="mb-1.5 block text-xs text-text-faint">
+            {t("detail.settings.displayName")}
+          </span>
           <input
             value={nameDraft}
             onChange={(event) => setNameDraft(event.target.value)}
@@ -1133,14 +1158,16 @@ function InspectorSettings({
       </div>
 
       <div className="rounded-lg border border-border bg-surface/50 p-4">
-        <h2 className="mb-4 text-sm font-semibold">Primary Window</h2>
+        <h2 className="mb-4 text-sm font-semibold">
+          {t("detail.settings.primaryWindow")}
+        </h2>
         <select
           value={providerConfig?.primary_window ?? ""}
           disabled={config == null || labels.length === 0}
           onChange={(event) => patch({ primary_window: event.target.value || null })}
           className="w-full rounded-md border border-border bg-canvas px-3 py-2 text-sm text-text outline-none focus:border-border-strong"
         >
-          <option value="">Auto (first reported window)</option>
+          <option value="">{t("detail.settings.autoWindow")}</option>
           {labels.map((label) => (
             <option key={label} value={label}>
               {label}
@@ -1150,7 +1177,9 @@ function InspectorSettings({
       </div>
 
       <div className="rounded-lg border border-border bg-surface/50 p-4">
-        <h2 className="mb-4 text-sm font-semibold">Usage Thresholds</h2>
+        <h2 className="mb-4 text-sm font-semibold">
+          {t("detail.settings.thresholds")}
+        </h2>
         <div className="mb-3 flex flex-wrap gap-2">
           {(providerConfig?.notify_thresholds ?? []).map((threshold) => (
             <button
@@ -1181,16 +1210,18 @@ function InspectorSettings({
             className="num w-24 rounded-md border border-border bg-canvas px-3 py-2 text-sm text-text outline-none focus:border-border-strong"
           />
           <Button variant="outline" onClick={addThreshold} disabled={thresholdDraft.trim() === ""}>
-            Add
+            {t("detail.settings.add")}
           </Button>
         </div>
       </div>
 
       <div className="rounded-lg border border-border bg-surface/50 p-4">
-        <h2 className="mb-3 text-sm font-semibold text-crit">Danger Zone</h2>
+        <h2 className="mb-3 text-sm font-semibold text-crit">
+          {t("detail.settings.dangerZone")}
+        </h2>
         <Button variant="destructive" onClick={onOpenAdd}>
           <Cloud className="size-4" />
-          Re-authenticate Account
+          {t("detail.settings.reauthAccount")}
         </Button>
       </div>
     </div>
@@ -1285,10 +1316,11 @@ function MenuItem({
 }
 
 function LoadingState() {
+  const { t } = useTranslation();
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-3 py-24 text-text-dim">
       <Loader2 className="size-5 animate-spin" />
-      <span className="text-sm">Loading usage…</span>
+      <span className="text-sm">{t("detail.loading")}</span>
     </div>
   );
 }
@@ -1313,26 +1345,6 @@ function NoResults({
       </Button>
     </div>
   );
-}
-
-function recentActivity(
-  service: ServiceUsage,
-  fetchedAt: number | null,
-  nowMs: number,
-) {
-  const base = fetchedAt ?? Math.floor(nowMs / 1000);
-  const events = [
-    { time: formatTime(base), event: "Refreshed usage data" },
-    ...service.windows.slice(0, 2).map((window, index) => ({
-      time: formatTime(base - (index + 1) * 44 * 60),
-      event: `${window.label} reported ${formatPercent(window.used_percent)}`,
-    })),
-    ...service.detail_windows.slice(0, 2).map((window, index) => ({
-      time: formatTime(base - (index + 3) * 38 * 60),
-      event: `${window.label} detail parsed from provider response`,
-    })),
-  ];
-  return events.slice(0, 5);
 }
 
 function statusTextClass(status: ReturnType<typeof serviceStatus>): string {
@@ -1361,13 +1373,6 @@ function compactReset(epoch: number, nowMs: number): string {
   const days = Math.floor(hours / 24);
   const remH = hours % 24;
   return remH > 0 ? `${days}d ${remH}h` : `${days}d`;
-}
-
-function formatTime(epoch: number): string {
-  return new Date(epoch * 1000).toLocaleTimeString(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
 }
 
 function storedAccountId(service: ServiceUsage): string | null {

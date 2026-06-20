@@ -50,5 +50,74 @@
     "title": "No accounts connected",
     "body": "Add an account to start tracking usage, or sign in to a provider's CLI and it'll appear here automatically.",
     "addAccount": "Add account"
+  },
+  "detail": {
+    "srTitle": "{{provider}} details",
+    "srDesc": "Usage, limits, sessions, and provider settings.",
+    "connected": "Connected",
+    "offline": "Offline",
+    "accountId": "Account ID",
+    "source": "Source",
+    "lastRefresh": "Last Refresh",
+    "plan": "Plan",
+    "edit": "Edit",
+    "moreActions": "More account actions",
+    "tab": {
+      "overview": "Overview",
+      "limits": "Limits",
+      "sessions": "Sessions",
+      "raw": "Raw",
+      "settings": "Settings"
+    },
+    "menu": {
+      "refresh": "Refresh account",
+      "reauth": "Re-authenticate",
+      "settings": "App settings",
+      "remove": "Remove account"
+    },
+    "overview": {
+      "overallUsage": "Overall usage",
+      "noLimit": "No limit reported",
+      "resetsIn": "Resets in",
+      "currentWindow": "Current window",
+      "noReset": "No reset",
+      "noDetailWindows": "This provider did not report detailed quota windows."
+    },
+    "metric": {
+      "used": "used",
+      "resetsIn": "Resets in {{time}}",
+      "noReset": "No reset"
+    },
+    "limits": {
+      "noWindows": "No quota windows were reported for this account.",
+      "noUsedLimit": "No used / limit values",
+      "resetsIn": "Resets in {{time}}",
+      "noResetReported": "No reset reported"
+    },
+    "sessions": {
+      "source": "Session source",
+      "provider": "Provider",
+      "account": "Account",
+      "lastParsed": "Last parsed",
+      "storedCredential": "Stored credential",
+      "autoDetected": "Auto-detected local session",
+      "notReported": "Not reported",
+      "reuseLocal": "Reuse local session",
+      "reauth": "Re-authenticate"
+    },
+    "settings": {
+      "providerDisplay": "Provider display",
+      "displayName": "Display name",
+      "primaryWindow": "Primary window",
+      "autoWindow": "Auto (first reported window)",
+      "thresholds": "Usage thresholds",
+      "add": "Add",
+      "dangerZone": "Danger zone",
+      "reauthAccount": "Re-authenticate account"
+    },
+    "raw": {
+      "empty": "No raw response — this account didn't make an HTTP call this cycle."
+    },
+    "loading": "Loading usage…"
   }
 }

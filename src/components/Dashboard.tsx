@@ -291,7 +291,7 @@ export function Dashboard() {
             <div className="flex items-center justify-between border-t border-border px-5 py-3 text-xs text-text-faint">
               <span className="inline-flex items-center gap-1.5">
                 <Check className="size-3.5" />
-                Updated just now
+                {formatUpdatedAgo(snapshot?.fetched_at ?? null, nowMs)}
               </span>
               <button
                 type="button"

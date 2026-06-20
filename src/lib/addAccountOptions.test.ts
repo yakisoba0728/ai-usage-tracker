@@ -25,5 +25,8 @@ describe("add account options", () => {
       "session-key",
       "local-session",
     ]);
+    expect(authOptionsForProvider("cursor").map((option) => option.id)).toEqual([
+      "local-session",
+    ]);
   });
 });

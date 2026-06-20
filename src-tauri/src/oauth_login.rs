@@ -456,4 +456,52 @@ mod tests {
             .iter()
             .any(|(k, v)| *k == "prompt" && *v == "consent"));
     }
+
+    /// Encode a fake JWT (`hdr.<payload>.sig`) whose middle segment is the given
+    /// claims, so `build_credential`'s id_token parsing can be exercised offline.
+    fn fake_jwt(claims: serde_json::Value) -> String {
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use base64::Engine;
+        let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).unwrap());
+        format!("hdr.{payload}.sig")
+    }
+
+    #[test]
+    fn build_credential_extracts_codex_email_and_account_id() {
+        let id_token = fake_jwt(serde_json::json!({
+            "email": "user@example.com",
+            "https://api.openai.com/auth": { "chatgpt_account_id": "acct-123" },
+        }));
+        let tokens = serde_json::json!({
+            "access_token": "at",
+            "refresh_token": "rt",
+            "id_token": id_token,
+            "expires_in": 3600,
+        });
+        let cred = build_credential(Provider::Codex, &tokens);
+        assert_eq!(cred.access_token, "at");
+        assert_eq!(cred.refresh_token.as_deref(), Some("rt"));
+        assert_eq!(cred.label, "user@example.com");
+        assert_eq!(cred.account_id.as_deref(), Some("acct-123"));
+        assert!(cred.expires_at > 0, "expires_in should set expires_at");
+    }
+
+    #[test]
+    fn build_credential_uses_gemini_email_and_no_account_id() {
+        let id_token = fake_jwt(serde_json::json!({ "email": "me@gmail.com" }));
+        let tokens = serde_json::json!({ "access_token": "g-at", "id_token": id_token });
+        let cred = build_credential(Provider::Gemini, &tokens);
+        assert_eq!(cred.label, "me@gmail.com");
+        assert_eq!(cred.account_id, None);
+        assert_eq!(cred.expires_at, 0, "no expires_in → unknown expiry");
+    }
+
+    #[test]
+    fn build_credential_falls_back_to_generic_label_without_id_token() {
+        let tokens = serde_json::json!({ "access_token": "at" });
+        let cred = build_credential(Provider::Codex, &tokens);
+        assert_eq!(cred.access_token, "at");
+        assert_eq!(cred.label, "Codex account");
+        assert_eq!(cred.account_id, None);
+    }
 }

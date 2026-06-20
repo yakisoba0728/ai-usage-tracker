@@ -438,13 +438,24 @@ impl crate::providers::ProviderApi for ClaudeProvider {
                 ));
             }
         }
-        fetch_with(
-            &self.http,
-            &creds.access_token,
-            format_plan(&creds.rate_limit_tier, &creds.subscription_type),
-            None,
-        )
-        .await
+        // Fetch usage. On 429 (per-access-token rate limit — see
+        // anthropics/claude-code#31021), refresh to get a fresh token with its
+        // own rate-limit window, write back, then retry once.
+        let plan = format_plan(&creds.rate_limit_tier, &creds.subscription_type);
+        match fetch_with(&self.http, &creds.access_token, plan.clone(), None).await {
+            Err(ProviderError::Status { status: 429, .. }) => {
+                let rt = creds.refresh_token.clone().ok_or_else(|| {
+                    ProviderError::Expired("rate limited and no refresh_token available".into())
+                })?;
+                let fresh = refresh_oauth(&self.http, &rt).await?;
+                let exp = fresh.expires_in
+                    .map(|s| now_ms + (s as i64) * 1000)
+                    .unwrap_or(0);
+                let _ = write_back(&blob, &fresh.access_token, &fresh.refresh_token, exp);
+                fetch_with(&self.http, &fresh.access_token, plan, None).await
+            }
+            other => other,
+        }
     }
 }
 

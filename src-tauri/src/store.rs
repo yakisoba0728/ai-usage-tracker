@@ -24,9 +24,7 @@ pub struct StoredCredential {
     pub account_id: Option<String>, // Codex: chatgpt-account-id
 }
 
-/// On-disk record: non-secret metadata only. Legacy (pre-keychain) files may
-/// still carry inline secret fields; those are read once, migrated into the
-/// keychain on `load`, then stripped (see `load`). New writes never include them.
+/// On-disk record: non-secret metadata only. Secrets live in the OS keychain.
 #[derive(Clone, Serialize, Deserialize)]
 struct StoredRecord {
     id: String,
@@ -36,13 +34,6 @@ struct StoredRecord {
     expires_at: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     account_id: Option<String>,
-    // legacy plaintext secrets — present only in pre-keychain files.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    access_token: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    refresh_token: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    id_token: Option<String>,
 }
 
 /// The secret bundle stored in the OS keychain, keyed by the credential id.
@@ -126,9 +117,6 @@ pub fn add(mut cred: StoredCredential) -> Result<String, String> {
         label: cred.label,
         expires_at: cred.expires_at,
         account_id: cred.account_id,
-        access_token: None,
-        refresh_token: None,
-        id_token: None,
     });
     persist_records(&records);
     Ok(cred.id)
@@ -158,9 +146,6 @@ pub fn update(cred: &StoredCredential) -> bool {
             r.label = cred.label.clone();
             r.expires_at = cred.expires_at;
             r.account_id = cred.account_id.clone();
-            r.access_token = None;
-            r.refresh_token = None;
-            r.id_token = None;
             found = true;
             break;
         }
@@ -186,57 +171,26 @@ pub fn list() -> Vec<StoredCredential> {
     load()
 }
 
-/// Load all stored accounts, reading each secret from the keychain. Legacy
-/// plaintext entries are migrated into the keychain (and stripped from
-/// accounts.json) on first load; a keychain write failure keeps the plaintext so
-/// nothing is lost.
+/// Load all stored accounts, reading each secret from the keychain. A record
+/// whose keychain secret is missing or unreadable is skipped.
 pub fn load() -> Vec<StoredCredential> {
-    let mut records = read_records();
-    let mut out = Vec::new();
-    let mut dirty = false;
-
-    for rec in records.iter_mut() {
-        let secret: Option<SecretBlob> = if rec.access_token.is_some() {
-            // Legacy plaintext — migrate into the keychain.
-            let blob = SecretBlob {
-                access_token: rec.access_token.clone().unwrap_or_default(),
-                refresh_token: rec.refresh_token.clone(),
-                id_token: rec.id_token.clone(),
-            };
-            if let Ok(s) = serde_json::to_string(&blob) {
-                if crate::keychain::store_secret(&rec.id, &s).is_ok() {
-                    rec.access_token = None;
-                    rec.refresh_token = None;
-                    rec.id_token = None;
-                    dirty = true;
-                }
-            }
-            Some(blob)
-        } else {
-            match crate::keychain::load_secret(&rec.id) {
-                Ok(Some(s)) => serde_json::from_str(&s).ok(),
-                _ => None,
-            }
-        };
-
-        if let Some(secret) = secret {
-            out.push(StoredCredential {
-                id: rec.id.clone(),
+    read_records()
+        .into_iter()
+        .filter_map(|rec| {
+            let blob = crate::keychain::load_secret(&rec.id).ok().flatten()?;
+            let secret: SecretBlob = serde_json::from_str(&blob).ok()?;
+            Some(StoredCredential {
+                id: rec.id,
                 provider: rec.provider,
-                label: rec.label.clone(),
+                label: rec.label,
                 access_token: secret.access_token,
                 refresh_token: secret.refresh_token,
                 expires_at: rec.expires_at,
                 id_token: secret.id_token,
-                account_id: rec.account_id.clone(),
-            });
-        }
-    }
-
-    if dirty {
-        persist_records(&records);
-    }
-    out
+                account_id: rec.account_id,
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -296,40 +250,6 @@ mod tests {
     }
 
     #[test]
-    fn migrates_legacy_plaintext_into_keychain() {
-        let _g = ENV_LOCK.lock().unwrap();
-        let path = temp_path("migrate");
-        // A pre-keychain accounts.json with inline plaintext tokens.
-        std::fs::write(
-            &path,
-            r#"{"accounts":[{"id":"legacy-1","provider":"gemini","label":"g","expires_at":0,"access_token":"LEGACY-AT","refresh_token":"LEGACY-RT"}]}"#,
-        )
-        .unwrap();
-        std::env::set_var("AIT_ACCOUNTS_PATH", &path);
-
-        // First load migrates the secret into the keychain and reconstructs it.
-        let loaded = load();
-        assert_eq!(loaded.len(), 1);
-        assert_eq!(loaded[0].access_token, "LEGACY-AT");
-        assert_eq!(loaded[0].refresh_token.as_deref(), Some("LEGACY-RT"));
-
-        // accounts.json no longer holds the plaintext, but keeps the metadata.
-        let file = std::fs::read_to_string(&path).unwrap();
-        assert!(!file.contains("LEGACY-AT"), "plaintext not stripped");
-        assert!(!file.contains("access_token"), "secret field not stripped");
-        assert!(file.contains("legacy-1"), "metadata should persist");
-
-        // A second load reads purely from the keychain.
-        let again = load();
-        assert_eq!(again.len(), 1);
-        assert_eq!(again[0].access_token, "LEGACY-AT");
-
-        assert!(remove("legacy-1"));
-        std::env::remove_var("AIT_ACCOUNTS_PATH");
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
     fn metadata_record_serializes_without_secret_fields() {
         let rec = StoredRecord {
             id: "x".into(),
@@ -337,9 +257,6 @@ mod tests {
             label: "a@b.c".into(),
             expires_at: 7,
             account_id: Some("acct".into()),
-            access_token: None,
-            refresh_token: None,
-            id_token: None,
         };
         let s = serde_json::to_string(&StoreFile {
             accounts: vec![rec],

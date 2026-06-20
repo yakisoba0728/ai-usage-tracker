@@ -276,7 +276,9 @@ impl crate::providers::ProviderApi for CodexProvider {
             if let Some(updated) =
                 apply_auth_refresh(auth, &fresh, &chrono::Utc::now().to_rfc3339())
             {
-                let _ = write_auth(&updated);
+                if let Err(e) = write_auth(&updated) {
+                    eprintln!("codex: failed to persist refreshed auth.json: {e}");
+                }
                 if let Some(access_token) = fresh.access_token {
                     t.access_token = access_token;
                 }

@@ -496,7 +496,11 @@ impl crate::providers::ProviderApi for ClaudeProvider {
                             .expires_in
                             .map(|s| now_ms + (s as i64) * 1000)
                             .unwrap_or(0);
-                        let _ = write_back(&blob, &fresh.access_token, &fresh.refresh_token, exp);
+                        if let Err(e) =
+                            write_back(&blob, &fresh.access_token, &fresh.refresh_token, exp)
+                        {
+                            eprintln!("claude: failed to persist refreshed token: {e}");
+                        }
                         creds.access_token = fresh.access_token;
                         creds.refresh_token = Some(fresh.refresh_token);
                     }
@@ -527,7 +531,9 @@ impl crate::providers::ProviderApi for ClaudeProvider {
                     .expires_in
                     .map(|s| now_ms + (s as i64) * 1000)
                     .unwrap_or(0);
-                let _ = write_back(&blob, &fresh.access_token, &fresh.refresh_token, exp);
+                if let Err(e) = write_back(&blob, &fresh.access_token, &fresh.refresh_token, exp) {
+                    eprintln!("claude: failed to persist refreshed token: {e}");
+                }
                 fetch_with(&self.http, &fresh.access_token, plan, None).await
             }
             other => other,

@@ -192,7 +192,9 @@ impl crate::providers::ProviderApi for GeminiProvider {
                             .refresh_token
                             .as_ref()
                             .or(creds.refresh_token.as_ref());
-                        let _ = write_back_creds(&blob, &fresh.access_token, rt, new_exp);
+                        if let Err(e) = write_back_creds(&blob, &fresh.access_token, rt, new_exp) {
+                            eprintln!("gemini: failed to persist refreshed creds: {e}");
+                        }
                         creds.access_token = fresh.access_token;
                         creds.expiry_date = new_exp;
                     }
@@ -337,16 +339,18 @@ fn write_back_creds(
     expiry_date: i64,
 ) -> Result<(), ProviderError> {
     let mut blob = orig.clone();
-    if let Some(obj) = blob.as_object_mut() {
-        obj.insert("access_token".into(), json!(access_token));
-        if let Some(rt) = refresh_token {
-            obj.insert("refresh_token".into(), json!(rt));
-        }
-        obj.insert("expiry_date".into(), json!(expiry_date));
-        if let Ok(s) = serde_json::to_string_pretty(&blob) {
-            let _ = std::fs::write(secrets::gemini_creds_path(), s);
-        }
+    let obj = blob
+        .as_object_mut()
+        .ok_or_else(|| ProviderError::Parse("gemini creds: not a JSON object".into()))?;
+    obj.insert("access_token".into(), json!(access_token));
+    if let Some(rt) = refresh_token {
+        obj.insert("refresh_token".into(), json!(rt));
     }
+    obj.insert("expiry_date".into(), json!(expiry_date));
+    let s = serde_json::to_string_pretty(&blob)
+        .map_err(|e| ProviderError::Parse(format!("gemini creds serialize: {e}")))?;
+    std::fs::write(secrets::gemini_creds_path(), &s)
+        .map_err(|e| ProviderError::Network(format!("write gemini creds: {e}")))?;
     Ok(())
 }
 async fn post_code_assist(

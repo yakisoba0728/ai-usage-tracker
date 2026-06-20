@@ -74,7 +74,12 @@ pub async fn fetch_credential(cred: &crate::store::StoredCredential) -> ServiceU
     let active = if cred.expires_at > 0 && cred.expires_at < now_ms {
         match refresh_stored(&http, cred).await {
             Some(updated) => {
-                let _ = crate::store::update(&updated);
+                if !crate::store::update(&updated) {
+                    eprintln!(
+                        "stored {:?} account {}: refreshed token not persisted",
+                        updated.provider, updated.id
+                    );
+                }
                 updated
             }
             None => cred.clone(),

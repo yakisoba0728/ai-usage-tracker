@@ -10,28 +10,34 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::http;
-use crate::model::{LimitWindow, Provider, ServiceUsage};
+use crate::model::{auto_service_id, LimitWindow, Provider, ServiceSource, ServiceUsage};
 use crate::providers::ProviderError;
 use crate::secrets;
 
-const USAGE_URL: &str =
-    "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage";
+const USAGE_URL: &str = "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage";
 const ACCESS_KEY: &str = "cursorAuth/accessToken";
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct CursorUsage {
-    #[serde(default)] enabled: Option<bool>,
-    #[serde(default)] plan_usage: Option<PlanUsage>,
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    plan_usage: Option<PlanUsage>,
 }
 
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct PlanUsage {
-    #[serde(default)] included_spend: Option<f64>,
-    #[serde(default)] total_spend: Option<f64>,
-    #[serde(default)] remaining: Option<f64>,
-    #[serde(default)] limit: Option<f64>,
-    #[serde(default)] total_percent_used: Option<f64>,
+    #[serde(default)]
+    included_spend: Option<f64>,
+    #[serde(default)]
+    total_spend: Option<f64>,
+    #[serde(default)]
+    remaining: Option<f64>,
+    #[serde(default)]
+    limit: Option<f64>,
+    #[serde(default)]
+    total_percent_used: Option<f64>,
 }
 
 pub struct CursorProvider {
@@ -53,8 +59,9 @@ impl CursorProvider {
 
 /// Read the Cursor access token from `state.vscdb` (raw string value).
 fn read_cursor_token() -> Result<String, ProviderError> {
-    let db = secrets::cursor_state_db()
-        .ok_or_else(|| ProviderError::NotLoggedIn("Cursor not installed / no state.vscdb".into()))?;
+    let db = secrets::cursor_state_db().ok_or_else(|| {
+        ProviderError::NotLoggedIn("Cursor not installed / no state.vscdb".into())
+    })?;
     let conn = rusqlite::Connection::open_with_flags(
         &db,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -63,9 +70,7 @@ fn read_cursor_token() -> Result<String, ProviderError> {
     let mut stmt = conn
         .prepare("SELECT value FROM ItemTable WHERE key = ? LIMIT 1")
         .map_err(|e| ProviderError::Parse(format!("query state.vscdb: {e}")))?;
-    let token: Option<String> = stmt
-        .query_row([ACCESS_KEY], |r| r.get::<_, String>(0))
-        .ok();
+    let token: Option<String> = stmt.query_row([ACCESS_KEY], |r| r.get::<_, String>(0)).ok();
     token.filter(|t| !t.is_empty()).ok_or_else(|| {
         ProviderError::NotLoggedIn(
             "Cursor token not found in state.vscdb (sign in to Cursor)".into(),
@@ -94,10 +99,12 @@ fn normalize(u: &CursorUsage) -> Vec<LimitWindow> {
         })
         .or(p.total_spend);
     let limit_cents = p.limit;
-    let used_percent = p.total_percent_used.or_else(|| match (used_cents, limit_cents) {
-        (Some(u), Some(l)) if l > 0.0 => Some(u / l * 100.0),
-        _ => None,
-    });
+    let used_percent = p
+        .total_percent_used
+        .or_else(|| match (used_cents, limit_cents) {
+            (Some(u), Some(l)) if l > 0.0 => Some(u / l * 100.0),
+            _ => None,
+        });
     if used_cents.is_none() && limit_cents.is_none() && used_percent.is_none() {
         return vec![];
     }
@@ -134,6 +141,8 @@ impl crate::providers::ProviderApi for CursorProvider {
         let u: CursorUsage =
             serde_json::from_value(val).map_err(|e| ProviderError::Parse(e.to_string()))?;
         Ok(ServiceUsage {
+            id: auto_service_id(Provider::Cursor),
+            source: ServiceSource::Auto,
             provider: Provider::Cursor,
             connected: true,
             plan: None,
@@ -206,6 +215,10 @@ mod tests {
     #[test]
     fn normalize_empty_when_no_plan_usage() {
         assert!(normalize(&CursorUsage::default()).is_empty());
-        assert!(normalize(&CursorUsage { enabled: Some(false), plan_usage: None }).is_empty());
+        assert!(normalize(&CursorUsage {
+            enabled: Some(false),
+            plan_usage: None
+        })
+        .is_empty());
     }
 }

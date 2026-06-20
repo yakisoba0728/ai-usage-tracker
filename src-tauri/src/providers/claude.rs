@@ -1,38 +1,17 @@
 //! Claude (via Claude Code) — reads the OAuth token from the macOS keychain
 //! (or ~/.claude/.credentials.json), auto-refreshes via the public Claude Code
-//! client_id against api.anthropic.com/v1/oauth/token, then fetches usage from
+//! client_id against platform.claude.com/v1/oauth/token, then fetches usage from
 //! api.anthropic.com/api/oauth/usage + /profile. Modeled on claude-meter (MIT).
 
 use async_trait::async_trait;
 use serde::Deserialize;
 
 use crate::http;
-use crate::model::{LimitWindow, Provider, ServiceUsage};
+use crate::model::{auto_service_id, LimitWindow, Provider, ServiceSource, ServiceUsage};
 use crate::providers::ProviderError;
 
 const API_BASE: &str = "https://api.anthropic.com";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
-
-/// The credential blob (keychain value or file content).
-#[derive(Deserialize)]
-struct CredBlob {
-    #[serde(rename = "claudeAiOauth")]
-    oauth: Option<OAuthCreds>,
-    // legacy flat shape fallback
-    #[serde(rename = "accessToken", default)] flat_access: Option<String>,
-    #[serde(rename = "expiresAt", default)] flat_expires: i64,
-    #[serde(rename = "subscriptionType", default)] flat_sub: Option<String>,
-    #[serde(rename = "rateLimitTier", default)] flat_tier: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct OAuthCreds {
-    #[serde(rename = "accessToken")] access_token: String,
-    #[serde(rename = "refreshToken", default)] refresh_token: Option<String>,
-    #[serde(rename = "expiresAt", default)] expires_at: i64,
-    #[serde(rename = "subscriptionType", default)] subscription_type: Option<String>,
-    #[serde(rename = "rateLimitTier", default)] rate_limit_tier: Option<String>,
-}
 
 struct ResolvedCreds {
     access_token: String,
@@ -43,27 +22,87 @@ struct ResolvedCreds {
 }
 
 fn resolve_creds(blob: serde_json::Value) -> Result<ResolvedCreds, ProviderError> {
-    let parsed: CredBlob =
-        serde_json::from_value(blob).map_err(|e| ProviderError::Parse(format!("claude creds: {e}")))?;
-    if let Some(o) = parsed.oauth {
-        return Ok(ResolvedCreds {
-            access_token: o.access_token,
-            refresh_token: o.refresh_token,
-            expires_at: o.expires_at,
-            subscription_type: o.subscription_type,
-            rate_limit_tier: o.rate_limit_tier,
-        });
+    resolve_creds_value(&blob)
+}
+
+fn resolve_creds_value(blob: &serde_json::Value) -> Result<ResolvedCreds, ProviderError> {
+    if let serde_json::Value::String(raw) = blob {
+        if let Some(access_token) = crate::secrets::normalize_claude_oauth_token(raw) {
+            return Ok(ResolvedCreds {
+                access_token,
+                refresh_token: None,
+                expires_at: 0,
+                subscription_type: None,
+                rate_limit_tier: None,
+            });
+        }
+        if raw.trim_start().starts_with('{') {
+            let nested = serde_json::from_str::<serde_json::Value>(raw)
+                .map_err(|e| ProviderError::Parse(format!("claude creds: {e}")))?;
+            return resolve_creds_value(&nested);
+        }
     }
-    parsed
-        .flat_access
-        .map(|access_token| ResolvedCreds {
-            access_token,
-            refresh_token: None,
-            expires_at: parsed.flat_expires,
-            subscription_type: parsed.flat_sub,
-            rate_limit_tier: parsed.flat_tier,
-        })
-        .ok_or_else(|| ProviderError::Parse("claude creds: no accessToken".into()))
+
+    let obj = blob
+        .as_object()
+        .ok_or_else(|| ProviderError::Parse("claude creds: expected object".into()))?;
+
+    for key in ["claudeAiOauth", "claude_ai_oauth", "oauth"] {
+        if let Some(nested) = obj.get(key) {
+            if let Ok(creds) = resolve_creds_value(nested) {
+                return Ok(creds);
+            }
+        }
+    }
+
+    resolve_creds_object(obj)
+}
+
+fn resolve_creds_object(
+    obj: &serde_json::Map<String, serde_json::Value>,
+) -> Result<ResolvedCreds, ProviderError> {
+    let access_token = string_field(obj, &["accessToken", "access_token"])
+        .ok_or_else(|| ProviderError::Parse("claude creds: no accessToken".into()))?;
+    Ok(ResolvedCreds {
+        access_token,
+        refresh_token: string_field(obj, &["refreshToken", "refresh_token"]),
+        expires_at: millis_field(obj, &["expiresAt", "expires_at"])?,
+        subscription_type: string_field(obj, &["subscriptionType", "subscription_type"]),
+        rate_limit_tier: string_field(obj, &["rateLimitTier", "rate_limit_tier"]),
+    })
+}
+
+fn string_field(obj: &serde_json::Map<String, serde_json::Value>, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| match obj.get(*key) {
+        Some(serde_json::Value::String(value)) if !value.trim().is_empty() => {
+            Some(value.trim().to_string())
+        }
+        _ => None,
+    })
+}
+
+fn millis_field(
+    obj: &serde_json::Map<String, serde_json::Value>,
+    keys: &[&str],
+) -> Result<i64, ProviderError> {
+    let Some(value) = keys.iter().find_map(|key| obj.get(*key)) else {
+        return Ok(0);
+    };
+    match value {
+        serde_json::Value::Null => Ok(0),
+        serde_json::Value::Number(n) => n
+            .as_i64()
+            .or_else(|| n.as_u64().and_then(|v| i64::try_from(v).ok()))
+            .ok_or_else(|| ProviderError::Parse("claude creds: invalid expiresAt".into())),
+        serde_json::Value::String(s) if s.trim().is_empty() => Ok(0),
+        serde_json::Value::String(s) => s
+            .trim()
+            .parse::<i64>()
+            .map_err(|e| ProviderError::Parse(format!("claude creds: expiresAt: {e}"))),
+        _ => Err(ProviderError::Parse(
+            "claude creds: expiresAt must be number or string".into(),
+        )),
+    }
 }
 
 /// Build a human plan label like "Max 20x" from `rateLimitTier`
@@ -92,9 +131,7 @@ fn format_plan(tier: &Option<String>, sub: &Option<String>) -> Option<String> {
             return sub.as_deref().map(cap);
         };
         let mult = toks.iter().rev().find(|x| {
-            x.ends_with('x')
-                && x[..x.len() - 1].chars().all(|c| c.is_ascii_digit())
-                && x.len() > 1
+            x.ends_with('x') && x[..x.len() - 1].chars().all(|c| c.is_ascii_digit()) && x.len() > 1
         });
         return Some(match mult {
             Some(m) => format!("{base} {m}"),
@@ -106,37 +143,53 @@ fn format_plan(tier: &Option<String>, sub: &Option<String>) -> Option<String> {
 
 #[derive(Deserialize)]
 struct Window {
-    #[serde(default)] utilization: Option<f64>,
-    #[serde(default)] resets_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    utilization: Option<f64>,
+    #[serde(default)]
+    resets_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Deserialize)]
 struct ExtraUsage {
-    #[serde(default)] is_enabled: Option<bool>,
-    #[serde(default)] monthly_limit: Option<f64>,
-    #[serde(default)] used_credits: Option<f64>,
-    #[serde(default)] utilization: Option<f64>,
+    #[serde(default)]
+    is_enabled: Option<bool>,
+    #[serde(default)]
+    monthly_limit: Option<f64>,
+    #[serde(default)]
+    used_credits: Option<f64>,
+    #[serde(default)]
+    utilization: Option<f64>,
 }
 
 #[derive(Deserialize, Default)]
 struct UsageResponse {
-    #[serde(default)] five_hour: Option<Window>,
-    #[serde(default)] seven_day: Option<Window>,
-    #[serde(default)] seven_day_sonnet: Option<Window>,
-    #[serde(default)] seven_day_opus: Option<Window>,
-    #[serde(default)] seven_day_oauth_apps: Option<Window>,
-    #[serde(default)] seven_day_omelette: Option<Window>,
-    #[serde(default)] seven_day_cowork: Option<Window>,
-    #[serde(default)] extra_usage: Option<ExtraUsage>,
+    #[serde(default)]
+    five_hour: Option<Window>,
+    #[serde(default)]
+    seven_day: Option<Window>,
+    #[serde(default)]
+    seven_day_sonnet: Option<Window>,
+    #[serde(default)]
+    seven_day_opus: Option<Window>,
+    #[serde(default)]
+    seven_day_oauth_apps: Option<Window>,
+    #[serde(default)]
+    seven_day_omelette: Option<Window>,
+    #[serde(default)]
+    seven_day_cowork: Option<Window>,
+    #[serde(default)]
+    extra_usage: Option<ExtraUsage>,
 }
 
 #[derive(Deserialize, Default)]
 struct Profile {
-    #[serde(default)] account: Option<ProfileAccount>,
+    #[serde(default)]
+    account: Option<ProfileAccount>,
 }
 #[derive(Deserialize, Default)]
 struct ProfileAccount {
-    #[serde(default)] email: Option<String>,
+    #[serde(default)]
+    email: Option<String>,
 }
 
 pub struct ClaudeProvider {
@@ -209,19 +262,20 @@ fn normalize(raw: &UsageResponse) -> (Vec<LimitWindow>, Vec<LimitWindow>) {
     (ws, detail)
 }
 
-const CLAUDE_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5942d1962f5e";
-const CLAUDE_TOKEN_URL: &str = "https://api.anthropic.com/v1/oauth/token";
-// Fallback — verified to accept the same client_id (returned 429 = recognized).
-const CLAUDE_TOKEN_URL_FALLBACK: &str = "https://platform.claude.com/v1/oauth/token";
+const CLAUDE_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+const CLAUDE_TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/token";
+const CLAUDE_TOKEN_URL_FALLBACK: &str = "https://api.anthropic.com/v1/oauth/token";
 /// OAuth scopes — MANDATORY in the refresh body (without it: HTTP 400
 /// 'Invalid request format'). Extracted from Claude Code 2.1.181 binary.
-const CLAUDE_OAUTH_SCOPES: &str = "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
+const CLAUDE_OAUTH_SCOPES: &str =
+    "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
 
 #[derive(serde::Deserialize)]
 struct Refreshed {
     access_token: String,
     refresh_token: String,
-    #[serde(default)] expires_in: Option<u64>,
+    #[serde(default)]
+    expires_in: Option<u64>,
 }
 
 /// Body for the OAuth `refresh_token` grant, built from the public Claude Code
@@ -295,7 +349,10 @@ fn apply_refresh(
     fresh: Refreshed,
     now_ms: i64,
 ) -> crate::store::StoredCredential {
-    let expires_at = fresh.expires_in.map(|s| now_ms + (s as i64) * 1000).unwrap_or(0);
+    let expires_at = fresh
+        .expires_in
+        .map(|s| now_ms + (s as i64) * 1000)
+        .unwrap_or(0);
     crate::store::StoredCredential {
         id: cred.id.clone(),
         provider: cred.provider,
@@ -332,12 +389,17 @@ fn write_back(
     expires_at: i64,
 ) -> Result<(), ProviderError> {
     let mut blob = orig.clone();
-    let target = if let Some(o) = blob.get_mut("claudeAiOauth").and_then(|v| v.as_object_mut()) {
+    let target = if let Some(o) = blob
+        .get_mut("claudeAiOauth")
+        .and_then(|v| v.as_object_mut())
+    {
         o
     } else if let Some(obj) = blob.as_object_mut() {
         obj
     } else {
-        return Err(ProviderError::Parse("claude creds: cannot write back".into()));
+        return Err(ProviderError::Parse(
+            "claude creds: cannot write back".into(),
+        ));
     };
     target.insert("accessToken".into(), serde_json::json!(access_token));
     target.insert("refreshToken".into(), serde_json::json!(refresh_token));
@@ -356,10 +418,19 @@ fn write_creds(s: &str) -> Result<(), ProviderError> {
         // using $USER would fork into a duplicate that `secrets::read_macos_keychain`
         // (which reads any account) might not surface. Fall back to $USER on
         // first write when no entry exists yet.
-        let acct =
-            existing_keychain_account().unwrap_or_else(|| std::env::var("USER").unwrap_or_default());
+        let acct = existing_keychain_account()
+            .unwrap_or_else(|| std::env::var("USER").unwrap_or_default());
         let out = std::process::Command::new("/usr/bin/security")
-            .args(["add-generic-password", "-s", "Claude Code-credentials", "-a", &acct, "-w", s, "-U"])
+            .args([
+                "add-generic-password",
+                "-s",
+                "Claude Code-credentials",
+                "-a",
+                &acct,
+                "-w",
+                s,
+                "-U",
+            ])
             .output()
             .map_err(|e| ProviderError::Network(format!("security write: {e}")))?;
         if !out.status.success() {
@@ -373,7 +444,8 @@ fn write_creds(s: &str) -> Result<(), ProviderError> {
     #[cfg(not(target_os = "macos"))]
     {
         let p = crate::secrets::claude_token_path();
-        std::fs::write(&p, s).map_err(|e| ProviderError::Network(format!("write {}: {e}", p.display())))?;
+        std::fs::write(&p, s)
+            .map_err(|e| ProviderError::Network(format!("write {}: {e}", p.display())))?;
         Ok(())
     }
 }
@@ -420,7 +492,8 @@ impl crate::providers::ProviderApi for ClaudeProvider {
             if let Some(rt) = rt {
                 match refresh_oauth(&self.http, &rt).await {
                     Ok(fresh) => {
-                        let exp = fresh.expires_in
+                        let exp = fresh
+                            .expires_in
                             .map(|s| now_ms + (s as i64) * 1000)
                             .unwrap_or(0);
                         let _ = write_back(&blob, &fresh.access_token, &fresh.refresh_token, exp);
@@ -439,20 +512,19 @@ impl crate::providers::ProviderApi for ClaudeProvider {
                 ));
             }
         }
-        // Fetch usage. On 429 (per-access-token rate limit — see
-        // anthropics/claude-code#31021), refresh to get a fresh token with its
-        // own rate-limit window, write back, then retry once.
+        // Fetch usage. Only refresh on an auth failure; a 429 is a real quota
+        // signal and must not burn Claude Code's rotating refresh token.
         let plan = format_plan(&creds.rate_limit_tier, &creds.subscription_type);
         match fetch_with(&self.http, &creds.access_token, plan.clone(), None).await {
-            Err(ProviderError::Status { status: 429, .. }) => {
-                let rt = creds.refresh_token.clone().filter(|s| !s.is_empty())
-                    .ok_or_else(|| {
-                        ProviderError::Expired(
-                            "Rate limited and no refresh_token — run `claude` to re-authenticate.".into(),
-                        )
-                    })?;
+            Err(err @ ProviderError::Status { status, .. })
+                if should_refresh_local_cli_after_usage_status(status) =>
+            {
+                let Some(rt) = creds.refresh_token.clone().filter(|s| !s.is_empty()) else {
+                    return Err(err);
+                };
                 let fresh = refresh_oauth(&self.http, &rt).await?;
-                let exp = fresh.expires_in
+                let exp = fresh
+                    .expires_in
                     .map(|s| now_ms + (s as i64) * 1000)
                     .unwrap_or(0);
                 let _ = write_back(&blob, &fresh.access_token, &fresh.refresh_token, exp);
@@ -463,6 +535,10 @@ impl crate::providers::ProviderApi for ClaudeProvider {
     }
 }
 
+fn should_refresh_local_cli_after_usage_status(status: u16) -> bool {
+    status == 401
+}
+
 /// Fetch Claude usage given an explicit access token (manually-added account).
 pub(crate) async fn fetch_with(
     http: &reqwest::Client,
@@ -471,12 +547,24 @@ pub(crate) async fn fetch_with(
     account_override: Option<String>,
 ) -> Result<ServiceUsage, ProviderError> {
     let h = [("anthropic-version", ANTHROPIC_VERSION)];
-    let usage: UsageResponse =
-        http::get_json(http, access_token, &format!("{API_BASE}/api/oauth/usage"), &h).await?;
-    let profile: Profile =
-        http::get_json(http, access_token, &format!("{API_BASE}/api/oauth/profile"), &h).await?;
+    let usage: UsageResponse = http::get_json(
+        http,
+        access_token,
+        &format!("{API_BASE}/api/oauth/usage"),
+        &h,
+    )
+    .await?;
+    let profile: Profile = http::get_json(
+        http,
+        access_token,
+        &format!("{API_BASE}/api/oauth/profile"),
+        &h,
+    )
+    .await?;
     let (windows, detail_windows) = normalize(&usage);
     Ok(ServiceUsage {
+        id: auto_service_id(Provider::Claude),
+        source: ServiceSource::Auto,
         provider: Provider::Claude,
         connected: true,
         plan,
@@ -498,37 +586,48 @@ pub(crate) async fn fetch_with(
 #[derive(Deserialize)]
 struct WebOrg {
     uuid: String, // the identifier the usage endpoint expects
-    #[serde(default)] name: Option<String>,
-    #[serde(default)] rate_limit_tier: Option<String>,
-    #[serde(default)] memberships: Vec<WebMembership>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    rate_limit_tier: Option<String>,
+    #[serde(default)]
+    memberships: Vec<WebMembership>,
 }
 #[derive(Deserialize)]
 struct WebMembership {
-    #[serde(default)] account: Option<WebMemberAccount>,
+    #[serde(default)]
+    account: Option<WebMemberAccount>,
 }
 #[derive(Deserialize)]
 struct WebMemberAccount {
-    #[serde(default, rename = "email_address")] email_address: Option<String>,
+    #[serde(default, rename = "email_address")]
+    email_address: Option<String>,
 }
 #[derive(Deserialize)]
 struct WebWindow {
-    #[serde(default)] utilization: Option<f64>, // claude.ai returns int percent 0-100
-    #[serde(default)] resets_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    utilization: Option<f64>, // claude.ai returns int percent 0-100
+    #[serde(default)]
+    resets_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 struct WebUsage {
-    #[serde(default)] five_hour: Option<WebWindow>,
-    #[serde(default)] seven_day: Option<WebWindow>,
-    #[serde(default)] seven_day_sonnet: Option<WebWindow>,
-    #[serde(default)] seven_day_opus: Option<WebWindow>,
+    #[serde(default)]
+    five_hour: Option<WebWindow>,
+    #[serde(default)]
+    seven_day: Option<WebWindow>,
+    #[serde(default)]
+    seven_day_sonnet: Option<WebWindow>,
+    #[serde(default)]
+    seven_day_opus: Option<WebWindow>,
 }
 
 pub(crate) async fn fetch_with_session_key(
     http: &reqwest::Client,
     session_key: &str,
 ) -> Result<ServiceUsage, ProviderError> {
-    let cookie = format!("sessionKey={session_key}");
+    let cookie = format!("sessionKey={}", session_key_cookie_value(session_key));
 
     let resp = http
         .get("https://claude.ai/api/organizations")
@@ -546,7 +645,10 @@ pub(crate) async fn fetch_with_session_key(
         .ok_or_else(|| ProviderError::Parse("no claude organization".into()))?;
 
     let resp = http
-        .get(format!("https://claude.ai/api/organizations/{}/usage", org.uuid))
+        .get(format!(
+            "https://claude.ai/api/organizations/{}/usage",
+            org.uuid
+        ))
         .header("Cookie", &cookie)
         .header("Accept", "application/json")
         .send()
@@ -587,6 +689,8 @@ pub(crate) async fn fetch_with_session_key(
         detail.push(x);
     }
     Ok(ServiceUsage {
+        id: auto_service_id(Provider::Claude),
+        source: ServiceSource::Auto,
         provider: Provider::Claude,
         connected: true,
         plan: format_plan(&org.rate_limit_tier, &None).or(org.name),
@@ -596,6 +700,22 @@ pub(crate) async fn fetch_with_session_key(
         detail_windows: detail,
         raw_response: None,
     })
+}
+
+fn session_key_cookie_value(input: &str) -> String {
+    let trimmed = input.trim();
+    let payload = trimmed
+        .strip_prefix("Cookie:")
+        .or_else(|| trimmed.strip_prefix("cookie:"))
+        .unwrap_or(trimmed)
+        .trim();
+    for part in payload.split(';') {
+        let part = part.trim();
+        if let Some(value) = part.strip_prefix("sessionKey=") {
+            return value.trim().to_string();
+        }
+    }
+    payload.to_string()
 }
 
 #[cfg(test)]
@@ -635,7 +755,10 @@ mod tests {
             format_plan(&Some("default_claude_pro".into()), &Some("pro".into())).as_deref(),
             Some("Pro")
         );
-        assert_eq!(format_plan(&None, &Some("max".into())).as_deref(), Some("Max"));
+        assert_eq!(
+            format_plan(&None, &Some("max".into())).as_deref(),
+            Some("Max")
+        );
         assert_eq!(format_plan(&None, &None), None);
     }
 
@@ -651,6 +774,83 @@ mod tests {
         assert_eq!(r2.access_token, "b");
         assert!(r2.rate_limit_tier.is_none());
     }
+
+    #[test]
+    fn resolve_snake_case_and_raw_oauth_token() {
+        let snake = serde_json::json!({
+            "claude_ai_oauth": {
+                "access_token": "sk-ant-oat01-snake",
+                "refresh_token": "sk-ant-ort01-snake",
+                "expires_at": 12345,
+                "subscription_type": "team",
+                "rate_limit_tier": "default_claude_max_5x"
+            }
+        });
+        let r = resolve_creds(snake).unwrap();
+        assert_eq!(r.access_token, "sk-ant-oat01-snake");
+        assert_eq!(r.refresh_token.as_deref(), Some("sk-ant-ort01-snake"));
+        assert_eq!(r.expires_at, 12345);
+        assert_eq!(r.subscription_type.as_deref(), Some("team"));
+        assert_eq!(r.rate_limit_tier.as_deref(), Some("default_claude_max_5x"));
+
+        let raw = resolve_creds(serde_json::json!("sk-ant-oat01-env")).unwrap();
+        assert_eq!(raw.access_token, "sk-ant-oat01-env");
+        assert!(raw.refresh_token.is_none());
+    }
+
+    #[test]
+    fn resolve_flat_refresh_token_and_string_expiry() {
+        let flat = serde_json::json!({
+            "accessToken": "sk-ant-oat01-flat",
+            "refreshToken": "sk-ant-ort01-flat",
+            "expiresAt": "1770412938485"
+        });
+        let r = resolve_creds(flat).unwrap();
+        assert_eq!(r.access_token, "sk-ant-oat01-flat");
+        assert_eq!(r.refresh_token.as_deref(), Some("sk-ant-ort01-flat"));
+        assert_eq!(r.expires_at, 1770412938485);
+    }
+
+    #[test]
+    fn resolve_falls_back_to_flat_when_nested_has_no_token() {
+        let mixed = serde_json::json!({
+            "claudeAiOauth": {
+                "expiresAt": 0
+            },
+            "accessToken": "sk-ant-oat01-flat-fallback",
+            "refreshToken": "sk-ant-ort01-flat-fallback"
+        });
+        let r = resolve_creds(mixed).unwrap();
+        assert_eq!(r.access_token, "sk-ant-oat01-flat-fallback");
+        assert_eq!(
+            r.refresh_token.as_deref(),
+            Some("sk-ant-ort01-flat-fallback")
+        );
+    }
+
+    #[test]
+    fn normalizes_pasted_session_key_cookie_values() {
+        assert_eq!(
+            session_key_cookie_value("sk-ant-sid01-raw"),
+            "sk-ant-sid01-raw"
+        );
+        assert_eq!(
+            session_key_cookie_value("sessionKey=sk-ant-sid01-direct"),
+            "sk-ant-sid01-direct"
+        );
+        assert_eq!(
+            session_key_cookie_value("Cookie: other=1; sessionKey=sk-ant-sid01-cookie; x=2"),
+            "sk-ant-sid01-cookie"
+        );
+    }
+
+    #[test]
+    fn local_cli_refresh_policy_does_not_consume_refresh_token_for_rate_limit() {
+        assert!(!should_refresh_local_cli_after_usage_status(429));
+        assert!(!should_refresh_local_cli_after_usage_status(403));
+        assert!(should_refresh_local_cli_after_usage_status(401));
+    }
+
     #[test]
     fn refresh_request_body_shape() {
         let b = refresh_request_body("rt-123");
@@ -659,6 +859,11 @@ mod tests {
         assert_eq!(b["client_id"], CLAUDE_CLIENT_ID);
         assert_eq!(b["scope"], CLAUDE_OAUTH_SCOPES);
         assert_eq!(b.as_object().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn oauth_client_id_matches_current_claude_code_client() {
+        assert_eq!(CLAUDE_CLIENT_ID, "9d1c250a-e61b-44d9-88ed-5944d1962f5e");
     }
 
     #[test]
@@ -736,7 +941,10 @@ mod tests {
         let orgs: Vec<WebOrg> = serde_json::from_value(v).unwrap();
         let org = orgs.into_iter().next().unwrap();
         assert_eq!(org.uuid, "11111111-2222-3333-4444-555555555555");
-        assert_eq!(org.rate_limit_tier.as_deref(), Some("default_claude_max_20x"));
+        assert_eq!(
+            org.rate_limit_tier.as_deref(),
+            Some("default_claude_max_20x")
+        );
         let email = org
             .memberships
             .iter()

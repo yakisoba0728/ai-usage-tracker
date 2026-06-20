@@ -10,34 +10,6 @@ export function percentSeverity(p: number | null): Severity | null {
   return "ok";
 }
 
-/** Raw CSS color value for an SVG stroke (ring arc). Faint when unknown. */
-export function severityColor(sev: Severity | null): string {
-  switch (sev) {
-    case "crit":
-      return "var(--crit)";
-    case "warn":
-      return "var(--warn)";
-    case "ok":
-      return "var(--ok)";
-    default:
-      return "var(--text-faint)";
-  }
-}
-
-/** Text color utility for a usage percent (semantic status tokens). */
-export function severityTextClass(sev: Severity | null): string {
-  switch (sev) {
-    case "crit":
-      return "text-crit";
-    case "warn":
-      return "text-warn";
-    case "ok":
-      return "text-ok";
-    default:
-      return "text-text-faint";
-  }
-}
-
 /** Solid fill utility for a usage percent (bars, dots). */
 export function severityBarClass(sev: Severity | null): string {
   switch (sev) {
@@ -85,22 +57,6 @@ export function formatResetCountdown(
   return `resets in ${days}d ${remH}h`;
 }
 
-/**
- * Live countdown plus a concise absolute time
- * ("resets in 3h 19m · Jun 19, 14:32").
- */
-export function formatReset(epoch: number | null, nowMs: number): string | null {
-  const cd = formatResetCountdown(epoch, nowMs);
-  if (cd == null || epoch == null) return null;
-  const abs = new Date(epoch * 1000).toLocaleString([], {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-  return `${cd} · ${abs}`;
-}
-
 /** "Updated just now" / "Updated 3m 12s ago" / "Updated 1h 4m ago". */
 export function formatUpdatedAgo(
   fetchedAtSec: number | null,
@@ -116,13 +72,4 @@ export function formatUpdatedAgo(
   const hours = Math.floor(mins / 60);
   const remM = mins % 60;
   return `Updated ${hours}h ${remM}m ago`;
-}
-
-/** Concise absolute clock, e.g. "14:32:07" — for the timestamp tooltip. */
-export function formatClock(epochSec: number): string {
-  return new Date(epochSec * 1000).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
 }

@@ -10,8 +10,8 @@ pub fn jwt_payload(token: &str) -> Result<Value, String> {
         return Err("not a JWT".into());
     }
     let payload = segs[1];
-    use base64::Engine;
     use base64::engine::general_purpose::{STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD};
+    use base64::Engine;
 
     // OpenAI id_tokens are base64url, sometimes WITH padding; try the common
     // engines concretely (the Engine trait isn't dyn-compatible).
@@ -45,8 +45,8 @@ pub fn jwt_exp(token: &str) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base64::Engine;
     use base64::engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD};
+    use base64::Engine;
 
     #[test]
     fn decodes_unpadded_payload() {

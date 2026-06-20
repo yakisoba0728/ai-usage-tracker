@@ -32,7 +32,10 @@ pub async fn get_json<T: serde::de::DeserializeOwned>(
     for (k, v) in extra {
         req = req.header(*k, *v);
     }
-    let resp = req.send().await.map_err(|e| ProviderError::Network(e.to_string()))?;
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| ProviderError::Network(e.to_string()))?;
     decode_json(resp, url).await
 }
 
@@ -57,7 +60,7 @@ async fn decode_json<T: serde::de::DeserializeOwned>(
                 401 | 403 => "access denied — token expired or invalid".to_string(),
                 404 => "endpoint not found".to_string(),
                 429 => "rate limited — try again later".to_string(),
-| 500..=599 => "server error".to_string(),
+                500..=599 => "server error".to_string(),
                 _ => "unexpected response".to_string(),
             }
         } else {
@@ -68,6 +71,5 @@ async fn decode_json<T: serde::de::DeserializeOwned>(
             body: format!("{url}: {snippet}"),
         });
     }
-    serde_json::from_str::<T>(&body)
-        .map_err(|e| ProviderError::Parse(format!("{url}: {e}")))
+    serde_json::from_str::<T>(&body).map_err(|e| ProviderError::Parse(format!("{url}: {e}")))
 }

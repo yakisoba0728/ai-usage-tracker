@@ -10,7 +10,7 @@ pub mod zai;
 use async_trait::async_trait;
 use futures::future::join_all;
 
-use crate::model::{Provider, ServiceUsage};
+use crate::model::{auto_service_id, stored_service_id, Provider, ServiceSource, ServiceUsage};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProviderError {
@@ -41,24 +41,24 @@ pub trait ProviderApi: Send + Sync {
 /// Run every provider concurrently. A failing provider is downgraded to a
 /// disconnected `ServiceUsage` and never aborts the batch (isolation invariant).
 pub async fn fetch_all(providers: Vec<Box<dyn ProviderApi>>) -> Vec<ServiceUsage> {
-    let futs = providers
-        .into_iter()
-        .map(|p| async move {
-            let key = p.key();
-            match p.fetch().await {
-                Ok(u) => u,
-                Err(e) => ServiceUsage {
-                        provider: key,
-                        connected: false,
-                        plan: None,
-                        account: None,
-                        error: Some(e.to_string()),
-                        windows: vec![],
-                        detail_windows: vec![],
-                        raw_response: None,
-                    },
-            }
-        });
+    let futs = providers.into_iter().map(|p| async move {
+        let key = p.key();
+        match p.fetch().await {
+            Ok(u) => u,
+            Err(e) => ServiceUsage {
+                id: auto_service_id(key),
+                source: ServiceSource::Auto,
+                provider: key,
+                connected: false,
+                plan: None,
+                account: None,
+                error: Some(e.to_string()),
+                windows: vec![],
+                detail_windows: vec![],
+                raw_response: None,
+            },
+        }
+    });
     join_all(futs).await
 }
 
@@ -85,30 +85,53 @@ pub async fn fetch_credential(cred: &crate::store::StoredCredential) -> ServiceU
 
     let label = active.label.as_str();
     let res = match active.provider {
-        Provider::Codex => crate::providers::codex::fetch_with(
-            &http, &active.access_token, active.account_id.as_deref(), &active.id_token, Some(label),
-        )
-        .await,
-        Provider::Gemini => crate::providers::gemini::fetch_with(&http, &active.access_token, Some(label)).await,
-        Provider::Claude => crate::providers::claude::fetch_with_session_key(&http, &active.access_token).await,
-        Provider::Copilot => crate::providers::copilot::fetch_with(&http, &active.access_token).await,
-        Provider::Zai => crate::providers::zai::fetch_with(&http, &active.access_token, Some(label)).await,
+        Provider::Codex => {
+            crate::providers::codex::fetch_with(
+                &http,
+                &active.access_token,
+                active.account_id.as_deref(),
+                &active.id_token,
+                Some(label),
+            )
+            .await
+        }
+        Provider::Gemini => {
+            crate::providers::gemini::fetch_with(&http, &active.access_token, Some(label)).await
+        }
+        Provider::Claude => {
+            crate::providers::claude::fetch_with_session_key(&http, &active.access_token).await
+        }
+        Provider::Copilot => {
+            crate::providers::copilot::fetch_with(&http, &active.access_token).await
+        }
+        Provider::Zai => {
+            crate::providers::zai::fetch_with(&http, &active.access_token, Some(label)).await
+        }
         Provider::Cursor => Err(ProviderError::NotLoggedIn(
             "manual accounts not supported for Cursor (CLI-detected only)".into(),
         )),
     };
     match res {
-        Ok(u) => u,
+        Ok(mut u) => {
+            u.id = stored_service_id(&active.id);
+            u.source = ServiceSource::Stored;
+            if u.account.is_none() {
+                u.account = Some(active.label.clone());
+            }
+            u
+        }
         Err(e) => ServiceUsage {
-                provider: active.provider,
-                connected: false,
-                plan: None,
-                account: Some(active.label.clone()),
-                error: Some(e.to_string()),
-                windows: vec![],
-                detail_windows: vec![],
-                raw_response: None,
-            },
+            id: stored_service_id(&active.id),
+            source: ServiceSource::Stored,
+            provider: active.provider,
+            connected: false,
+            plan: None,
+            account: Some(active.label.clone()),
+            error: Some(e.to_string()),
+            windows: vec![],
+            detail_windows: vec![],
+            raw_response: None,
+        },
     }
 }
 
@@ -140,6 +163,8 @@ mod tests {
         }
         async fn fetch(&self) -> Result<ServiceUsage, ProviderError> {
             Ok(ServiceUsage {
+                id: auto_service_id(self.0),
+                source: ServiceSource::Auto,
                 provider: self.0,
                 connected: true,
                 plan: Some("pro".into()),

@@ -6,7 +6,7 @@ use tauri::{AppHandle, Emitter, State};
 use tokio::sync::RwLock;
 
 use crate::config::AppConfig;
-use crate::model::{Provider, UsageSnapshot};
+use crate::model::{Provider, ServiceSource, UsageSnapshot};
 use crate::providers::{fetch_all, ProviderApi};
 
 pub type SnapshotStore = Arc<RwLock<UsageSnapshot>>;
@@ -51,7 +51,11 @@ pub fn build_providers(cfg: &AppConfig) -> Vec<Box<dyn ProviderApi>> {
 
 /// Fetch every enabled provider (concurrently, isolated), store + emit the
 /// snapshot.
-pub async fn refresh_once(app: &AppHandle, cfg: &ConfigStore, snap: &SnapshotStore) -> UsageSnapshot {
+pub async fn refresh_once(
+    app: &AppHandle,
+    cfg: &ConfigStore,
+    snap: &SnapshotStore,
+) -> UsageSnapshot {
     let providers = build_providers(&*cfg.read().await);
     // Emit per-provider loading events so the frontend can show a shimmer on
     // each card independently.
@@ -63,11 +67,6 @@ pub async fn refresh_once(app: &AppHandle, cfg: &ConfigStore, snap: &SnapshotSto
         let _ = app.emit("provider-loading", cred.provider);
     }
     let mut services = fetch_all(providers).await;
-    let stored_providers: std::collections::HashSet<Provider> =
-        stored.iter().map(|c| c.provider).collect();
-    // Drop auto-detect entries for any provider that has a stored credential —
-    // the user's explicit Add-account wins, even if it's currently erroring.
-    services.retain(|s| !stored_providers.contains(&s.provider));
     for cred in &stored {
         services.push(crate::providers::fetch_credential(cred).await);
     }
@@ -90,8 +89,14 @@ pub async fn refresh_once(app: &AppHandle, cfg: &ConfigStore, snap: &SnapshotSto
 /// redundant "auto-detect failed" error when a stored account succeeded.
 fn dedupe_services(services: &mut Vec<crate::model::ServiceUsage>) {
     use std::collections::HashSet;
-    let connected: HashSet<Provider> = services.iter().filter(|s| s.connected).map(|s| s.provider).collect();
-    services.retain(|s| s.connected || !connected.contains(&s.provider));
+    let connected: HashSet<Provider> = services
+        .iter()
+        .filter(|s| s.connected)
+        .map(|s| s.provider)
+        .collect();
+    services.retain(|s| {
+        s.connected || s.source != ServiceSource::Auto || !connected.contains(&s.provider)
+    });
 }
 
 #[tauri::command]
@@ -128,7 +133,10 @@ pub async fn set_config(
 }
 
 #[tauri::command]
-pub async fn start_login(app: AppHandle, provider: crate::model::Provider) -> Result<crate::login::LoginInfo, String> {
+pub async fn start_login(
+    app: AppHandle,
+    provider: crate::model::Provider,
+) -> Result<crate::login::LoginInfo, String> {
     crate::login::start(app, provider).await
 }
 
@@ -137,7 +145,11 @@ pub async fn start_login(app: AppHandle, provider: crate::model::Provider) -> Re
 pub async fn list_accounts() -> Result<Vec<crate::model::AccountInfo>, String> {
     Ok(crate::store::list()
         .into_iter()
-        .map(|c| crate::model::AccountInfo { id: c.id, provider: c.provider, label: c.label })
+        .map(|c| crate::model::AccountInfo {
+            id: c.id,
+            provider: c.provider,
+            label: c.label,
+        })
         .collect())
 }
 
@@ -171,7 +183,10 @@ pub async fn add_session_key(
 /// the authorize URL for the frontend to open in the browser; emits
 /// `login-complete` when tokens are captured.
 #[tauri::command]
-pub async fn login_oauth(app: AppHandle, provider: crate::model::Provider) -> Result<String, String> {
+pub async fn login_oauth(
+    app: AppHandle,
+    provider: crate::model::Provider,
+) -> Result<String, String> {
     crate::oauth_login::start(app, provider)
 }
 
@@ -181,23 +196,30 @@ pub fn cancel_login() {
     crate::oauth_login::cancel();
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{LimitWindow, ServiceUsage};
+    use crate::model::{LimitWindow, ServiceSource, ServiceUsage};
 
-    fn svc(provider: Provider, connected: bool, err: Option<&str>) -> ServiceUsage {
+    fn svc(
+        id: &str,
+        provider: Provider,
+        source: ServiceSource,
+        connected: bool,
+        err: Option<&str>,
+    ) -> ServiceUsage {
         ServiceUsage {
-                    provider,
-                    connected,
-                    plan: None,
-                    account: None,
-                    error: err.map(String::from),
-                    windows: vec![],
-                    detail_windows: vec![],
-                    raw_response: None,
-                }
+            id: id.into(),
+            source,
+            provider,
+            connected,
+            plan: None,
+            account: None,
+            error: err.map(String::from),
+            windows: vec![],
+            detail_windows: vec![],
+            raw_response: None,
+        }
     }
 
     #[test]
@@ -205,8 +227,20 @@ mod tests {
         // z.ai: auto-detect (env) failed + stored account succeeded → keep only
         // the stored success. (The classic "key not set" bug.)
         let mut services = vec![
-            svc(Provider::Zai, false, Some("credentials not found: z.ai API key not set")),
-            svc(Provider::Zai, true, None),
+            svc(
+                "auto:zai",
+                Provider::Zai,
+                ServiceSource::Auto,
+                false,
+                Some("credentials not found: z.ai API key not set"),
+            ),
+            svc(
+                "stored:zai-1",
+                Provider::Zai,
+                ServiceSource::Stored,
+                true,
+                None,
+            ),
         ];
         dedupe_services(&mut services);
         assert_eq!(services.len(), 1);
@@ -220,25 +254,75 @@ mod tests {
         // An UNRELATED provider's failure (no success for it) also stays so the
         // user still sees the actionable error.
         let mut services = vec![
-            svc(Provider::Claude, true, None),
-            svc(Provider::Claude, true, None),
-            svc(Provider::Codex, false, Some("not logged in")),
+            svc(
+                "auto:claude",
+                Provider::Claude,
+                ServiceSource::Auto,
+                true,
+                None,
+            ),
+            svc(
+                "stored:claude-1",
+                Provider::Claude,
+                ServiceSource::Stored,
+                true,
+                None,
+            ),
+            svc(
+                "auto:codex",
+                Provider::Codex,
+                ServiceSource::Auto,
+                false,
+                Some("not logged in"),
+            ),
         ];
         dedupe_services(&mut services);
         // Both Claudes stay; Codex failure stays (no Codex success to mask it).
         assert_eq!(services.len(), 3);
-        let claude_count = services.iter().filter(|s| s.provider == Provider::Claude).count();
+        let claude_count = services
+            .iter()
+            .filter(|s| s.provider == Provider::Claude)
+            .count();
         assert_eq!(claude_count, 2);
-        assert!(services.iter().filter(|s| s.provider == Provider::Claude).all(|s| s.connected));
+        assert!(services
+            .iter()
+            .filter(|s| s.provider == Provider::Claude)
+            .all(|s| s.connected));
     }
 
     #[test]
     fn dedupe_keeps_pure_failure_when_no_success() {
         // Pure failure path (no stored account) — keep the actionable error.
-        let mut services = vec![svc(Provider::Gemini, false, Some("no oauth_creds.json"))];
+        let mut services = vec![svc(
+            "auto:gemini",
+            Provider::Gemini,
+            ServiceSource::Auto,
+            false,
+            Some("no oauth_creds.json"),
+        )];
         dedupe_services(&mut services);
         assert_eq!(services.len(), 1);
         assert!(!services[0].connected);
+    }
+
+    #[test]
+    fn dedupe_keeps_stored_failure_when_autodetect_succeeds() {
+        let mut services = vec![
+            svc("auto:zai", Provider::Zai, ServiceSource::Auto, true, None),
+            svc(
+                "stored:zai-1",
+                Provider::Zai,
+                ServiceSource::Stored,
+                false,
+                Some("stored token expired"),
+            ),
+        ];
+        dedupe_services(&mut services);
+        assert_eq!(services.len(), 2);
+        assert!(services.iter().any(|s| s.id == "auto:zai" && s.connected));
+        assert!(services
+            .iter()
+            .any(|s| s.id == "stored:zai-1" && !s.connected));
     }
 
     // Silence unused-field warning (LimitWindow is required by the struct but

@@ -25,7 +25,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::http;
-use crate::model::{LimitWindow, Provider, ServiceUsage};
+use crate::model::{auto_service_id, LimitWindow, Provider, ServiceSource, ServiceUsage};
 use crate::providers::ProviderError;
 
 /// Undocumented monitor endpoint shared by every community z.ai usage tool.
@@ -40,46 +40,64 @@ const CODE_PERIOD_EXHAUSTED: i64 = 1310;
 
 #[derive(Deserialize, Default)]
 struct ZaiResponse {
-    #[serde(default)] code: Option<i64>,
-    #[serde(default)] success: Option<bool>,
-    #[serde(default)] msg: Option<String>,
-    #[serde(default)] data: Option<ZaiData>,
+    #[serde(default)]
+    code: Option<i64>,
+    #[serde(default)]
+    success: Option<bool>,
+    #[serde(default)]
+    msg: Option<String>,
+    #[serde(default)]
+    data: Option<ZaiData>,
 }
 
 #[derive(Deserialize, Default)]
 struct ZaiData {
     /// Subscription tier: "lite" | "pro" | "max" | "unknown".
-    #[serde(default)] level: Option<String>,
-    #[serde(default)] limits: Vec<LimitEntry>,
+    #[serde(default)]
+    level: Option<String>,
+    #[serde(default)]
+    limits: Vec<LimitEntry>,
 }
 
 #[derive(Deserialize, Default)]
 struct LimitEntry {
     /// Human label, e.g. "5h Token", "Weekly Token", "MCP usage(1 Month)".
-    #[serde(rename = "type", default)] limit_type: Option<String>,
+    #[serde(rename = "type", default)]
+    limit_type: Option<String>,
     /// `TOKENS_LIMIT` (token quota) or `TIME_LIMIT` (MCP-call quota).
-    #[serde(rename = "rawType", default)] raw_type: Option<String>,
+    #[serde(rename = "rawType", default)]
+    raw_type: Option<String>,
     /// Period unit: 3 = hours, 5 = months, 6 = weeks.
-    #[serde(default)] unit: Option<i64>,
+    #[serde(default)]
+    unit: Option<i64>,
     /// Total quota ceiling (tokens or call count).
-    #[serde(default)] usage: Option<f64>,
+    #[serde(default)]
+    usage: Option<f64>,
     /// Alias for `usage` on some responses.
-    #[serde(default)] total: Option<f64>,
+    #[serde(default)]
+    total: Option<f64>,
     /// Amount consumed in the current period.
-    #[serde(rename = "currentValue", default)] current_value: Option<f64>,
-    #[serde(default)] remaining: Option<f64>,
+    #[serde(rename = "currentValue", default)]
+    current_value: Option<f64>,
+    #[serde(default)]
+    remaining: Option<f64>,
     /// Consumption ratio 0–100 (authoritative when present).
-    #[serde(default)] percentage: Option<f64>,
+    #[serde(default)]
+    percentage: Option<f64>,
     /// Epoch milliseconds; absent for monthly TIME_LIMIT windows.
-    #[serde(rename = "nextResetTime", default)] next_reset_time: Option<i64>,
+    #[serde(rename = "nextResetTime", default)]
+    next_reset_time: Option<i64>,
     /// Per-MCP-tool breakdown (TIME_LIMIT entries only).
-    #[serde(default, rename = "usageDetails")] usage_details: Vec<UsageDetail>,
+    #[serde(default, rename = "usageDetails")]
+    usage_details: Vec<UsageDetail>,
 }
 
 #[derive(Deserialize, Default)]
 struct UsageDetail {
-    #[serde(default, rename = "modelCode")] model_code: Option<String>,
-    #[serde(default)] usage: Option<f64>,
+    #[serde(default, rename = "modelCode")]
+    model_code: Option<String>,
+    #[serde(default)]
+    usage: Option<f64>,
 }
 
 pub struct ZaiProvider {
@@ -345,7 +363,6 @@ pub(crate) async fn fetch_with(
     let raw: Value = http::send_for_json(resp, USAGE_URL).await?;
     let raw_json = serde_json::to_string_pretty(&raw).ok();
 
-
     let code = raw.get("code").and_then(|v| v.as_i64());
     let exhausted_code = code.filter(|&c| c == CODE_USAGE_EXHAUSTED || c == CODE_PERIOD_EXHAUSTED);
     if let Some(c) = exhausted_code {
@@ -355,6 +372,8 @@ pub(crate) async fn fetch_with(
                 .and_then(|v| v.as_str()),
         );
         return Ok(ServiceUsage {
+            id: auto_service_id(Provider::Zai),
+            source: ServiceSource::Auto,
             provider: Provider::Zai,
             connected: true,
             plan,
@@ -366,8 +385,8 @@ pub(crate) async fn fetch_with(
         });
     }
 
-    let u: ZaiResponse = serde_json::from_value(raw)
-        .map_err(|e| ProviderError::Parse(format!("zai usage: {e}")))?;
+    let u: ZaiResponse =
+        serde_json::from_value(raw).map_err(|e| ProviderError::Parse(format!("zai usage: {e}")))?;
     let ok = u.success.unwrap_or(false) || u.code == Some(200);
     if !ok {
         let msg = u
@@ -382,6 +401,8 @@ pub(crate) async fn fetch_with(
     let plan = plan_from_level_str(u.data.as_ref().and_then(|d| d.level.as_deref()));
     let (windows, detail_windows) = u.data.as_ref().map(normalize).unwrap_or_default();
     Ok(ServiceUsage {
+        id: auto_service_id(Provider::Zai),
+        source: ServiceSource::Auto,
         provider: Provider::Zai,
         connected: true,
         plan,
@@ -445,9 +466,15 @@ mod tests {
         assert_eq!(monthly.resets_at, Some(1_783_852_228));
 
         // Per-tool breakdown.
-        assert!(detail.iter().any(|w| w.label == "search-prime" && w.used == Some(1.0)));
-        assert!(detail.iter().any(|w| w.label == "web-reader" && w.used == Some(0.0)));
-        assert!(detail.iter().any(|w| w.label == "zread" && w.used == Some(6.0)));
+        assert!(detail
+            .iter()
+            .any(|w| w.label == "search-prime" && w.used == Some(1.0)));
+        assert!(detail
+            .iter()
+            .any(|w| w.label == "web-reader" && w.used == Some(0.0)));
+        assert!(detail
+            .iter()
+            .any(|w| w.label == "zread" && w.used == Some(6.0)));
     }
 
     #[test]
@@ -511,10 +538,8 @@ mod tests {
 
     #[test]
     fn empty_response_does_not_panic() {
-        let v: ZaiResponse = serde_json::from_str(
-            r#"{"code":200,"success":true,"data":{}}"#,
-        )
-        .unwrap();
+        let v: ZaiResponse =
+            serde_json::from_str(r#"{"code":200,"success":true,"data":{}}"#).unwrap();
         let (ws, detail) = normalize(v.data.as_ref().unwrap());
         assert!(ws.is_empty());
         assert!(detail.is_empty());

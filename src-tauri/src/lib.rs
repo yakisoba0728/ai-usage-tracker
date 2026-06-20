@@ -2,13 +2,13 @@ pub mod commands;
 pub mod config;
 pub mod http;
 pub mod jwt;
+pub mod login;
 pub mod model;
+pub mod oauth_login;
 pub mod providers;
 pub mod scheduler;
 pub mod secrets;
-pub mod login;
 pub mod store;
-pub mod oauth_login;
 
 use tauri::{
     menu::{Menu, MenuItem},
@@ -53,11 +53,11 @@ pub fn run() {
             // --- Tray (icon only, no title) ---
             let show = MenuItem::with_id(app, "show", "Show dashboard", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let refresh_item = MenuItem::with_id(app, "refresh", "Refresh now", true, None::<&str>)?;
+            let refresh_item =
+                MenuItem::with_id(app, "refresh", "Refresh now", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&refresh_item, &show, &quit])?;
 
-            let mut builder = TrayIconBuilder::with_id("main")
-                .tooltip("AI Usage Tracker");
+            let mut builder = TrayIconBuilder::with_id("main").tooltip("AI Usage Tracker");
             if let Some(ic) = app.default_window_icon() {
                 builder = builder.icon(ic.clone());
             }
@@ -99,7 +99,9 @@ pub fn run() {
                                     let mon = monitor.size();
                                     let mon_pos = monitor.position();
                                     let _ = popover.set_position(LogicalPosition::new(
-                                        mon_pos.x as f64 + mon.width as f64 / monitor.scale_factor() - 360.0,
+                                        mon_pos.x as f64
+                                            + mon.width as f64 / monitor.scale_factor()
+                                            - 360.0,
                                         (mon_pos.y as f64) / monitor.scale_factor() + 6.0,
                                     ));
                                 }
@@ -112,10 +114,7 @@ pub fn run() {
                 .build(app)?;
 
             // --- Background poller ---
-            scheduler::start(
-                app.handle().clone(),
-                config::AppConfig::load().poll_seconds,
-            );
+            scheduler::start(app.handle().clone(), config::AppConfig::load().poll_seconds);
             Ok(())
         })
         .on_window_event(|window, event| {

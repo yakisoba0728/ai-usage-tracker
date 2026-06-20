@@ -45,7 +45,9 @@ pub async fn start(app: AppHandle, provider: Provider) -> Result<LoginInfo, Stri
     match provider {
         Provider::Codex => start_codex(app, http, provider).await,
         Provider::Copilot => start_github(app, http, provider).await,
-        _ => Err(format!("{provider:?} does not support device-code login; Gemini uses browser OAuth")),
+        _ => Err(format!(
+            "{provider:?} does not support device-code login; Gemini uses browser OAuth"
+        )),
     }
 }
 
@@ -83,9 +85,17 @@ async fn read<T: DeserializeOwned>(resp: reqwest::Response, url: &str) -> Result
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
     if !status.is_success() {
-        return Err(format!("{url} ({status}): {}", &text[..text.len().min(200)]));
+        return Err(format!(
+            "{url} ({status}): {}",
+            &text[..text.len().min(200)]
+        ));
     }
-    serde_json::from_str(&text).map_err(|e| format!("parse {url}: {e} (body was: {})", &text[..text.len().min(200)]))
+    serde_json::from_str(&text).map_err(|e| {
+        format!(
+            "parse {url}: {e} (body was: {})",
+            &text[..text.len().min(200)]
+        )
+    })
 }
 
 fn finish(app: &AppHandle, provider: Provider, res: Result<StoredCredential, String>) {
@@ -93,9 +103,19 @@ fn finish(app: &AppHandle, provider: Provider, res: Result<StoredCredential, Str
         Ok(c) => {
             let label = c.label.clone();
             store::add(c);
-            LoginResult { provider, ok: true, label: Some(label), error: None }
+            LoginResult {
+                provider,
+                ok: true,
+                label: Some(label),
+                error: None,
+            }
         }
-        Err(e) => LoginResult { provider, ok: false, label: None, error: Some(e) },
+        Err(e) => LoginResult {
+            provider,
+            ok: false,
+            label: None,
+            error: Some(e),
+        },
     };
     let _ = app.emit("login-complete", &result);
 }
@@ -106,7 +126,8 @@ fn finish(app: &AppHandle, provider: Provider, res: Result<StoredCredential, Str
 struct CodexUserCode {
     device_auth_id: String,
     user_code: String,
-    #[serde(default)] interval: serde_json::Value,
+    #[serde(default)]
+    interval: serde_json::Value,
 }
 #[derive(Deserialize)]
 struct CodexPoll {
@@ -115,16 +136,26 @@ struct CodexPoll {
 }
 #[derive(Deserialize)]
 struct CodexTokens {
-    #[serde(default)] access_token: Option<String>,
-    #[serde(default)] refresh_token: Option<String>,
-    #[serde(default)] id_token: Option<String>,
+    #[serde(default)]
+    access_token: Option<String>,
+    #[serde(default)]
+    refresh_token: Option<String>,
+    #[serde(default)]
+    id_token: Option<String>,
 }
 
-async fn start_codex(app: AppHandle, http: reqwest::Client, provider: Provider) -> Result<LoginInfo, String> {
+async fn start_codex(
+    app: AppHandle,
+    http: reqwest::Client,
+    provider: Provider,
+) -> Result<LoginInfo, String> {
     let api = format!("{CODEX_ISSUER}/api/accounts");
-    let r: CodexUserCode =
-        post_json(&http, &format!("{api}/deviceauth/usercode"), serde_json::json!({"client_id":CODEX_CLIENT_ID}))
-            .await?;
+    let r: CodexUserCode = post_json(
+        &http,
+        &format!("{api}/deviceauth/usercode"),
+        serde_json::json!({"client_id":CODEX_CLIENT_ID}),
+    )
+    .await?;
     let interval = interval_secs(&r.interval, 5);
     let info = LoginInfo {
         provider,
@@ -161,25 +192,28 @@ async fn poll_codex(
             let p: CodexPoll = resp.json().await.map_err(|e| e.to_string())?;
             break p;
         }
-        if (status.as_u16() == 403 || status.as_u16() == 404) && std::time::Instant::now() < deadline {
+        if (status.as_u16() == 403 || status.as_u16() == 404)
+            && std::time::Instant::now() < deadline
+        {
             tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
             continue;
         }
         return Err(format!("device auth ended ({status})"));
     };
 
-    let tokens: CodexTokens = post_json(
-        &http,
-        &format!("{CODEX_ISSUER}/oauth/token"),
-        serde_json::json!({
-            "grant_type":"authorization_code",
-            "code": auth.authorization_code,
-            "client_id": CODEX_CLIENT_ID,
-            "redirect_uri": format!("{CODEX_ISSUER}/deviceauth/callback"),
-            "code_verifier": auth.code_verifier,
-        }),
-    )
-    .await?;
+    let token_url = format!("{CODEX_ISSUER}/oauth/token");
+    let resp = http
+        .post(&token_url)
+        .header("Accept", "application/json")
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .body(codex_token_exchange_body(
+            &auth.authorization_code,
+            &auth.code_verifier,
+        ))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let tokens: CodexTokens = read(resp, &token_url).await?;
 
     let access_token = tokens.access_token.ok_or("no access_token")?;
     let (label, account_id) = tokens
@@ -187,7 +221,11 @@ async fn poll_codex(
         .as_deref()
         .map(|t| {
             let claims = jwt_payload(t).ok();
-            let email = claims.as_ref().and_then(|c| c.get("email")).and_then(|v| v.as_str()).map(String::from);
+            let email = claims
+                .as_ref()
+                .and_then(|c| c.get("email"))
+                .and_then(|v| v.as_str())
+                .map(String::from);
             let acct = claims
                 .as_ref()
                 .and_then(|c| c.get("https://api.openai.com/auth"))
@@ -210,6 +248,16 @@ async fn poll_codex(
     })
 }
 
+fn codex_token_exchange_body(code: &str, code_verifier: &str) -> String {
+    format!(
+        "grant_type=authorization_code&code={}&client_id={}&redirect_uri={}&code_verifier={}",
+        urlencoding::encode(code),
+        urlencoding::encode(CODEX_CLIENT_ID),
+        urlencoding::encode(&format!("{CODEX_ISSUER}/deviceauth/callback")),
+        urlencoding::encode(code_verifier),
+    )
+}
+
 // ---- GitHub Copilot ----
 
 #[derive(Deserialize)]
@@ -217,17 +265,19 @@ struct GhDeviceCode {
     device_code: String,
     user_code: String,
     verification_uri: String,
-    #[serde(default)] interval: u64,
+    #[serde(default)]
+    interval: u64,
 }
 
-async fn start_github(app: AppHandle, http: reqwest::Client, provider: Provider) -> Result<LoginInfo, String> {
+async fn start_github(
+    app: AppHandle,
+    http: reqwest::Client,
+    provider: Provider,
+) -> Result<LoginInfo, String> {
     let r: GhDeviceCode = post_form(
         &http,
         "https://github.com/login/device/code",
-        &[
-            ("client_id", GH_CLIENT_ID),
-            ("scope", "read:user"),
-        ],
+        &[("client_id", GH_CLIENT_ID), ("scope", "read:user")],
     )
     .await?;
     let interval = r.interval.max(5);
@@ -266,16 +316,24 @@ async fn poll_github(
             .map_err(|e| e.to_string())?;
         #[derive(Deserialize)]
         struct GhTok {
-            #[serde(default)] access_token: Option<String>,
-            #[serde(default)] error: Option<String>,
+            #[serde(default)]
+            access_token: Option<String>,
+            #[serde(default)]
+            error: Option<String>,
         }
         let t: GhTok = resp.json().await.map_err(|e| e.to_string())?;
         if let Some(tok) = t.access_token {
             break tok;
         }
         match t.error.as_deref() {
-            Some("authorization_pending") | Some("slow_down") if std::time::Instant::now() < deadline => {
-                let extra = if t.error.as_deref() == Some("slow_down") { 5 } else { 0 };
+            Some("authorization_pending") | Some("slow_down")
+                if std::time::Instant::now() < deadline =>
+            {
+                let extra = if t.error.as_deref() == Some("slow_down") {
+                    5
+                } else {
+                    0
+                };
                 tokio::time::sleep(std::time::Duration::from_secs(interval + extra)).await;
                 continue;
             }
@@ -324,4 +382,19 @@ fn interval_secs(v: &serde_json::Value, default: u64) -> u64 {
         .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
         .unwrap_or(default)
         .max(1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codex_token_exchange_body_is_form_urlencoded() {
+        assert_eq!(
+            codex_token_exchange_body("auth-code", "verifier"),
+            format!(
+                "grant_type=authorization_code&code=auth-code&client_id={CODEX_CLIENT_ID}&redirect_uri=https%3A%2F%2Fauth.openai.com%2Fdeviceauth%2Fcallback&code_verifier=verifier"
+            )
+        );
+    }
 }

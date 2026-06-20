@@ -19,7 +19,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::http;
-use crate::model::{LimitWindow, Provider, ServiceUsage};
+use crate::model::{auto_service_id, LimitWindow, Provider, ServiceSource, ServiceUsage};
 use crate::providers::ProviderError;
 use crate::secrets;
 
@@ -147,13 +147,13 @@ fn parse_reset_date(s: &str) -> Option<i64> {
 /// become labeled notes in `detail_windows` so the user can see what their
 /// plan includes without polluting the usage math.
 fn normalize(resp: &CopilotUsageResp) -> (Vec<LimitWindow>, Vec<LimitWindow>) {
-    let reset = resp
-        .quota_reset_date
-        .as_deref()
-        .and_then(parse_reset_date);
+    let reset = resp.quota_reset_date.as_deref().and_then(parse_reset_date);
     let categories: [(&str, &Option<QuotaSnapshot>); 3] = [
         ("Chat", &resp.quota_snapshots.chat),
-        ("Premium requests", &resp.quota_snapshots.premium_interactions),
+        (
+            "Premium requests",
+            &resp.quota_snapshots.premium_interactions,
+        ),
         ("Completions", &resp.quota_snapshots.completions),
     ];
     let mut windows: Vec<LimitWindow> = Vec::new();
@@ -231,6 +231,8 @@ pub(crate) async fn fetch_with(
         serde_json::from_value(val).map_err(|e| ProviderError::Parse(e.to_string()))?;
     let (windows, detail_windows) = normalize(&u);
     Ok(ServiceUsage {
+        id: auto_service_id(Provider::Copilot),
+        source: ServiceSource::Auto,
         provider: Provider::Copilot,
         connected: true,
         plan: u.copilot_plan,

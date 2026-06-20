@@ -13,17 +13,28 @@ pub enum Provider {
     Zai,
 }
 
-impl Provider {
-    pub fn display(&self) -> &'static str {
-        match self {
-            Provider::Claude => "Claude",
-            Provider::Codex => "Codex",
-            Provider::Gemini => "Gemini",
-            Provider::Copilot => "GitHub Copilot",
-            Provider::Cursor => "Cursor",
-            Provider::Zai => "z.ai Coding Plan",
-        }
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ServiceSource {
+    #[default]
+    Auto,
+    Stored,
+}
+
+pub fn auto_service_id(provider: Provider) -> String {
+    let key = match provider {
+        Provider::Claude => "claude",
+        Provider::Codex => "codex",
+        Provider::Gemini => "gemini",
+        Provider::Copilot => "copilot",
+        Provider::Cursor => "cursor",
+        Provider::Zai => "zai",
+    };
+    format!("auto:{key}")
+}
+
+pub fn stored_service_id(account_id: &str) -> String {
+    format!("stored:{account_id}")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,6 +48,11 @@ pub struct LimitWindow {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceUsage {
+    /// Stable UI key for this reading. Auto-detected sessions use
+    /// `auto:<provider>`; stored/manual credentials use `stored:<account-id>`.
+    pub id: String,
+    #[serde(default)]
+    pub source: ServiceSource,
     pub provider: Provider,
     pub connected: bool,
     pub plan: Option<String>,
@@ -69,97 +85,19 @@ pub struct UsageSnapshot {
     pub services: Vec<ServiceUsage>,
 }
 
-impl UsageSnapshot {
-    /// Highest used_percent across every window of every connected service.
-    /// Used to label the tray icon.
-    pub fn max_used_percent(&self) -> Option<f32> {
-        self.services
-            .iter()
-            .filter(|s| s.connected)
-            .flat_map(|s| s.windows.iter().chain(s.detail_windows.iter()))
-            .filter_map(|w| w.used_percent)
-            .fold(None, |acc, v| match acc {
-                None => Some(v),
-                Some(cur) => Some(cur.max(v)),
-            })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn win(label: &str, pct: Option<f32>) -> LimitWindow {
-        LimitWindow {
-            label: label.into(),
-            used_percent: pct,
-            resets_at: None,
-            used: None,
-            limit: None,
-        }
-    }
-
-    #[test]
-    fn snapshot_max_percent_picks_highest_connected() {
-        let snap = UsageSnapshot {
-            fetched_at: 0,
-            services: vec![
-                ServiceUsage {
-                    provider: Provider::Claude,
-                    connected: true,
-                    plan: None,
-                    account: None,
-                    error: None,
-                    windows: vec![win("5h", Some(40.0))],
-                    detail_windows: vec![],
-                    raw_response: None,
-                },
-                ServiceUsage {
-                    provider: Provider::Gemini,
-                    connected: true,
-                    plan: None,
-                    account: None,
-                    error: None,
-                    windows: vec![win("pro", Some(72.5))],
-                    detail_windows: vec![],
-                    raw_response: None,
-                },
-                ServiceUsage {
-                    provider: Provider::Codex,
-                    connected: false,
-                    plan: None,
-                    account: None,
-                    error: Some("offline".into()),
-                    windows: vec![],
-                    detail_windows: vec![],
-                    raw_response: None,
-                },
-            ],
-        };
-        assert_eq!(snap.max_used_percent(), Some(72.5));
-    }
-
     #[test]
     fn provider_serializes_lowercase() {
-        assert_eq!(serde_json::to_string(&Provider::Claude).unwrap(), "\"claude\"");
-        assert_eq!(serde_json::to_string(&Provider::Copilot).unwrap(), "\"copilot\"");
-    }
-
-    #[test]
-    fn max_percent_none_when_all_offline() {
-        let snap = UsageSnapshot {
-            fetched_at: 0,
-            services: vec![ServiceUsage {
-                provider: Provider::Cursor,
-                connected: false,
-                plan: None,
-                account: None,
-                error: Some("x".into()),
-                windows: vec![],
-                detail_windows: vec![],
-                raw_response: None,
-            }],
-        };
-        assert_eq!(snap.max_used_percent(), None);
+        assert_eq!(
+            serde_json::to_string(&Provider::Claude).unwrap(),
+            "\"claude\""
+        );
+        assert_eq!(
+            serde_json::to_string(&Provider::Copilot).unwrap(),
+            "\"copilot\""
+        );
     }
 }

@@ -14,7 +14,7 @@ use serde_json::Value;
 
 use crate::http;
 use crate::jwt::jwt_payload;
-use crate::model::{LimitWindow, Provider, ServiceUsage};
+use crate::model::{auto_service_id, LimitWindow, Provider, ServiceSource, ServiceUsage};
 use crate::providers::ProviderError;
 use crate::secrets;
 
@@ -34,49 +34,71 @@ const CODEX_REFRESH_URL: &str = "https://auth.openai.com/oauth/token";
 
 #[derive(Deserialize)]
 struct AuthDotJson {
-    #[serde(default)] tokens: Option<Tokens>,
+    #[serde(default)]
+    tokens: Option<Tokens>,
 }
 #[derive(Deserialize)]
 struct Tokens {
     access_token: String,
-    #[serde(default)] id_token: Option<String>,
-    #[serde(default)] account_id: Option<String>,
+    #[serde(default)]
+    refresh_token: Option<String>,
+    #[serde(default)]
+    id_token: Option<String>,
+    #[serde(default)]
+    account_id: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
 struct WhamUsage {
-    #[serde(default)] plan_type: Option<String>,
-    #[serde(default)] email: Option<String>,
-    #[serde(default)] rate_limit: Option<RateLimit>,
-    #[serde(default)] additional_rate_limits: Vec<AdditionalLimit>,
-    #[serde(default)] credits: Option<Credits>,
-    #[serde(default)] rate_limit_reset_credits: Option<ResetCredits>,
-    #[serde(default)] code_review_rate_limit: Option<RateLimit>,
+    #[serde(default)]
+    plan_type: Option<String>,
+    #[serde(default)]
+    email: Option<String>,
+    #[serde(default)]
+    rate_limit: Option<RateLimit>,
+    #[serde(default)]
+    additional_rate_limits: Vec<AdditionalLimit>,
+    #[serde(default)]
+    credits: Option<Credits>,
+    #[serde(default)]
+    rate_limit_reset_credits: Option<ResetCredits>,
+    #[serde(default)]
+    code_review_rate_limit: Option<RateLimit>,
 }
 #[derive(Deserialize, Default)]
 struct RateLimit {
-    #[serde(default)] primary_window: Option<RateWindow>,
-    #[serde(default)] secondary_window: Option<RateWindow>,
+    #[serde(default)]
+    primary_window: Option<RateWindow>,
+    #[serde(default)]
+    secondary_window: Option<RateWindow>,
 }
 #[derive(Deserialize, Default)]
 struct RateWindow {
-    #[serde(default)] used_percent: Option<f64>,
-    #[serde(default)] reset_at: Option<i64>, // epoch seconds
+    #[serde(default)]
+    used_percent: Option<f64>,
+    #[serde(default)]
+    reset_at: Option<i64>, // epoch seconds
 }
 #[derive(Deserialize, Default)]
 struct AdditionalLimit {
-    #[serde(default)] limit_name: Option<String>,
-    #[serde(default)] rate_limit: Option<RateLimit>,
+    #[serde(default)]
+    limit_name: Option<String>,
+    #[serde(default)]
+    rate_limit: Option<RateLimit>,
 }
 #[derive(Deserialize, Default)]
 struct Credits {
-    #[serde(default)] balance: Option<String>,
-    #[serde(default)] has_credits: Option<bool>,
-    #[serde(default)] unlimited: Option<bool>,
+    #[serde(default)]
+    balance: Option<String>,
+    #[serde(default)]
+    has_credits: Option<bool>,
+    #[serde(default)]
+    unlimited: Option<bool>,
 }
 #[derive(Deserialize, Default)]
 struct ResetCredits {
-    #[serde(default)] available_count: Option<i64>,
+    #[serde(default)]
+    available_count: Option<i64>,
 }
 
 pub struct CodexProvider {
@@ -96,12 +118,44 @@ impl CodexProvider {
     }
 }
 
-fn read_tokens() -> Result<Tokens, ProviderError> {
+fn read_auth() -> Result<(Value, Tokens), ProviderError> {
     let v = secrets::read_json_file(&secrets::codex_auth_path())?;
-    let a: AuthDotJson =
-        serde_json::from_value(v).map_err(|e| ProviderError::Parse(format!("codex auth: {e}")))?;
-    a.tokens
-        .ok_or_else(|| ProviderError::NotLoggedIn("Codex not logged in (run `codex login`)".into()))
+    let a: AuthDotJson = serde_json::from_value(v.clone())
+        .map_err(|e| ProviderError::Parse(format!("codex auth: {e}")))?;
+    let tokens = a.tokens.ok_or_else(|| {
+        ProviderError::NotLoggedIn("Codex not logged in (run `codex login`)".into())
+    })?;
+    Ok((v, tokens))
+}
+
+fn write_auth(v: &Value) -> Result<(), ProviderError> {
+    let path = secrets::codex_auth_path();
+    let text = serde_json::to_string_pretty(v)
+        .map_err(|e| ProviderError::Parse(format!("codex auth write: {e}")))?;
+    std::fs::write(&path, text)
+        .map_err(|e| ProviderError::Network(format!("write {}: {e}", path.display())))
+}
+
+fn access_needs_refresh(access_token: &str, now_sec: i64) -> bool {
+    crate::jwt::jwt_exp(access_token)
+        .map(|exp| exp <= now_sec + 300)
+        .unwrap_or(false)
+}
+
+fn apply_auth_refresh(mut auth: Value, fresh: &Refreshed, refreshed_at: &str) -> Option<Value> {
+    let access = fresh.access_token.as_ref()?;
+    let tokens = auth.get_mut("tokens")?.as_object_mut()?;
+    tokens.insert("access_token".into(), serde_json::json!(access));
+    if let Some(id_token) = &fresh.id_token {
+        tokens.insert("id_token".into(), serde_json::json!(id_token));
+    }
+    if let Some(refresh_token) = &fresh.refresh_token {
+        tokens.insert("refresh_token".into(), serde_json::json!(refresh_token));
+    }
+    if let Some(obj) = auth.as_object_mut() {
+        obj.insert("last_refresh".into(), serde_json::json!(refreshed_at));
+    }
+    Some(auth)
 }
 
 fn push_window(ws: &mut Vec<LimitWindow>, label: &str, w: &Option<RateWindow>) {
@@ -131,7 +185,11 @@ fn normalize(u: &WhamUsage) -> (Vec<LimitWindow>, Vec<LimitWindow>) {
             continue;
         }
         push_window(&mut detail, &format!("{name} · 5-hour"), &rl.primary_window);
-        push_window(&mut detail, &format!("{name} · Weekly"), &rl.secondary_window);
+        push_window(
+            &mut detail,
+            &format!("{name} · Weekly"),
+            &rl.secondary_window,
+        );
     }
     if let Some(rl) = &u.code_review_rate_limit {
         push_window(&mut detail, "Code review · 5-hour", &rl.primary_window);
@@ -200,8 +258,44 @@ impl crate::providers::ProviderApi for CodexProvider {
     }
 
     async fn fetch(&self) -> Result<ServiceUsage, ProviderError> {
-        let t = read_tokens()?;
-        fetch_with(&self.http, &t.access_token, t.account_id.as_deref(), &t.id_token, None).await
+        let (auth, mut t) = read_auth()?;
+        if access_needs_refresh(&t.access_token, chrono::Utc::now().timestamp()) {
+            let rt = t
+                .refresh_token
+                .as_ref()
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| ProviderError::Expired(
+                    "Codex token expired and auth.json has no refresh_token — run `codex login`.".into(),
+                ))?;
+            let fresh = refresh_oauth(&self.http, rt).await?;
+            if fresh.access_token.is_none() {
+                return Err(ProviderError::Parse(
+                    "codex refresh: missing access_token".into(),
+                ));
+            }
+            if let Some(updated) =
+                apply_auth_refresh(auth, &fresh, &chrono::Utc::now().to_rfc3339())
+            {
+                let _ = write_auth(&updated);
+                if let Some(access_token) = fresh.access_token {
+                    t.access_token = access_token;
+                }
+                if let Some(id_token) = fresh.id_token {
+                    t.id_token = Some(id_token);
+                }
+                if let Some(refresh_token) = fresh.refresh_token {
+                    t.refresh_token = Some(refresh_token);
+                }
+            }
+        }
+        fetch_with(
+            &self.http,
+            &t.access_token,
+            t.account_id.as_deref(),
+            &t.id_token,
+            None,
+        )
+        .await
     }
 }
 
@@ -221,8 +315,8 @@ pub(crate) async fn fetch_with(
     }
     let raw: Value = http::get_json(http, access_token, USAGE_URL, &extra).await?;
     let raw_json = serde_json::to_string_pretty(&raw).ok();
-    let u: WhamUsage =
-        serde_json::from_value(raw).map_err(|e| ProviderError::Parse(format!("codex usage: {e}")))?;
+    let u: WhamUsage = serde_json::from_value(raw)
+        .map_err(|e| ProviderError::Parse(format!("codex usage: {e}")))?;
     let plan = u.plan_type.as_deref().map(capitalize);
     let account = match label_override {
         Some(l) => Some(l.to_string()),
@@ -235,6 +329,8 @@ pub(crate) async fn fetch_with(
     };
     let (windows, detail_windows) = normalize(&u);
     Ok(ServiceUsage {
+        id: auto_service_id(Provider::Codex),
+        source: ServiceSource::Auto,
         provider: Provider::Codex,
         connected: true,
         plan,
@@ -251,19 +347,22 @@ pub(crate) async fn fetch_with(
 /// may be omitted; `access_token` is always present on a successful refresh.
 #[derive(serde::Deserialize)]
 struct Refreshed {
-    #[serde(default)] id_token: Option<String>,
-    #[serde(default)] access_token: Option<String>,
-    #[serde(default)] refresh_token: Option<String>,
+    #[serde(default)]
+    id_token: Option<String>,
+    #[serde(default)]
+    access_token: Option<String>,
+    #[serde(default)]
+    refresh_token: Option<String>,
 }
 
-/// Pure: build the OAuth `refresh_token` grant request body. Body shape and
-/// client_id mirror codex-rs/login `RefreshRequest` (JSON, not form-encoded).
-fn build_refresh_body(refresh_token: &str) -> serde_json::Value {
-    serde_json::json!({
-        "client_id": CODEX_OAUTH_CLIENT_ID,
-        "grant_type": "refresh_token",
-        "refresh_token": refresh_token,
-    })
+/// Pure: build the OAuth `refresh_token` grant request body. Token endpoint
+/// grant requests are form-encoded, matching Codex CLI's token exchange path.
+fn build_refresh_body(refresh_token: &str) -> String {
+    format!(
+        "client_id={}&grant_type=refresh_token&refresh_token={}",
+        urlencoding::encode(CODEX_OAUTH_CLIENT_ID),
+        urlencoding::encode(refresh_token),
+    )
 }
 
 /// Pure: build a refreshed `StoredCredential`. Derives `expires_at` (epoch ms)
@@ -287,11 +386,38 @@ fn build_refreshed_cred(
         provider: cred.provider,
         label: cred.label.clone(),
         access_token: new_access,
-        refresh_token: fresh.refresh_token.clone().or_else(|| cred.refresh_token.clone()),
+        refresh_token: fresh
+            .refresh_token
+            .clone()
+            .or_else(|| cred.refresh_token.clone()),
         expires_at,
         id_token: new_id_token,
         account_id: cred.account_id.clone(),
     }
+}
+
+async fn refresh_oauth(
+    http: &reqwest::Client,
+    refresh_token: &str,
+) -> Result<Refreshed, ProviderError> {
+    let resp = http
+        .post(CODEX_REFRESH_URL)
+        .header("Accept", "application/json")
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .body(build_refresh_body(refresh_token))
+        .send()
+        .await
+        .map_err(|e| ProviderError::Network(e.to_string()))?;
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(ProviderError::Status {
+            status: status.as_u16(),
+            body: text.chars().take(200).collect(),
+        });
+    }
+    serde_json::from_str::<Refreshed>(&text)
+        .map_err(|e| ProviderError::Parse(format!("codex refresh: {e}")))
 }
 
 /// Refresh a stored Codex OAuth credential via `auth.openai.com/oauth/token`
@@ -305,18 +431,7 @@ pub(crate) async fn refresh_stored(
     cred: &crate::store::StoredCredential,
 ) -> Option<crate::store::StoredCredential> {
     let rt = cred.refresh_token.as_ref().filter(|s| !s.is_empty())?;
-    let resp = http
-        .post(CODEX_REFRESH_URL)
-        .header("Accept", "application/json")
-        .header("Content-Type", "application/json")
-        .json(&build_refresh_body(rt))
-        .send()
-        .await
-        .ok()?;
-    if !resp.status().is_success() {
-        return None;
-    }
-    let fresh: Refreshed = resp.json().await.ok()?;
+    let fresh = refresh_oauth(http, rt).await.ok()?;
     let _ = fresh.access_token.as_ref()?;
     Some(build_refreshed_cred(cred, &fresh))
 }
@@ -333,7 +448,9 @@ mod tests {
         let labels: Vec<&str> = ws.iter().map(|w| w.label.as_str()).collect();
         assert_eq!(labels, vec!["5-hour", "Weekly"]); // primary only
         let dlabels: Vec<&str> = detail.iter().map(|w| w.label.as_str()).collect();
-        assert!(dlabels.iter().any(|l| l.contains("Spark") && l.contains("5-hour")));
+        assert!(dlabels
+            .iter()
+            .any(|l| l.contains("Spark") && l.contains("5-hour")));
         assert!(dlabels.contains(&"Credits balance"));
         assert!(dlabels.contains(&"Available rate-limit resets"));
         let five = ws.iter().find(|w| w.label == "5-hour").unwrap();
@@ -345,11 +462,12 @@ mod tests {
         let v: Value =
             serde_json::from_str(include_str!("../../tests/codex_auth_fixture.json")).unwrap();
         let a: AuthDotJson = serde_json::from_value(v).unwrap();
-        assert!(a.tokens.is_some());
+        let tokens = a.tokens.unwrap();
+        assert_eq!(tokens.refresh_token.as_deref(), Some("r"));
     }
 
-    use base64::Engine;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine;
 
     fn jwt_with_exp(exp: i64) -> String {
         let payload = URL_SAFE_NO_PAD.encode(format!(r#"{{"exp":{exp}}}"#));
@@ -373,9 +491,12 @@ mod tests {
     fn refresh_body_uses_public_cli_client_id() {
         assert_eq!(CODEX_OAUTH_CLIENT_ID, "app_EMoamEEZ73f0CkXaXp7hrann");
         let body = build_refresh_body("rt-abc");
-        assert_eq!(body["client_id"], CODEX_OAUTH_CLIENT_ID);
-        assert_eq!(body["grant_type"], "refresh_token");
-        assert_eq!(body["refresh_token"], "rt-abc");
+        assert_eq!(
+            body,
+            format!(
+                "client_id={CODEX_OAUTH_CLIENT_ID}&grant_type=refresh_token&refresh_token=rt-abc"
+            )
+        );
     }
 
     #[test]
@@ -423,5 +544,29 @@ mod tests {
         };
         let out = build_refreshed_cred(&stored("acc-1"), &fresh);
         assert_eq!(out.expires_at, 2_000_000_000_000);
+    }
+
+    #[test]
+    fn access_refresh_is_only_for_jwt_near_expiry() {
+        assert!(access_needs_refresh(&jwt_with_exp(1_000), 800));
+        assert!(!access_needs_refresh(&jwt_with_exp(2_000), 800));
+        assert!(!access_needs_refresh("opaque.access.token", 800));
+    }
+
+    #[test]
+    fn apply_auth_refresh_updates_tokens_and_last_refresh() {
+        let auth: Value =
+            serde_json::from_str(include_str!("../../tests/codex_auth_fixture.json")).unwrap();
+        let fresh = Refreshed {
+            id_token: Some("new.id".into()),
+            access_token: Some("new.access".into()),
+            refresh_token: Some("new.refresh".into()),
+        };
+        let out = apply_auth_refresh(auth, &fresh, "2026-06-20T12:00:00Z").unwrap();
+        assert_eq!(out["tokens"]["access_token"], "new.access");
+        assert_eq!(out["tokens"]["id_token"], "new.id");
+        assert_eq!(out["tokens"]["refresh_token"], "new.refresh");
+        assert_eq!(out["tokens"]["account_id"], "acct_1");
+        assert_eq!(out["last_refresh"], "2026-06-20T12:00:00Z");
     }
 }

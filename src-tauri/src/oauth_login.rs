@@ -6,8 +6,7 @@
 //! Gemini CLI's public installed-app client (same values gemini-cli ships).
 //! The "secret" is not actually secret for installed apps (RFC 6749 §2.1);
 //! Google still requires it in the token exchange for this client type.
-const GEMINI_CID: &str =
-    "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com";
+const GEMINI_CID: &str = "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com";
 const GEMINI_CSEC: &str = "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";
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -53,7 +52,7 @@ fn spec_for(p: Provider) -> Option<OAuthSpec> {
             token_url: "https://auth.openai.com/oauth/token".into(),
             client_id: "app_EMoamEEZ73f0CkXaXp7hrann".into(),
             client_secret: None,
-            scope: "openid profile email offline_access".into(),
+            scope: "openid profile email offline_access api.connectors.read api.connectors.invoke".into(),
             extra_params: vec![
                 ("originator", "codex_cli_rs"),
                 ("codex_cli_simplified_flow", "true"),
@@ -103,7 +102,8 @@ pub fn cancel() {
 
 /// Start a login. Returns the authorize URL for the browser.
 pub fn start(app: AppHandle, provider: Provider) -> Result<String, String> {
-    let spec = spec_for(provider).ok_or_else(|| "OAuth login not supported for this provider".to_string())?;
+    let spec = spec_for(provider)
+        .ok_or_else(|| "OAuth login not supported for this provider".to_string())?;
     let verifier = pkce_verifier();
     let challenge = pkce_challenge(&verifier);
     let state = random_b64(32);
@@ -126,7 +126,18 @@ pub fn start(app: AppHandle, provider: Provider) -> Result<String, String> {
             let client_secret = spec.client_secret.clone();
             let token_url = spec.token_url.clone();
             std::thread::spawn(move || {
-                run_server(app2, provider, server, client_id, client_secret, token_url, redirect_uri, verifier, state, cancelled);
+                run_server(
+                    app2,
+                    provider,
+                    server,
+                    client_id,
+                    client_secret,
+                    token_url,
+                    redirect_uri,
+                    verifier,
+                    state,
+                    cancelled,
+                );
             });
             Ok(auth_url)
         }
@@ -146,7 +157,6 @@ fn run_server(
     expected_state: String,
     cancelled: std::sync::Arc<AtomicBool>,
 ) {
-
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(TIMEOUT_SECS);
     let mut got_code: Option<String> = None;
     while got_code.is_none() {
@@ -162,7 +172,8 @@ fn run_server(
                 let parsed = match url::Url::parse(&format!("http://localhost{url_str}")) {
                     Ok(u) => u,
                     Err(_) => {
-                        let _ = req.respond(Response::from_string("Bad Request").with_status_code(400));
+                        let _ =
+                            req.respond(Response::from_string("Bad Request").with_status_code(400));
                         continue;
                     }
                 };
@@ -173,27 +184,33 @@ fn run_server(
                 let params: std::collections::HashMap<String, String> =
                     parsed.query_pairs().into_owned().collect();
                 if let Some(err) = params.get("error") {
-                    let _ = req.respond(Response::from_string(format!("OAuth error: {err}")).with_status_code(400));
+                    let _ = req.respond(
+                        Response::from_string(format!("OAuth error: {err}")).with_status_code(400),
+                    );
                     return emit_err(&app, provider, format!("provider error: {err}"));
                 }
                 if params.get("state").map(|s| s.as_str()) != Some(&expected_state) {
-                    let _ = req.respond(Response::from_string("State mismatch").with_status_code(400));
+                    let _ =
+                        req.respond(Response::from_string("State mismatch").with_status_code(400));
                     return emit_err(&app, provider, "state mismatch".into());
                 }
                 let code = match params.get("code") {
                     Some(c) if !c.is_empty() => c.clone(),
                     _ => {
-                        let _ = req.respond(Response::from_string("Missing code").with_status_code(400));
+                        let _ = req
+                            .respond(Response::from_string("Missing code").with_status_code(400));
                         continue;
                     }
                 };
-                let _ = req.respond(Response::from_string(SUCCESS_HTML).with_header(
-                    tiny_http::Header::from_bytes(
-                        b"Content-Type".as_ref(),
-                        b"text/html; charset=utf-8".as_ref(),
-                    )
-                    .unwrap(),
-                ));
+                let _ = req.respond(
+                    Response::from_string(SUCCESS_HTML).with_header(
+                        tiny_http::Header::from_bytes(
+                            b"Content-Type".as_ref(),
+                            b"text/html; charset=utf-8".as_ref(),
+                        )
+                        .unwrap(),
+                    ),
+                );
                 got_code = Some(code);
             }
             _ => continue,
@@ -203,14 +220,27 @@ fn run_server(
     let Some(code) = got_code else {
         return emit_err(&app, provider, "no code".into());
     };
-    match tauri::async_runtime::block_on(exchange(&token_url, &client_id, client_secret.as_deref(), &redirect_uri, &verifier, &code, None)) {
+    match tauri::async_runtime::block_on(exchange(
+        &token_url,
+        &client_id,
+        client_secret.as_deref(),
+        &redirect_uri,
+        &verifier,
+        &code,
+        None,
+    )) {
         Ok(t) => {
             let cred = build_credential(provider, &t);
             let label = cred.label.clone();
             store::add(cred);
             let _ = app.emit(
                 "login-complete",
-                LoginResult { provider, ok: true, label: Some(label), error: None },
+                LoginResult {
+                    provider,
+                    ok: true,
+                    label: Some(label),
+                    error: None,
+                },
             );
         }
         Err(e) => emit_err(&app, provider, format!("token exchange: {e}")),
@@ -249,7 +279,10 @@ async fn exchange(
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
     if !status.is_success() {
-        return Err(format!("{token_url} ({status}): {}", &text[..text.len().min(200)]));
+        return Err(format!(
+            "{token_url} ({status}): {}",
+            &text[..text.len().min(200)]
+        ));
     }
     serde_json::from_str::<Value>(&text).map_err(|e| format!("parse: {e}"))
 }
@@ -314,7 +347,12 @@ fn build_credential(provider: Provider, tokens: &Value) -> StoredCredential {
     }
 }
 
-fn build_authorize_url(spec: &OAuthSpec, redirect_uri: &str, challenge: &str, state: &str) -> String {
+fn build_authorize_url(
+    spec: &OAuthSpec,
+    redirect_uri: &str,
+    challenge: &str,
+    state: &str,
+) -> String {
     let mut params: Vec<(&str, String)> = vec![
         ("response_type", "code".into()),
         ("client_id", spec.client_id.clone()),
@@ -354,7 +392,12 @@ fn random_b64(n: usize) -> String {
 fn emit_err(app: &AppHandle, provider: Provider, msg: String) {
     let _ = app.emit(
         "login-complete",
-        LoginResult { provider, ok: false, label: None, error: Some(msg) },
+        LoginResult {
+            provider,
+            ok: false,
+            label: None,
+            error: Some(msg),
+        },
     );
 }
 
@@ -381,6 +424,8 @@ mod tests {
         let url = build_authorize_url(&spec, "http://localhost:1455/auth/callback", "chk", "st");
         assert!(url.contains("originator=codex_cli_rs"));
         assert!(url.contains("codex_cli_simplified_flow=true"));
+        assert!(url.contains("api.connectors.read"));
+        assert!(url.contains("api.connectors.invoke"));
     }
 
     #[test]
@@ -389,13 +434,22 @@ mod tests {
         // `invalid_client: Invalid client type`); it uses Authorization Code +
         // loopback redirect like gemini-cli.
         let spec = spec_for(Provider::Gemini).expect("gemini must support OAuth");
-        assert!(spec.client_secret.is_some(), "gemini client_secret required");
+        assert!(
+            spec.client_secret.is_some(),
+            "gemini client_secret required"
+        );
         assert!(spec.authorize_url.contains("accounts.google.com"));
         assert!(spec.token_url.contains("oauth2.googleapis.com"));
         assert!(spec.scope.contains("cloud-platform"));
         assert!(spec.scope.contains("userinfo.email"));
         // access_type=offline + prompt=consent forces a refresh_token.
-        assert!(spec.extra_params.iter().any(|(k, v)| *k == "access_type" && *v == "offline"));
-        assert!(spec.extra_params.iter().any(|(k, v)| *k == "prompt" && *v == "consent"));
+        assert!(spec
+            .extra_params
+            .iter()
+            .any(|(k, v)| *k == "access_type" && *v == "offline"));
+        assert!(spec
+            .extra_params
+            .iter()
+            .any(|(k, v)| *k == "prompt" && *v == "consent"));
     }
 }

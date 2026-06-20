@@ -19,7 +19,13 @@ async fn main() {
         let wins: Vec<String> = u
             .windows
             .iter()
-            .map(|w| format!("{}={}%", w.label, w.used_percent.map(|p| p.to_string()).unwrap_or("?".into())))
+            .map(|w| {
+                format!(
+                    "{}={}%",
+                    w.label,
+                    w.used_percent.map(|p| p.to_string()).unwrap_or("?".into())
+                )
+            })
             .collect();
         println!(
             "{:?}: connected={} plan={:?} account={:?} err={:?} [ {} ]",

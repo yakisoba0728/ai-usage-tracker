@@ -14,10 +14,7 @@ pub fn start(app: AppHandle, poll_seconds: u64) {
     let my_gen = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        let snap = app
-            .state::<SnapshotStore>()
-            .inner()
-            .clone();
+        let snap = app.state::<SnapshotStore>().inner().clone();
         let cfg = app.state::<ConfigStore>().inner().clone();
         // immediate first fetch, then poll
         refresh_once(&app, &cfg, &snap).await;

@@ -11,6 +11,8 @@ export type Provider =
   | "cursor"
   | "zai";
 
+export type ServiceSource = "auto" | "stored";
+
 export interface LimitWindow {
   label: string;
   used_percent: number | null;
@@ -20,6 +22,8 @@ export interface LimitWindow {
 }
 
 export interface ServiceUsage {
+  id: string;
+  source: ServiceSource;
   provider: Provider;
   connected: boolean;
   plan: string | null;

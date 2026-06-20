@@ -11,12 +11,13 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::http;
-use crate::model::{LimitWindow, Provider, ServiceUsage};
+use crate::model::{auto_service_id, LimitWindow, Provider, ServiceSource, ServiceUsage};
 use crate::providers::ProviderError;
 use crate::secrets;
 
 const CODE_ASSIST_BASE: &str = "https://cloudcode-pa.googleapis.com/v1internal";
-const GEMINI_CLIENT_ID: &str = "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com";
+const GEMINI_CLIENT_ID: &str =
+    "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com";
 const GEMINI_CLIENT_SECRET: &str = "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";
 const GEMINI_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 
@@ -24,24 +25,33 @@ const GEMINI_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 #[allow(dead_code)]
 struct OauthCreds {
     access_token: String,
-    #[serde(default)] refresh_token: Option<String>,
-    #[serde(default)] token_type: Option<String>,
-    #[serde(default)] scope: Option<String>,
-    #[serde(default)] expiry_date: i64,
+    #[serde(default)]
+    refresh_token: Option<String>,
+    #[serde(default)]
+    token_type: Option<String>,
+    #[serde(default)]
+    scope: Option<String>,
+    #[serde(default)]
+    expiry_date: i64,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Bucket {
-    #[serde(default)] model_id: Option<String>,
-    #[serde(default)] remaining_fraction: Option<f64>,
-    #[serde(default)] remaining_amount: Option<String>,
-    #[serde(default)] reset_time: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    model_id: Option<String>,
+    #[serde(default)]
+    remaining_fraction: Option<f64>,
+    #[serde(default)]
+    remaining_amount: Option<String>,
+    #[serde(default)]
+    reset_time: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Deserialize, Default)]
 struct QuotaResp {
-    #[serde(default)] buckets: Vec<Bucket>,
+    #[serde(default)]
+    buckets: Vec<Bucket>,
 }
 
 pub struct GeminiProvider {
@@ -167,8 +177,8 @@ impl crate::providers::ProviderApi for GeminiProvider {
 
     async fn fetch(&self) -> Result<ServiceUsage, ProviderError> {
         let blob = secrets::read_json_file(&secrets::gemini_creds_path())?;
-        let mut creds: OauthCreds =
-            serde_json::from_value(blob.clone()).map_err(|e| ProviderError::Parse(format!("gemini creds: {e}")))?;
+        let mut creds: OauthCreds = serde_json::from_value(blob.clone())
+            .map_err(|e| ProviderError::Parse(format!("gemini creds: {e}")))?;
         let now_ms = chrono::Utc::now().timestamp_millis();
 
         // Self-refresh on expiry (60s skew buffer) via Google OAuth, reusing the
@@ -178,7 +188,10 @@ impl crate::providers::ProviderApi for GeminiProvider {
                 Some(rt) => match refresh_gemini_token(&self.http, &rt).await {
                     Ok(fresh) => {
                         let new_exp = now_ms + (fresh.expires_in.unwrap_or(3600) as i64) * 1000;
-                        let rt = fresh.refresh_token.as_ref().or(creds.refresh_token.as_ref());
+                        let rt = fresh
+                            .refresh_token
+                            .as_ref()
+                            .or(creds.refresh_token.as_ref());
                         let _ = write_back_creds(&blob, &fresh.access_token, rt, new_exp);
                         creds.access_token = fresh.access_token;
                         creds.expiry_date = new_exp;
@@ -231,7 +244,8 @@ impl crate::providers::ProviderApi for GeminiProvider {
         let raw_json = serde_json::to_string_pretty(&serde_json::json!({
             "loadCodeAssist": &load,
             "retrieveUserQuota": &quota_val,
-        })).ok();
+        }))
+        .ok();
         let quota: QuotaResp =
             serde_json::from_value(quota_val).map_err(|e| ProviderError::Parse(e.to_string()))?;
         // Tier: paidTier → currentTier fallback (free accounts have null paidTier).
@@ -239,10 +253,16 @@ impl crate::providers::ProviderApi for GeminiProvider {
             .get("paidTier")
             .and_then(|t| t.get("name"))
             .and_then(|n| n.as_str())
-            .or_else(|| load.get("currentTier").and_then(|t| t.get("name")).and_then(|n| n.as_str()))
+            .or_else(|| {
+                load.get("currentTier")
+                    .and_then(|t| t.get("name"))
+                    .and_then(|n| n.as_str())
+            })
             .map(String::from);
         let (windows, detail_windows) = normalize(&quota);
         Ok(ServiceUsage {
+            id: auto_service_id(Provider::Gemini),
+            source: ServiceSource::Auto,
             provider: Provider::Gemini,
             connected: true,
             plan: tier,
@@ -255,12 +275,13 @@ impl crate::providers::ProviderApi for GeminiProvider {
     }
 }
 
-
 #[derive(serde::Deserialize)]
 struct Refreshed {
     access_token: String,
-    #[serde(default)] refresh_token: Option<String>,
-    #[serde(default)] expires_in: Option<u64>,
+    #[serde(default)]
+    refresh_token: Option<String>,
+    #[serde(default)]
+    expires_in: Option<u64>,
 }
 
 /// Resolve client metadata: env override > Gemini CLI's public constants.
@@ -273,10 +294,16 @@ fn gemini_client_metadata() -> (String, String) {
             return (id, sec);
         }
     }
-    (GEMINI_CLIENT_ID.to_string(), GEMINI_CLIENT_SECRET.to_string())
+    (
+        GEMINI_CLIENT_ID.to_string(),
+        GEMINI_CLIENT_SECRET.to_string(),
+    )
 }
 
-async fn refresh_gemini_token(http: &reqwest::Client, rt: &str) -> Result<Refreshed, ProviderError> {
+async fn refresh_gemini_token(
+    http: &reqwest::Client,
+    rt: &str,
+) -> Result<Refreshed, ProviderError> {
     let (id, sec) = gemini_client_metadata();
     let resp = http
         .post(GEMINI_TOKEN_URL)
@@ -297,7 +324,8 @@ async fn refresh_gemini_token(http: &reqwest::Client, rt: &str) -> Result<Refres
             body: text.chars().take(200).collect(),
         });
     }
-    serde_json::from_str::<Refreshed>(&text).map_err(|e| ProviderError::Parse(format!("refresh: {e}")))
+    serde_json::from_str::<Refreshed>(&text)
+        .map_err(|e| ProviderError::Parse(format!("refresh: {e}")))
 }
 
 /// Write the refreshed access token back to oauth_creds.json (preserves all
@@ -357,11 +385,18 @@ pub(crate) async fn fetch_with(
         .and_then(|v| v.as_str())
         .map(String::from)
         .ok_or_else(|| ProviderError::Parse("no cloudaicompanionProject".into()))?;
-    let quota_val = post_code_assist(http, token, "retrieveUserQuota", json!({ "project": project })).await?;
+    let quota_val = post_code_assist(
+        http,
+        token,
+        "retrieveUserQuota",
+        json!({ "project": project }),
+    )
+    .await?;
     let raw_json = serde_json::to_string_pretty(&serde_json::json!({
         "loadCodeAssist": &load,
         "retrieveUserQuota": &quota_val,
-    })).ok();
+    }))
+    .ok();
     let quota: QuotaResp =
         serde_json::from_value(quota_val).map_err(|e| ProviderError::Parse(e.to_string()))?;
     let tier = load
@@ -371,6 +406,8 @@ pub(crate) async fn fetch_with(
         .map(String::from);
     let (windows, detail_windows) = normalize(&quota);
     Ok(ServiceUsage {
+        id: auto_service_id(Provider::Gemini),
+        source: ServiceSource::Auto,
         provider: Provider::Gemini,
         connected: true,
         plan: tier,
@@ -397,7 +434,10 @@ fn build_refreshed_cred(
         provider: cred.provider,
         label: cred.label.clone(),
         access_token: fresh.access_token.clone(),
-        refresh_token: fresh.refresh_token.clone().or_else(|| cred.refresh_token.clone()),
+        refresh_token: fresh
+            .refresh_token
+            .clone()
+            .or_else(|| cred.refresh_token.clone()),
         expires_at,
         id_token: cred.id_token.clone(),
         account_id: cred.account_id.clone(),
@@ -463,13 +503,21 @@ mod tests {
                     model_id: Some("gemini-2.5-flash".into()),
                     remaining_fraction: Some(1.0),
                     remaining_amount: None,
-                    reset_time: Some(chrono::DateTime::parse_from_rfc3339("2026-06-20T00:00:00Z").unwrap().with_timezone(&chrono::Utc)),
+                    reset_time: Some(
+                        chrono::DateTime::parse_from_rfc3339("2026-06-20T00:00:00Z")
+                            .unwrap()
+                            .with_timezone(&chrono::Utc),
+                    ),
                 },
                 Bucket {
                     model_id: Some("gemini-2.5-pro".into()),
                     remaining_fraction: Some(0.25), // 75% used
                     remaining_amount: None,
-                    reset_time: Some(chrono::DateTime::parse_from_rfc3339("2026-06-20T00:00:00Z").unwrap().with_timezone(&chrono::Utc)),
+                    reset_time: Some(
+                        chrono::DateTime::parse_from_rfc3339("2026-06-20T00:00:00Z")
+                            .unwrap()
+                            .with_timezone(&chrono::Utc),
+                    ),
                 },
             ],
         };

@@ -1,7 +1,6 @@
 //! User configuration — persisted to disk. Provider slot order matches the
 //! [Claude, Codex, Gemini, Copilot, Cursor, z.ai] canonical order used across
 //! the codebase.
-use crate::model::Provider;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -109,57 +108,6 @@ impl AppConfig {
             }
         }
     }
-
-    /// Resolve the effective display name for a provider (custom override or
-    /// the provider's built-in display()).
-    pub fn display_name(&self, provider: Provider) -> &str {
-        let idx = provider_index(provider);
-        if let Some(cfg) = self.providers.get(idx) {
-            if let Some(name) = &cfg.custom_name {
-                return name;
-            }
-        }
-        provider.display()
-    }
-
-    /// Resolve the effective sort key for a provider.
-    pub fn sort_key(&self, provider: Provider) -> i32 {
-        let idx = provider_index(provider);
-        self.providers.get(idx).map(|c| c.sort_index).unwrap_or(0)
-    }
-
-    /// Resolve notification thresholds for a provider.
-    pub fn thresholds(&self, provider: Provider) -> &[u8] {
-        let idx = provider_index(provider);
-        self.providers
-            .get(idx)
-            .map(|c| c.notify_thresholds.as_slice())
-            .unwrap_or(&[])
-    }
-}
-
-/// Canonical index for a Provider in the `providers[6]` array.
-pub fn provider_index(p: Provider) -> usize {
-    match p {
-        Provider::Claude => 0,
-        Provider::Codex => 1,
-        Provider::Gemini => 2,
-        Provider::Copilot => 3,
-        Provider::Cursor => 4,
-        Provider::Zai => 5,
-    }
-}
-
-/// Reverse: index → Provider.
-pub fn provider_at(idx: usize) -> Provider {
-    match idx {
-        0 => Provider::Claude,
-        1 => Provider::Codex,
-        2 => Provider::Gemini,
-        3 => Provider::Copilot,
-        4 => Provider::Cursor,
-        _ => Provider::Zai,
-    }
 }
 
 #[cfg(test)]
@@ -192,13 +140,5 @@ mod tests {
         c.providers[2].enabled = false;
         let arr = c.enabled_array();
         assert_eq!(arr, [true, true, false, true, true, true]);
-    }
-
-    #[test]
-    fn display_name_uses_custom_override() {
-        let mut c = AppConfig::default();
-        c.providers[0].custom_name = Some("My Claude".into());
-        assert_eq!(c.display_name(Provider::Claude), "My Claude");
-        assert_eq!(c.display_name(Provider::Codex), "Codex");
     }
 }

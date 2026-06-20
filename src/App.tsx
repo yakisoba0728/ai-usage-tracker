@@ -1,7 +1,12 @@
+import { lazy, Suspense } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
-import { Dashboard } from "@/components/Dashboard";
-import { TrayPopover } from "@/components/TrayPopover";
+const Dashboard = lazy(() =>
+  import("@/components/Dashboard").then((m) => ({ default: m.Dashboard })),
+);
+const TrayPopover = lazy(() =>
+  import("@/components/TrayPopover").then((m) => ({ default: m.TrayPopover })),
+);
 
 /**
  * Which window is this webview? The backend loads the tray popover as
@@ -31,5 +36,9 @@ function isPopoverWindow(): boolean {
 const isPopover = isPopoverWindow();
 
 export default function App() {
-  return isPopover ? <TrayPopover /> : <Dashboard />;
+  return (
+    <Suspense fallback={null}>
+      {isPopover ? <TrayPopover /> : <Dashboard />}
+    </Suspense>
+  );
 }

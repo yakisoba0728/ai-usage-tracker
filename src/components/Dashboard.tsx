@@ -125,6 +125,13 @@ export function Dashboard() {
     void setConfig(next).catch((e) => console.error("set_config failed:", e));
   }, []);
 
+  // Stable so memoized cards don't re-render when an unrelated card is selected
+  // or a provider-loading event fires.
+  const handleSelectService = useCallback((id: string) => {
+    setOpenServiceId(id);
+    setInspectorTab("overview");
+  }, []);
+
   useEffect(() => {
     const un = onTriggerRefresh(() => void refresh()).catch((e) => {
       console.error("subscribe trigger-refresh failed:", e);
@@ -284,10 +291,7 @@ export function Dashboard() {
                   selectedId={visibleServiceId}
                   nowMs={nowMs}
                   loadingProviders={loadingProviders}
-                  onSelect={(id) => {
-                    setOpenServiceId(id);
-                    setInspectorTab("overview");
-                  }}
+                  onSelect={handleSelectService}
                 />
               )}
             </div>

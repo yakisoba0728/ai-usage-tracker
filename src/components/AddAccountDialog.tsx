@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Cloud, Database, ExternalLink, KeyRound, Loader2, Trash2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -26,20 +27,6 @@ import type { AccountInfo, LoginInfo, Provider } from "@/lib/types";
 
 const SUPPORTED: Provider[] = ["claude", "codex", "gemini", "copilot", "zai"];
 
-const SESSION_HINT: Partial<Record<Provider, string>> = {
-  claude: "claude.ai > DevTools > Application > Cookies > sessionKey (sk-ant-...).",
-  copilot: "Use a GitHub token with Copilot access: gho_, ghu_, or github_pat_ with Copilot Requests permission.",
-  zai: "Paste your z.ai GLM API key or session key.",
-};
-
-const PROVIDER_COPY: Partial<Record<Provider, string>> = {
-  claude: "Claude can be added with a web session key or reused from the local Claude Code session.",
-  codex: "Codex uses the OpenAI browser OAuth flow with a local callback.",
-  gemini: "Gemini uses Google's browser OAuth flow with a local callback.",
-  copilot: "Copilot supports a pasted token or GitHub device-code sign-in.",
-  zai: "z.ai can be added with a GLM API key or session key.",
-};
-
 export interface AddAccountDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -51,6 +38,7 @@ export function AddAccountDialog({
   onOpenChange,
   onChanged,
 }: AddAccountDialogProps) {
+  const { t } = useTranslation();
   const [selectedProvider, setSelectedProvider] = useState<Provider | null>(null);
   const [info, setInfo] = useState<LoginInfo | null>(null);
   const [busy, setBusy] = useState<Provider | null>(null);
@@ -96,7 +84,7 @@ export function AddAccountDialog({
         onChanged();
         onOpenChange(false);
       } else {
-        setError(r.error ?? "Login failed.");
+        setError(r.error ?? t("addAccount.loginFailed"));
       }
     });
     return () => {
@@ -195,17 +183,17 @@ export function AddAccountDialog({
       <DialogContent className="grid max-h-[88dvh] grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden rounded-lg border-border bg-surface p-0 sm:max-w-[760px]">
         <DialogHeader className="border-b border-border px-5 py-4 pr-12">
           <DialogTitle className="font-semibold tracking-tight text-text" style={{ fontSize: 16 }}>
-            Add account
+            {t("addAccount.title")}
           </DialogTitle>
           <DialogDescription className="text-text-dim" style={{ fontSize: 12 }}>
-            Choose a provider first, then select one available sign-in method.
+            {t("addAccount.subtitle")}
           </DialogDescription>
         </DialogHeader>
 
         <div className="grid h-[min(560px,calc(88dvh-73px))] min-h-0 gap-0 sm:grid-cols-[235px_minmax(0,1fr)] max-sm:grid-rows-[auto_minmax(0,1fr)]">
           <section className="min-h-0 overflow-y-auto border-b border-border bg-[#1a1d20] p-3 sm:border-b-0 sm:border-r">
             <p className="mb-2 uppercase tracking-[0.06em] text-text-faint" style={{ fontSize: 10, fontWeight: 600 }}>
-              Provider
+              {t("addAccount.provider")}
             </p>
             <div className="grid gap-1.5">
               {SUPPORTED.map((provider) => (
@@ -242,25 +230,27 @@ export function AddAccountDialog({
                         {PROVIDER_LABEL[selectedProvider]}
                       </h3>
                       <p className="mt-1 text-xs leading-5 text-text-faint">
-                        {PROVIDER_COPY[selectedProvider]}
+                        {t(`addAccount.copy.${selectedProvider}`)}
                       </p>
                     </div>
                   </div>
 
                   <div className="mt-4 grid gap-2">
-                    {selectedOptions.map((option) => (
+                    {selectedOptions.map((optionId) => (
                       <button
-                        key={option.id}
+                        key={optionId}
                         type="button"
                         disabled={busy !== null}
-                        onClick={() => void runOption(selectedProvider, option.id)}
+                        onClick={() => void runOption(selectedProvider, optionId)}
                         className="flex w-full items-start gap-3 rounded-lg border border-border bg-surface-2/60 px-3 py-3 text-left transition-colors hover:border-border-strong hover:bg-surface-2 disabled:opacity-50"
                       >
-                        <span className="mt-0.5 text-text-dim">{optionIcon(option.id)}</span>
+                        <span className="mt-0.5 text-text-dim">{optionIcon(optionId)}</span>
                         <span className="min-w-0 flex-1">
-                          <span className="block text-sm font-medium text-text">{option.title}</span>
+                          <span className="block text-sm font-medium text-text">
+                            {t(`addAccount.option.${optionId}.title`)}
+                          </span>
                           <span className="mt-0.5 block text-xs leading-4 text-text-faint">
-                            {option.description}
+                            {t(`addAccount.option.${optionId}.description`)}
                           </span>
                         </span>
                       </button>
@@ -271,7 +261,9 @@ export function AddAccountDialog({
                 {sessionFor === selectedProvider && (
                   <Panel>
                     <div className="text-text" style={{ fontSize: 12 }}>
-                      Paste the {PROVIDER_LABEL[sessionFor]} key
+                      {t("addAccount.pasteKey", {
+                        provider: PROVIDER_LABEL[sessionFor],
+                      })}
                     </div>
                     <div className="mt-2 flex gap-2">
                       <input
@@ -284,12 +276,12 @@ export function AddAccountDialog({
                         onKeyDown={(e) => e.key === "Enter" && void submitSession()}
                       />
                       <Button size="sm" onClick={() => void submitSession()} disabled={busy !== null || !sessionInput.trim()}>
-                        Add
+                        {t("addAccount.add")}
                       </Button>
                     </div>
-                    {SESSION_HINT[sessionFor] && (
+                    {t(`addAccount.hint.${sessionFor}`, { defaultValue: "" }) && (
                       <p className="mt-2 leading-relaxed text-text-faint" style={{ fontSize: 11 }}>
-                        {SESSION_HINT[sessionFor]}
+                        {t(`addAccount.hint.${sessionFor}`, { defaultValue: "" })}
                       </p>
                     )}
                   </Panel>
@@ -308,19 +300,19 @@ export function AddAccountDialog({
                     </button>
                     {info.user_code ? (
                       <div className="mt-2 text-text" style={{ fontSize: 12 }}>
-                        Enter code:{" "}
+                        {t("addAccount.enterCode")}{" "}
                         <span className="num select-all tracking-[0.3em]" style={{ fontSize: 15 }}>
                           {info.user_code}
                         </span>
                       </div>
                     ) : (
                       <div className="mt-2 text-text-dim" style={{ fontSize: 12 }}>
-                        Authorize in your browser.
+                        {t("addAccount.authorize")}
                       </div>
                     )}
                     <div className="mt-2 flex items-center gap-1.5 text-text-faint" style={{ fontSize: 11 }}>
                       <Loader2 className="size-3 animate-spin text-text-dim" />
-                      Waiting for authorization...
+                      {t("addAccount.waiting")}
                     </div>
                   </Panel>
                 )}
@@ -329,9 +321,11 @@ export function AddAccountDialog({
               <div className="flex min-h-[260px] items-center justify-center rounded-lg border border-dashed border-border bg-surface-2/30 px-6 text-center">
                 <div>
                   <Cloud className="mx-auto mb-3 size-6 text-text-faint" />
-                  <p className="text-sm font-medium text-text">Select a provider</p>
+                  <p className="text-sm font-medium text-text">
+                    {t("addAccount.select")}
+                  </p>
                   <p className="mt-1 text-xs leading-5 text-text-faint">
-                    Available sign-in and local-session options appear here.
+                    {t("addAccount.selectHint")}
                   </p>
                 </div>
               </div>
@@ -345,11 +339,11 @@ export function AddAccountDialog({
 
             <section className="mt-5">
               <p className="mb-2 uppercase tracking-[0.06em] text-text-faint" style={{ fontSize: 10, fontWeight: 600 }}>
-                Added accounts
+                {t("addAccount.added")}
               </p>
               {accounts.length === 0 ? (
                 <p className="text-text-faint" style={{ fontSize: 12 }}>
-                  None yet.
+                  {t("addAccount.none")}
                 </p>
               ) : (
                 <div className="space-y-1.5">
@@ -368,7 +362,9 @@ export function AddAccountDialog({
                         variant="ghost"
                         size="icon-sm"
                         onClick={() => void remove(account.id)}
-                        aria-label={`Remove ${PROVIDER_LABEL[account.provider]} account`}
+                        aria-label={t("addAccount.removeAria", {
+                          provider: PROVIDER_LABEL[account.provider],
+                        })}
                         className="text-text-faint hover:text-text"
                       >
                         <Trash2 className="size-3.5" />

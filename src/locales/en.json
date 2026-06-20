@@ -119,5 +119,51 @@
       "empty": "No raw response — this account didn't make an HTTP call this cycle."
     },
     "loading": "Loading usage…"
+  },
+  "addAccount": {
+    "title": "Add account",
+    "subtitle": "Choose a provider first, then select one available sign-in method.",
+    "provider": "Provider",
+    "select": "Select a provider",
+    "selectHint": "Available sign-in and local-session options appear here.",
+    "added": "Added accounts",
+    "none": "None yet.",
+    "loginFailed": "Login failed.",
+    "removeAria": "Remove {{provider}} account",
+    "pasteKey": "Paste the {{provider}} key",
+    "add": "Add",
+    "enterCode": "Enter code:",
+    "authorize": "Authorize in your browser.",
+    "waiting": "Waiting for authorization...",
+    "copy": {
+      "claude": "Claude can be added with a web session key or reused from the local Claude Code session.",
+      "codex": "Codex uses the OpenAI browser OAuth flow with a local callback.",
+      "gemini": "Gemini uses Google's browser OAuth flow with a local callback.",
+      "copilot": "Copilot supports a pasted token or GitHub device-code sign-in.",
+      "zai": "z.ai can be added with a GLM API key or session key."
+    },
+    "hint": {
+      "claude": "claude.ai > DevTools > Application > Cookies > sessionKey (sk-ant-...).",
+      "copilot": "Use a GitHub token with Copilot access: gho_, ghu_, or github_pat_ with Copilot Requests permission.",
+      "zai": "Paste your z.ai GLM API key or session key."
+    },
+    "option": {
+      "session-key": {
+        "title": "Paste session key",
+        "description": "Use a provider token or session key already copied from your browser or CLI."
+      },
+      "browser-oauth": {
+        "title": "Browser sign-in",
+        "description": "Open the provider authorization page and capture the local callback."
+      },
+      "device-code": {
+        "title": "Device code sign-in",
+        "description": "Use the provider's device-code flow and enter the code in your browser."
+      },
+      "local-session": {
+        "title": "Reuse local session",
+        "description": "Scan this device for existing CLI or browser sessions."
+      }
+    }
   }
 }

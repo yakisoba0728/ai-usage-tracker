@@ -22,12 +22,28 @@ export interface LimitWindow {
 }
 
 /**
+ * The closed set of stable error codes the backend emits (one per
+ * `ProviderError` variant in `src-tauri/src/providers/mod.rs`). Each MUST have a
+ * matching `error.<code>` key in every locale catalog — guarded by a test. The
+ * runtime array is the single source of truth for the `ServiceErrorCode` union.
+ */
+export const SERVICE_ERROR_CODES = [
+  "not_logged_in",
+  "token_expired",
+  "network",
+  "server_error",
+  "parse_error",
+] as const;
+
+export type ServiceErrorCode = (typeof SERVICE_ERROR_CODES)[number];
+
+/**
  * Structured, localizable service error. `code` is a stable machine key the UI
  * maps to a localized message (`error.<code>`); `detail` is the English
  * technical string, shown as a fallback when no key matches that code.
  */
 export interface ServiceError {
-  code: string;
+  code: ServiceErrorCode;
   detail?: string;
 }
 

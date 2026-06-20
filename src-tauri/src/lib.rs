@@ -2,6 +2,7 @@ pub mod commands;
 pub mod config;
 pub mod http;
 pub mod jwt;
+pub mod keychain;
 pub mod login;
 pub mod model;
 pub mod oauth_login;

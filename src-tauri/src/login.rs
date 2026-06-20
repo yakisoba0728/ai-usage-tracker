@@ -102,12 +102,19 @@ fn finish(app: &AppHandle, provider: Provider, res: Result<StoredCredential, Str
     let result = match res {
         Ok(c) => {
             let label = c.label.clone();
-            store::add(c);
-            LoginResult {
-                provider,
-                ok: true,
-                label: Some(label),
-                error: None,
+            match store::add(c) {
+                Ok(_) => LoginResult {
+                    provider,
+                    ok: true,
+                    label: Some(label),
+                    error: None,
+                },
+                Err(e) => LoginResult {
+                    provider,
+                    ok: false,
+                    label: None,
+                    error: Some(format!("failed to store credential: {e}")),
+                },
             }
         }
         Err(e) => LoginResult {

@@ -176,7 +176,7 @@ pub async fn add_session_key(
         id_token: None,
         account_id: None,
     };
-    Ok(crate::store::add(cred))
+    crate::store::add(cred)
 }
 
 /// Browser + localhost-callback OAuth login (codex-switcher pattern). Returns

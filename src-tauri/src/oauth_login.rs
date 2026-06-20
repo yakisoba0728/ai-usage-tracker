@@ -232,16 +232,20 @@ fn run_server(
         Ok(t) => {
             let cred = build_credential(provider, &t);
             let label = cred.label.clone();
-            store::add(cred);
-            let _ = app.emit(
-                "login-complete",
-                LoginResult {
-                    provider,
-                    ok: true,
-                    label: Some(label),
-                    error: None,
-                },
-            );
+            match store::add(cred) {
+                Ok(_) => {
+                    let _ = app.emit(
+                        "login-complete",
+                        LoginResult {
+                            provider,
+                            ok: true,
+                            label: Some(label),
+                            error: None,
+                        },
+                    );
+                }
+                Err(e) => emit_err(&app, provider, format!("failed to store credential: {e}")),
+            }
         }
         Err(e) => emit_err(&app, provider, format!("token exchange: {e}")),
     }

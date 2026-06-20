@@ -416,7 +416,8 @@ impl crate::providers::ProviderApi for ClaudeProvider {
         // Auto-refresh when expired. The refresh rotates tokens and writes the
         // new pair back to the keychain so the CLI and app stay in sync.
         if creds.expires_at > 0 && creds.expires_at < now_ms {
-            if let Some(rt) = creds.refresh_token.clone() {
+            let rt = creds.refresh_token.clone().filter(|s| !s.is_empty());
+            if let Some(rt) = rt {
                 match refresh_oauth(&self.http, &rt).await {
                     Ok(fresh) => {
                         let exp = fresh.expires_in
@@ -444,9 +445,12 @@ impl crate::providers::ProviderApi for ClaudeProvider {
         let plan = format_plan(&creds.rate_limit_tier, &creds.subscription_type);
         match fetch_with(&self.http, &creds.access_token, plan.clone(), None).await {
             Err(ProviderError::Status { status: 429, .. }) => {
-                let rt = creds.refresh_token.clone().ok_or_else(|| {
-                    ProviderError::Expired("rate limited and no refresh_token available".into())
-                })?;
+                let rt = creds.refresh_token.clone().filter(|s| !s.is_empty())
+                    .ok_or_else(|| {
+                        ProviderError::Expired(
+                            "Rate limited and no refresh_token — run `claude` to re-authenticate.".into(),
+                        )
+                    })?;
                 let fresh = refresh_oauth(&self.http, &rt).await?;
                 let exp = fresh.expires_in
                     .map(|s| now_ms + (s as i64) * 1000)

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import addAccount from "./AddAccountDialog.tsx?raw";
-import dashboard from "./Dashboard.tsx?raw";
+import detailDialog from "./dashboard/AccountDetailDialog.tsx?raw";
 import settings from "./SettingsDialog.tsx?raw";
 
 describe("modal scroll layout", () => {
@@ -17,8 +17,8 @@ describe("modal scroll layout", () => {
   });
 
   it("sizes detail modal content instead of clipping a full-viewport child", () => {
-    expect(dashboard).toContain("h-[min(760px,86dvh)]");
-    expect(dashboard).toContain("scroll-area h-full min-h-0 overflow-y-auto");
-    expect(dashboard).not.toContain("lg:h-dvh");
+    expect(detailDialog).toContain("h-[min(760px,86dvh)]");
+    expect(detailDialog).toContain("scroll-area h-full min-h-0 overflow-y-auto");
+    expect(detailDialog).not.toContain("lg:h-dvh");
   });
 });

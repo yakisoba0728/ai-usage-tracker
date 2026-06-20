@@ -165,5 +165,31 @@
         "description": "이 기기에서 기존 CLI 또는 브라우저 세션을 검색합니다."
       }
     }
+  },
+  "settings": {
+    "title": "설정",
+    "applied": "환경설정은 즉시 적용됩니다.",
+    "nav": { "general": "일반", "providers": "제공자" },
+    "generalTitle": "일반",
+    "generalDesc": "표시, 새로고침, 계정 표시 설정.",
+    "refreshInterval": "기본 새로고침 주기",
+    "refreshIntervalDesc": "계정을 얼마나 자주 새로고침할지.",
+    "poll": {
+      "1m": "1분",
+      "5m": "5분",
+      "15m": "15분",
+      "30m": "30분"
+    },
+    "sortList": "계정 목록 정렬",
+    "sortListDesc": "온라인·오프라인 그룹 내부의 순서를 제어합니다.",
+    "sort": { "custom": "사용자 지정", "usage": "사용량", "name": "이름" },
+    "showOffline": "오프라인 계정 표시",
+    "showOfflineDesc": "연결이 끊긴 제공자를 모니터에 계속 표시합니다.",
+    "providersTitle": "제공자",
+    "providersDesc": "{{count}}개 제공자 활성화됨.",
+    "shownAs": "{{name}}(으)로 표시",
+    "defaultName": "기본 제공자 이름",
+    "addProviderAccount": "제공자 계정 추가",
+    "scanLocal": "로컬 세션 검색"
   }
 }

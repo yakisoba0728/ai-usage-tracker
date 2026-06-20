@@ -165,5 +165,31 @@
         "description": "Scan this device for existing CLI or browser sessions."
       }
     }
+  },
+  "settings": {
+    "title": "Settings",
+    "applied": "Preferences are applied immediately.",
+    "nav": { "general": "General", "providers": "Providers" },
+    "generalTitle": "General",
+    "generalDesc": "Display, refresh, and account visibility.",
+    "refreshInterval": "Default refresh interval",
+    "refreshIntervalDesc": "How often accounts are refreshed.",
+    "poll": {
+      "1m": "1 minute",
+      "5m": "5 minutes",
+      "15m": "15 minutes",
+      "30m": "30 minutes"
+    },
+    "sortList": "Sort account list",
+    "sortListDesc": "Controls ordering inside Online and Offline groups.",
+    "sort": { "custom": "Custom", "usage": "Usage", "name": "Name" },
+    "showOffline": "Show offline accounts",
+    "showOfflineDesc": "Keep disconnected providers visible in the monitor.",
+    "providersTitle": "Providers",
+    "providersDesc": "{{count}} providers enabled.",
+    "shownAs": "Shown as {{name}}",
+    "defaultName": "Default provider name",
+    "addProviderAccount": "Add provider account",
+    "scanLocal": "Scan local sessions"
   }
 }

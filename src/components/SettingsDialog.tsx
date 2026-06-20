@@ -1,18 +1,13 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import {
-  Bell,
-  Check,
   ChevronDown,
   Cloud,
-  Code2,
-  Database,
-  Download,
-  Monitor,
   RefreshCw,
   Settings2,
   Shield,
   SlidersHorizontal,
 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import {
   Dialog,
@@ -27,31 +22,7 @@ import type { AppConfig, Provider } from "@/lib/types";
 
 export type SortBy = "custom" | "usage" | "name";
 
-type SettingsSection =
-  | "general"
-  | "providers"
-  | "notifications"
-  | "sessions"
-  | "advanced";
-
-const POLL_OPTIONS: { label: string; value: number }[] = [
-  { label: "1 minute", value: 60 },
-  { label: "5 minutes", value: 300 },
-  { label: "15 minutes", value: 900 },
-  { label: "30 minutes", value: 1800 },
-];
-
-const SECTION_NAV: {
-  id: SettingsSection;
-  label: string;
-  icon: ReactNode;
-}[] = [
-  { id: "general", label: "General", icon: <Settings2 className="size-4" /> },
-  { id: "providers", label: "Providers", icon: <Cloud className="size-4" /> },
-  { id: "notifications", label: "Notifications", icon: <Bell className="size-4" /> },
-  { id: "sessions", label: "Sessions", icon: <Database className="size-4" /> },
-  { id: "advanced", label: "Advanced", icon: <Code2 className="size-4" /> },
-];
+type SettingsSection = "general" | "providers";
 
 export interface SettingsDialogProps {
   open: boolean;
@@ -78,18 +49,27 @@ export function SettingsDialog({
   onReuseLocalSession,
   onOpenAddAccount,
 }: SettingsDialogProps) {
-  const [section, setSection] = useState<SettingsSection>("general");
-  const [launchAtLogin, setLaunchAtLogin] = useState(true);
-  const [autoUpdates, setAutoUpdates] = useState(true);
-  const [compactMode, setCompactMode] = useState(false);
-  const [crossingAlerts, setCrossingAlerts] = useState(true);
-  const [refreshAlerts, setRefreshAlerts] = useState(false);
-  const [localParsing, setLocalParsing] = useState(true);
+  const { t } = useTranslation();
   const enabledCount = useMemo(
     () => config?.providers.filter((provider) => provider.enabled).length ?? 0,
     [config],
   );
 
+  const pollOptions = [
+    { label: t("settings.poll.1m"), value: 60 },
+    { label: t("settings.poll.5m"), value: 300 },
+    { label: t("settings.poll.15m"), value: 900 },
+    { label: t("settings.poll.30m"), value: 1800 },
+  ];
+
+  const sectionNav: { id: SettingsSection; label: string; icon: ReactNode }[] = [
+    { id: "general", label: t("settings.nav.general"), icon: <Settings2 className="size-4" /> },
+    { id: "providers", label: t("settings.nav.providers"), icon: <Cloud className="size-4" /> },
+  ];
+
+  // The settings surface is small enough that both sections render at once;
+  // the nav scrolls to them. (We drop the old 5-section layout — Notifications,
+  // Sessions, Advanced were non-functional scaffolding.)
   function patchConfig(patch: Partial<AppConfig>) {
     if (!config) return;
     onConfigChange({ ...config, ...patch });
@@ -105,31 +85,22 @@ export function SettingsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="grid h-[min(640px,88dvh)] w-[min(780px,94vw)] max-w-none grid-cols-[200px_minmax(0,1fr)] gap-0 overflow-hidden rounded-lg border-border bg-[#202225] p-0 shadow-2xl shadow-black/50 max-md:h-[min(680px,94dvh)] max-md:grid-cols-1 max-md:grid-rows-[auto_minmax(0,1fr)]">
+      <DialogContent className="grid h-[min(560px,88dvh)] w-[min(720px,94vw)] max-w-none grid-cols-[180px_minmax(0,1fr)] gap-0 overflow-hidden rounded-lg border-border bg-[#202225] p-0 shadow-2xl shadow-black/50 max-md:h-[min(620px,94dvh)] max-md:grid-cols-1 max-md:grid-rows-[auto_minmax(0,1fr)]">
         <div className="min-h-0 overflow-y-auto border-r border-border bg-[#1a1d20] max-md:border-b max-md:border-r-0">
           <div className="flex h-14 items-center border-b border-border px-4">
             <DialogTitle className="text-sm font-semibold text-text">
-              Settings
+              {t("settings.title")}
             </DialogTitle>
           </div>
-          <nav className="grid gap-1 p-3 max-md:grid-cols-3 max-sm:grid-cols-2">
-            {SECTION_NAV.map((item) => (
-              <button
+          <nav className="grid gap-1 p-3 max-md:grid-cols-2">
+            {sectionNav.map((item) => (
+              <div
                 key={item.id}
-                type="button"
-                onClick={() => setSection(item.id)}
-                className={cn(
-                  "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs transition-colors",
-                  section === item.id
-                    ? "bg-[#256297] text-text"
-                    : "text-text-dim hover:bg-surface hover:text-text",
-                )}
+                className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-text-dim"
               >
-                <span className={section === item.id ? "text-text" : "text-text-faint"}>
-                  {item.icon}
-                </span>
+                <span className="text-text-faint">{item.icon}</span>
                 {item.label}
-              </button>
+              </div>
             ))}
           </nav>
         </div>
@@ -137,198 +108,88 @@ export function SettingsDialog({
         <div className="scroll-area min-h-0 min-w-0 overflow-y-auto">
           <div className="sticky top-0 z-10 flex h-14 items-center justify-between border-b border-border bg-[#202225]/95 px-5 backdrop-blur">
             <DialogDescription className="text-xs text-text-faint">
-              Preferences are applied immediately.
+              {t("settings.applied")}
             </DialogDescription>
           </div>
 
-          <div className="p-5">
-            {section === "general" && (
-              <Section title="General" description="Display, refresh, and account visibility.">
-                <SettingsRow
-                  icon={<Monitor className="size-4" />}
-                  label="Launch AI Usage Tracker at login"
-                  description="Start the app automatically when you sign in."
-                >
-                  <Toggle checked={launchAtLogin} onChange={setLaunchAtLogin} />
-                </SettingsRow>
-                <SettingsRow
-                  icon={<RefreshCw className="size-4" />}
-                  label="Check for updates"
-                  description="Automatically check for app updates."
-                >
-                  <Toggle checked={autoUpdates} onChange={setAutoUpdates} />
-                </SettingsRow>
-                <SettingsRow
-                  icon={<SlidersHorizontal className="size-4" />}
-                  label="Default refresh interval"
-                  description="How often accounts are refreshed."
-                >
-                  <SelectValue
-                    value={config?.poll_seconds ?? 300}
-                    options={POLL_OPTIONS}
-                    onChange={(value) => patchConfig({ poll_seconds: value })}
-                    disabled={config == null}
-                  />
-                </SettingsRow>
-                <SettingsRow
-                  icon={<LayoutIcon />}
-                  label="Sort account list"
-                  description="Controls ordering inside Online and Offline groups."
-                >
-                  <Segmented
-                    options={[
-                      { label: "Custom", value: "custom" as const },
-                      { label: "Usage", value: "usage" as const },
-                      { label: "Name", value: "name" as const },
-                    ]}
-                    value={sortBy}
-                    onChange={onSortByChange}
-                  />
-                </SettingsRow>
-                <SettingsRow
-                  icon={<Shield className="size-4" />}
-                  label="Show offline accounts"
-                  description="Keep disconnected providers visible in the monitor."
-                >
-                  <Toggle checked={showOffline} onChange={onShowOfflineChange} />
-                </SettingsRow>
-                <SettingsRow
-                  icon={<Monitor className="size-4" />}
-                  label="Compact mode"
-                  description="Reduce spacing for smaller displays."
-                >
-                  <Toggle checked={compactMode} onChange={setCompactMode} />
-                </SettingsRow>
-              </Section>
-            )}
+          <div className="space-y-6 p-5">
+            <Section
+              title={t("settings.generalTitle")}
+              description={t("settings.generalDesc")}
+            >
+              <SettingsRow
+                icon={<SlidersHorizontal className="size-4" />}
+                label={t("settings.refreshInterval")}
+                description={t("settings.refreshIntervalDesc")}
+              >
+                <SelectValue
+                  value={config?.poll_seconds ?? 300}
+                  options={pollOptions}
+                  onChange={(value) => patchConfig({ poll_seconds: value })}
+                  disabled={config == null}
+                />
+              </SettingsRow>
+              <SettingsRow
+                icon={<SlidersHorizontal className="size-4" />}
+                label={t("settings.sortList")}
+                description={t("settings.sortListDesc")}
+              >
+                <Segmented
+                  options={[
+                    { label: t("settings.sort.custom"), value: "custom" as const },
+                    { label: t("settings.sort.usage"), value: "usage" as const },
+                    { label: t("settings.sort.name"), value: "name" as const },
+                  ]}
+                  value={sortBy}
+                  onChange={onSortByChange}
+                />
+              </SettingsRow>
+              <SettingsRow
+                icon={<Shield className="size-4" />}
+                label={t("settings.showOffline")}
+                description={t("settings.showOfflineDesc")}
+              >
+                <Toggle checked={showOffline} onChange={onShowOfflineChange} />
+              </SettingsRow>
+            </Section>
 
-            {section === "providers" && (
-              <Section title="Providers" description={`${enabledCount} providers enabled.`}>
-                <div className="space-y-1">
-                  {PROVIDER_ORDER.map((provider, index) => (
-                    <SettingsRow
-                      key={provider}
-                      icon={<ProviderMark provider={provider} className="size-4" />}
-                      label={PROVIDER_LABEL[provider]}
-                      description={
-                        config?.providers[index].custom_name
-                          ? `Shown as ${config.providers[index].custom_name}`
-                          : "Default provider name"
-                      }
-                    >
-                      <Toggle
-                        checked={config?.providers[index].enabled ?? false}
-                        disabled={config == null}
-                        onChange={(enabled) => toggleProvider(provider, enabled)}
-                      />
-                    </SettingsRow>
-                  ))}
-                </div>
-                <div className="mt-5 flex flex-wrap gap-2">
-                  <ButtonLike onClick={() => onOpenAddAccount?.()}>
-                    <Cloud className="size-4" />
-                    Add provider account
-                  </ButtonLike>
-                  <ButtonLike onClick={() => onReuseLocalSession?.()}>
-                    <RefreshCw className="size-4" />
-                    Scan local sessions
-                  </ButtonLike>
-                </div>
-              </Section>
-            )}
-
-            {section === "notifications" && (
-              <Section title="Notifications" description="Alert behavior for quota crossings.">
-                <SettingsRow
-                  icon={<Bell className="size-4" />}
-                  label="Usage crossing alerts"
-                  description="Notify when a provider crosses configured thresholds."
-                >
-                  <Toggle checked={crossingAlerts} onChange={setCrossingAlerts} />
-                </SettingsRow>
-                <SettingsRow
-                  icon={<RefreshCw className="size-4" />}
-                  label="Refresh completion alerts"
-                  description="Show a notification after manual refresh finishes."
-                >
-                  <Toggle checked={refreshAlerts} onChange={setRefreshAlerts} />
-                </SettingsRow>
-                <div className="mt-5 rounded-lg border border-border bg-canvas/50 p-4">
-                  <div className="mb-3 text-sm font-semibold">Usage Thresholds</div>
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <ThresholdField label="Warning" value={70} />
-                    <ThresholdField label="Critical" value={90} />
-                  </div>
-                  <p className="mt-3 text-xs text-text-faint">
-                    Provider-specific thresholds can be changed from each account inspector.
-                  </p>
-                </div>
-              </Section>
-            )}
-
-            {section === "sessions" && (
-              <Section title="Sessions" description="Local parsing, OAuth, and stored credential behavior.">
-                <SettingsRow
-                  icon={<Database className="size-4" />}
-                  label="Local session reuse"
-                  description="Prefer existing CLI/browser sessions when available."
-                >
-                  <Toggle checked={localParsing} onChange={setLocalParsing} />
-                </SettingsRow>
-                <SettingsRow
-                  icon={<Cloud className="size-4" />}
-                  label="OAuth callback listener"
-                  description="Use the desktop loopback callback for providers that support it."
-                >
-                  <StatusBadge label="Ready" />
-                </SettingsRow>
-                <div className="mt-5 flex flex-wrap gap-2">
-                  <ButtonLike onClick={() => onReuseLocalSession?.()}>
-                    <RefreshCw className="size-4" />
-                    Reuse local sessions
-                  </ButtonLike>
-                  <ButtonLike onClick={() => onOpenAddAccount?.()}>
-                    <Cloud className="size-4" />
-                    Start sign-in
-                  </ButtonLike>
-                </div>
-              </Section>
-            )}
-
-            {section === "advanced" && (
-              <Section title="Advanced" description="Export, diagnostics, and reset actions.">
-                <SettingsRow
-                  icon={<Download className="size-4" />}
-                  label="API & export"
-                  description="Prepare provider usage data for external workflows."
-                >
-                  <ButtonLike onClick={() => undefined}>Export...</ButtonLike>
-                </SettingsRow>
-                <SettingsRow
-                  icon={<Code2 className="size-4" />}
-                  label="Diagnostic logs"
-                  description="Open local log files and provider parse reports."
-                >
-                  <ButtonLike onClick={() => undefined}>Open logs</ButtonLike>
-                </SettingsRow>
-                <div className="mt-6 rounded-lg border border-crit/30 bg-crit/10 p-4">
-                  <div className="text-sm font-semibold text-crit">Danger Zone</div>
-                  <p className="mt-1 text-xs text-text-dim">
-                    Reset display-only preferences without touching stored credentials.
-                  </p>
-                  <ButtonLike
-                    danger
-                    onClick={() => {
-                      onSortByChange("custom");
-                      onShowOfflineChange(true);
-                    }}
-                    className="mt-4"
+            <Section
+              title={t("settings.providersTitle")}
+              description={t("settings.providersDesc", { count: enabledCount })}
+            >
+              <div className="space-y-1">
+                {PROVIDER_ORDER.map((provider, index) => (
+                  <SettingsRow
+                    key={provider}
+                    icon={<ProviderMark provider={provider} className="size-4" />}
+                    label={PROVIDER_LABEL[provider]}
+                    description={
+                      config?.providers[index].custom_name
+                        ? t("settings.shownAs", {
+                            name: config.providers[index].custom_name,
+                          })
+                        : t("settings.defaultName")
+                    }
                   >
-                    Reset display preferences
-                  </ButtonLike>
-                </div>
-              </Section>
-            )}
+                    <Toggle
+                      checked={config?.providers[index].enabled ?? false}
+                      disabled={config == null}
+                      onChange={(enabled) => toggleProvider(provider, enabled)}
+                    />
+                  </SettingsRow>
+                ))}
+              </div>
+              <div className="mt-5 flex flex-wrap gap-2">
+                <ButtonLike onClick={() => onOpenAddAccount?.()}>
+                  <Cloud className="size-4" />
+                  {t("settings.addProviderAccount")}
+                </ButtonLike>
+                <ButtonLike onClick={() => onReuseLocalSession?.()}>
+                  <RefreshCw className="size-4" />
+                  {t("settings.scanLocal")}
+                </ButtonLike>
+              </div>
+            </Section>
           </div>
         </div>
       </DialogContent>
@@ -474,59 +335,20 @@ function Segmented<T extends string>({
   );
 }
 
-function StatusBadge({ label }: { label: string }) {
-  return (
-    <span className="inline-flex items-center gap-1.5 rounded-md border border-ok/30 bg-ok/10 px-2 py-1 text-xs font-medium text-ok">
-      <Check className="size-3.5" />
-      {label}
-    </span>
-  );
-}
-
-function ThresholdField({ label, value }: { label: string; value: number }) {
-  return (
-    <label>
-      <span className="mb-1 block text-xs text-text-faint">{label}</span>
-      <div className="flex h-9 items-center rounded-md border border-border bg-surface px-3">
-        <input
-          readOnly
-          value={value}
-          className="num min-w-0 flex-1 bg-transparent text-sm text-text outline-none"
-        />
-        <span className="num text-xs text-text-faint">%</span>
-      </div>
-    </label>
-  );
-}
-
 function ButtonLike({
   children,
   onClick,
-  danger = false,
-  className,
 }: {
   children: ReactNode;
   onClick: () => void;
-  danger?: boolean;
-  className?: string;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className={cn(
-        "inline-flex h-9 items-center gap-2 rounded-md border px-3 text-sm font-medium transition-colors",
-        danger
-          ? "border-crit/40 bg-crit/20 text-crit hover:bg-crit/25"
-          : "border-border bg-surface text-text-dim hover:border-border-strong hover:text-text",
-        className,
-      )}
+      className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-surface px-3 text-sm font-medium text-text-dim transition-colors hover:border-border-strong hover:text-text"
     >
       {children}
     </button>
   );
-}
-
-function LayoutIcon() {
-  return <SlidersHorizontal className="size-4" />;
 }

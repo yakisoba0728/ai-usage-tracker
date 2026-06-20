@@ -41,3 +41,6 @@ strip = true         # strip symbols from the binary
 # NOTE: deliberately NOT setting `panic = "abort"`. The app relies on
 # unwinding so a panic in one provider fetch does not abort the whole
 # process (preserves the per-provider isolation invariant in fetch_all).
+
+[dev-dependencies]
+wiremock = "0.6.5"

@@ -134,4 +134,105 @@ mod tests {
         let long = "x".repeat(500);
         assert_eq!(sanitize_error_body(400, &long).chars().count(), 200);
     }
+
+    // ── Live HTTP behavior against a local mock server (shared by every
+    //    provider through get_json / send_for_json). ──────────────────────────
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn get_json_decodes_200_and_sends_bearer_auth() {
+        use wiremock::matchers::{header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/usage"))
+            .and(header("authorization", "Bearer tok-123"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"k": 42})))
+            .mount(&server)
+            .await;
+
+        #[derive(serde::Deserialize)]
+        struct Resp {
+            k: i64,
+        }
+        let client = build_client();
+        // If the Authorization header were missing/wrong the mock wouldn't match
+        // and this would error instead of decoding — so success proves the header.
+        let r: Resp = get_json(&client, "tok-123", &format!("{}/usage", server.uri()), &[])
+            .await
+            .unwrap();
+        assert_eq!(r.k, 42);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn get_json_redacts_html_error_body() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/usage"))
+            .respond_with(
+                ResponseTemplate::new(401)
+                    .set_body_string("<!DOCTYPE html><html>blocked by cloudflare</html>"),
+            )
+            .mount(&server)
+            .await;
+
+        let client = build_client();
+        let err =
+            get_json::<serde_json::Value>(&client, "t", &format!("{}/usage", server.uri()), &[])
+                .await
+                .unwrap_err();
+        match err {
+            ProviderError::Status { status, body } => {
+                assert_eq!(status, 401);
+                assert!(body.contains("access denied"), "got: {body}");
+                assert!(!body.contains("DOCTYPE"), "raw HTML leaked: {body}");
+            }
+            other => panic!("expected Status, got {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn get_json_maps_invalid_json_to_parse_error() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/usage"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
+            .mount(&server)
+            .await;
+
+        let client = build_client();
+        let err =
+            get_json::<serde_json::Value>(&client, "t", &format!("{}/usage", server.uri()), &[])
+                .await
+                .unwrap_err();
+        assert!(matches!(err, ProviderError::Parse(_)), "got: {err:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn send_for_json_decodes_a_post_response() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/x"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})))
+            .mount(&server)
+            .await;
+
+        let client = build_client();
+        let resp = client
+            .post(format!("{}/x", server.uri()))
+            .send()
+            .await
+            .unwrap();
+        let v = send_for_json(resp, "test").await.unwrap();
+        assert_eq!(v["ok"], true);
+    }
 }

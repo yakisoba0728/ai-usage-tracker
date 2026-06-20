@@ -23,30 +23,26 @@ pub fn default_config_store() -> ConfigStore {
     Arc::new(RwLock::new(AppConfig::load()))
 }
 
+/// Auto-detect provider constructors in canonical order. The index lines up
+/// positionally with `AppConfig::enabled_array()` / `PROVIDER_ORDER`, so adding
+/// a provider is one row here — no hand-counted indices to keep in sync. Local
+/// parsing (keychain / credential files / env) runs for ALL providers; Claude
+/// additionally supports a pasted session key via "Add account".
+const PROVIDER_CTORS: [fn() -> Box<dyn ProviderApi>; 6] = [
+    || Box::new(crate::providers::claude::ClaudeProvider::new()),
+    || Box::new(crate::providers::codex::CodexProvider::new()),
+    || Box::new(crate::providers::gemini::GeminiProvider::new()),
+    || Box::new(crate::providers::copilot::CopilotProvider::new()),
+    || Box::new(crate::providers::cursor::CursorProvider::new()),
+    || Box::new(crate::providers::zai::ZaiProvider::new()),
+];
+
 pub fn build_providers(cfg: &AppConfig) -> Vec<Box<dyn ProviderApi>> {
-    let mut v: Vec<Box<dyn ProviderApi>> = Vec::new();
-    // Order MUST match [Claude, Codex, Gemini, Copilot, Cursor, z.ai]. Local
-    // parsing (keychain / credential files / env) stays for ALL providers;
-    // Claude additionally supports a pasted session key via "Add account".
-    if cfg.enabled_array()[0] {
-        v.push(Box::new(crate::providers::claude::ClaudeProvider::new()));
-    }
-    if cfg.enabled_array()[1] {
-        v.push(Box::new(crate::providers::codex::CodexProvider::new()));
-    }
-    if cfg.enabled_array()[2] {
-        v.push(Box::new(crate::providers::gemini::GeminiProvider::new()));
-    }
-    if cfg.enabled_array()[3] {
-        v.push(Box::new(crate::providers::copilot::CopilotProvider::new()));
-    }
-    if cfg.enabled_array()[4] {
-        v.push(Box::new(crate::providers::cursor::CursorProvider::new()));
-    }
-    if cfg.enabled_array()[5] {
-        v.push(Box::new(crate::providers::zai::ZaiProvider::new()));
-    }
-    v
+    cfg.enabled_array()
+        .into_iter()
+        .zip(PROVIDER_CTORS)
+        .filter_map(|(enabled, ctor)| enabled.then(ctor))
+        .collect()
 }
 
 /// Fetch every enabled provider (concurrently, isolated), store + emit the

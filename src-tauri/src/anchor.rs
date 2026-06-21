@@ -66,6 +66,14 @@ pub async fn send_claude(
     Ok(())
 }
 
+/// Resolve the z.ai API key from the environment.
+fn resolve_zai_auto() -> Result<String, ProviderError> {
+    match std::env::var("ZAI_API_KEY") {
+        Ok(k) if !k.trim().is_empty() => Ok(k.trim().to_string()),
+        _ => Err(ProviderError::NotLoggedIn("z.ai API key not set".into())),
+    }
+}
+
 /// Extract the current Claude access token from the Claude Code credential store.
 fn resolve_claude_auto() -> Result<String, ProviderError> {
     let v = crate::secrets::read_claude_creds_json()?;
@@ -115,6 +123,7 @@ pub async fn send(service_id: &str) -> Result<(), ProviderError> {
     }
     match service_id {
         "auto:claude" => send_claude(&http, &resolve_claude_auto()?, CLAUDE_MESSAGES_URL).await,
+        "auto:zai" => send_zai(&http, &resolve_zai_auto()?, ZAI_CHAT_URL).await,
         other => Err(ProviderError::NotLoggedIn(format!(
             "anchoring not implemented for {other}"
         ))),
@@ -241,6 +250,14 @@ mod tests {
         assert_eq!(b["max_tokens"], 1);
         assert_eq!(b["messages"][0]["role"], "user");
         assert!(b["messages"][0]["content"].is_string());
+    }
+
+    #[test]
+    fn resolve_zai_auto_reads_env_or_errors() {
+        std::env::set_var("ZAI_API_KEY", "zk-env-123");
+        assert_eq!(resolve_zai_auto().unwrap(), "zk-env-123");
+        std::env::remove_var("ZAI_API_KEY");
+        assert!(resolve_zai_auto().is_err());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

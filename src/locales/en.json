@@ -130,7 +130,16 @@
       "codexNote": "Codex resets the 5-hour window with a finite reset credit (manual only).",
       "resetCredit": "Use a reset credit",
       "codexConfirmTitle": "Use a Codex reset credit?",
-      "codexConfirmBody": "This consumes one of your finite Codex reset credits to reset the 5-hour window now. Continue?"
+      "codexConfirmBody": "This consumes one of your finite Codex reset credits to reset the 5-hour window now. Continue?",
+      "sending": "Sending…",
+      "sent": "Sent.",
+      "failed": "Failed: {{error}}",
+      "codexResult": {
+        "reset": "Reset — a credit was used.",
+        "no_credit": "No reset credits available.",
+        "nothing_to_reset": "Nothing to reset (window not full).",
+        "already_redeemed": "Already redeemed."
+      }
     },
     "raw": {
       "empty": "No raw response — this account didn't make an HTTP call this cycle."

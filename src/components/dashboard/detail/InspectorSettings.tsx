@@ -41,6 +41,7 @@ export function InspectorSettings({
   const autoOn = config?.auto_anchor?.[service.id] ?? false;
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [codexConfirmOpen, setCodexConfirmOpen] = useState(false);
+  const [anchorStatus, setAnchorStatus] = useState<string | null>(null);
 
   function toggleAuto(next: boolean) {
     if (!config) return;
@@ -179,7 +180,12 @@ export function InspectorSettings({
                 title={t("detail.anchor.confirmTitle")}
                 body={t("detail.anchor.confirmBody")}
                 confirmLabel={t("detail.anchor.sendNow")}
-                onConfirm={() => void sendAnchorNow(service.id)}
+                onConfirm={() => {
+                  setAnchorStatus(t("detail.anchor.sending"));
+                  sendAnchorNow(service.id)
+                    .then(() => setAnchorStatus(t("detail.anchor.sent")))
+                    .catch((e) => setAnchorStatus(t("detail.anchor.failed", { error: String(e) })));
+                }}
                 onOpenChange={setConfirmOpen}
               />
             </>
@@ -194,12 +200,22 @@ export function InspectorSettings({
                 title={t("detail.anchor.codexConfirmTitle")}
                 body={t("detail.anchor.codexConfirmBody")}
                 confirmLabel={t("detail.anchor.resetCredit")}
-                onConfirm={() => void resetCodexNow(service.id)}
+                onConfirm={() => {
+                  setAnchorStatus(t("detail.anchor.sending"));
+                  resetCodexNow(service.id)
+                    .then((code) =>
+                      setAnchorStatus(t(`detail.anchor.codexResult.${code}`, { defaultValue: code })),
+                    )
+                    .catch((e) => setAnchorStatus(t("detail.anchor.failed", { error: String(e) })));
+                }}
                 onOpenChange={setCodexConfirmOpen}
               />
             </>
           ) : (
             <p className="text-xs text-text-faint">{t("detail.anchor.unsupported")}</p>
+          )}
+          {anchorStatus && (
+            <p className="num text-xs text-text-faint">{anchorStatus}</p>
           )}
         </section>
       </div>

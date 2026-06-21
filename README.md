@@ -99,7 +99,7 @@ pnpm exec tsc --noEmit              # type-check
 
 CI (`.github/workflows/`) runs the frontend type-check + vitest on Linux and
 `cargo test --lib` across a **macOS + Windows** matrix on every push and
-PR (with `cargo fmt --check` / `clippy` on Linux); `build-smoke.yml` does a debug
+PR (with `cargo fmt --check` / `clippy` on macOS); `build-smoke.yml` does a debug
 `tauri build` on macOS and Windows. (Release bundling / signing / notarization is a separate, not-
 yet-configured pipeline.)
 

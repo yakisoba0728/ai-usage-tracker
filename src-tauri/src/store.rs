@@ -7,6 +7,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::Provider;
 
+/// Serializes account mutations so an overlapping manual `refresh_now` + the
+/// poll loop can't interleave a read-modify-write of accounts.json (lost update).
+static STORE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// A credential for a manually-added account (in-memory: full secret + metadata).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StoredCredential {
@@ -78,8 +82,14 @@ fn persist_records(records: &[StoredRecord]) {
     let file = StoreFile {
         accounts: records.to_vec(),
     };
-    if let Ok(json) = serde_json::to_string_pretty(&file) {
-        let _ = std::fs::write(path, json);
+    let Ok(json) = serde_json::to_string_pretty(&file) else {
+        return;
+    };
+    // Write to a sibling temp file then atomically rename over the target, so a
+    // concurrent reader never observes a half-written accounts.json.
+    let tmp = path.with_extension("json.tmp");
+    if std::fs::write(&tmp, json).is_ok() {
+        let _ = std::fs::rename(&tmp, &path);
     }
 }
 
@@ -105,6 +115,7 @@ fn secret_blob_of(cred: &StoredCredential) -> Result<String, String> {
 /// Add a credential: secret → keychain, metadata → accounts.json. Returns the
 /// assigned id. Errs if the secret cannot be written to the keychain.
 pub fn add(mut cred: StoredCredential) -> Result<String, String> {
+    let _guard = STORE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     if cred.id.is_empty() {
         cred.id = gen_id(&cred.provider);
     }
@@ -123,6 +134,7 @@ pub fn add(mut cred: StoredCredential) -> Result<String, String> {
 }
 
 pub fn remove(id: &str) -> bool {
+    let _guard = STORE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut records = read_records();
     let before = records.len();
     records.retain(|r| r.id != id);
@@ -140,6 +152,7 @@ pub fn remove(id: &str) -> bool {
 /// left untouched and `false` is returned (the caller keeps using the in-memory
 /// token for this cycle and the account self-heals next refresh).
 pub fn update(cred: &StoredCredential) -> bool {
+    let _guard = STORE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut records = read_records();
     let Some(idx) = records.iter().position(|r| r.id == cred.id) else {
         return false; // unknown id; nothing to update
@@ -324,6 +337,45 @@ mod tests {
         );
 
         assert!(remove(&id));
+        std::env::remove_var("AIT_ACCOUNTS_PATH");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn concurrent_adds_do_not_lose_records() {
+        let _g = ENV_LOCK.lock().unwrap();
+        let path = temp_path("concurrent");
+        let _ = std::fs::remove_file(&path);
+        std::env::set_var("AIT_ACCOUNTS_PATH", &path);
+
+        let handles: Vec<_> = (0..16)
+            .map(|i| {
+                std::thread::spawn(move || {
+                    add(StoredCredential {
+                        id: format!("conc-{i}"),
+                        provider: Provider::Codex,
+                        label: format!("user{i}"),
+                        access_token: format!("a{i}"),
+                        refresh_token: None,
+                        expires_at: 0,
+                        id_token: None,
+                        account_id: None,
+                    })
+                    .unwrap();
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        // load() must also succeed (no torn/half-written file).
+        let loaded = load();
+        assert_eq!(loaded.len(), 16, "no records lost under concurrent adds");
+
+        for i in 0..16 {
+            remove(&format!("conc-{i}"));
+        }
         std::env::remove_var("AIT_ACCOUNTS_PATH");
         let _ = std::fs::remove_file(&path);
     }

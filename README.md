@@ -130,6 +130,15 @@ React + TS + Tailwind + shadcn/ui  ──IPC──▶  Rust (Tauri 2)
   `fetch_credential` checks `expires_at` before each poll and refreshes in-app
   when the access token is expired, persisting the rotated tokens back (the file
   is rewritten atomically, so a rotated token and its metadata can't desync).
+- **Window anchoring (opt-in, off by default).** For providers with a rolling
+  5-hour window, the app can start a fresh window so its reset time is
+  predictable. **Claude and z.ai** send a minimal 1-token message — via a
+  per-account toggle (auto-fire when the 5-hour window is empty) or a confirmed
+  manual button. **Codex** instead uses its official, finite *reset credit*
+  (manual button only — no auto). The action happens entirely in Rust (tokens
+  never cross IPC). Copilot/Gemini (calendar quotas) and Cursor (no send path)
+  are shown as **not supported**. These actions consume real quota/credits and
+  may be subject to each provider's terms.
 - **`list_accounts`** masks to `{id, provider, label}` — secrets never cross IPC.
 
 ## Config

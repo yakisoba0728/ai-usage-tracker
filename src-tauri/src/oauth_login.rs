@@ -344,18 +344,7 @@ fn build_credential(provider: Provider, tokens: &Value) -> StoredCredential {
 
     let (label, account_id) = match (provider, &id_token) {
         (Provider::Codex, Some(jwt)) => {
-            let claims = jwt_payload(jwt).ok();
-            let email = claims
-                .as_ref()
-                .and_then(|c| c.get("email"))
-                .and_then(|v| v.as_str())
-                .map(String::from);
-            let acct = claims
-                .as_ref()
-                .and_then(|c| c.get("https://api.openai.com/auth"))
-                .and_then(|a| a.get("chatgpt_account_id"))
-                .and_then(|v| v.as_str())
-                .map(String::from);
+            let (email, acct) = crate::jwt::codex_identity(jwt);
             (email.unwrap_or_else(|| "Codex account".into()), acct)
         }
         (Provider::Gemini, Some(jwt)) => {

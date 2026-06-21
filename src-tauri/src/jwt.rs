@@ -42,6 +42,25 @@ pub fn jwt_exp(token: &str) -> Option<i64> {
     jwt_payload(token).ok()?.get("exp")?.as_i64()
 }
 
+/// Extract `(email, chatgpt_account_id)` from a Codex/OpenAI id_token. Both the
+/// device-code and loopback OAuth login paths need this identity, so it lives
+/// here. Either field is `None` when absent or the token can't be decoded.
+pub fn codex_identity(id_token: &str) -> (Option<String>, Option<String>) {
+    let Ok(claims) = jwt_payload(id_token) else {
+        return (None, None);
+    };
+    let email = claims
+        .get("email")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let account_id = claims
+        .get("https://api.openai.com/auth")
+        .and_then(|a| a.get("chatgpt_account_id"))
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    (email, account_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -70,5 +89,22 @@ mod tests {
     #[test]
     fn rejects_non_jwt() {
         assert!(jwt_payload("not-a-jwt").is_err());
+    }
+
+    #[test]
+    fn codex_identity_extracts_email_and_account_id() {
+        let payload = URL_SAFE_NO_PAD.encode(
+            br#"{"email":"u@x.com","https://api.openai.com/auth":{"chatgpt_account_id":"acct-9"}}"#,
+        );
+        let tok = format!("hdr.{payload}.sig");
+        let (email, acct) = codex_identity(&tok);
+        assert_eq!(email.as_deref(), Some("u@x.com"));
+        assert_eq!(acct.as_deref(), Some("acct-9"));
+
+        // Missing claims / undecodable tokens → (None, None).
+        let no_claims = URL_SAFE_NO_PAD.encode(br#"{"sub":"123"}"#);
+        let (e2, a2) = codex_identity(&format!("hdr.{no_claims}.sig"));
+        assert!(e2.is_none() && a2.is_none());
+        assert_eq!(codex_identity("garbage"), (None, None));
     }
 }

@@ -16,7 +16,8 @@
         "title": "AI Usage Tracker",
         "width": 900,
         "height": 640,
-        "resizable": true
+        "resizable": true,
+        "visible": false
       }
     ],
     "security": {

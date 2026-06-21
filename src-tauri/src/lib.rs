@@ -47,7 +47,7 @@ pub fn run() {
             .skip_taskbar(true)
             .resizable(false)
             .visible(false)
-            .inner_size(340.0, 440.0)
+            .inner_size(480.0, 660.0)
             .build()?;
             let _ = popover.set_position(LogicalPosition::new(1e6, 1e6)); // off-screen until first toggle
 
@@ -102,7 +102,7 @@ pub fn run() {
                                     let _ = popover.set_position(LogicalPosition::new(
                                         mon_pos.x as f64
                                             + mon.width as f64 / monitor.scale_factor()
-                                            - 360.0,
+                                            - 500.0,
                                         (mon_pos.y as f64) / monitor.scale_factor() + 6.0,
                                     ));
                                 }

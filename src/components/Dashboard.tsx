@@ -64,7 +64,7 @@ export function Dashboard() {
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("limits");
 
   const [sortBy, setSortBy] = useState<SortBy>("custom");
-  const [showOffline, setShowOffline] = useState(true);
+  const [showOffline, setShowOffline] = useState(false);
 
   const [config, setConfigState] = useState<AppConfig | null>(null);
   useEffect(() => {
@@ -105,8 +105,10 @@ export function Dashboard() {
       }),
     [allServices, config, query, showOffline, sortBy],
   );
-  const visibleRows = useMemo(
-    () => accountSections.flatMap((section) => section.rows),
+  // Account count is online-only — offline accounts are never tallied here
+  // (and are hidden by default; see `showOffline`).
+  const onlineCount = useMemo(
+    () => accountSections.find((section) => section.key === "online")?.count ?? 0,
     [accountSections],
   );
   const visibleServiceId = useMemo(
@@ -216,7 +218,7 @@ export function Dashboard() {
             />
 
             <div className="px-5 pb-2 pt-1 text-text-dim">
-              <span className="num text-sm">{visibleRows.length}</span>
+              <span className="num text-sm">{onlineCount}</span>
               <span className="ml-1 text-sm">{t("nav.accounts")}</span>
             </div>
 

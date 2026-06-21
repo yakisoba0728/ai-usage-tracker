@@ -78,6 +78,11 @@ const AccountCardButton = memo(function AccountCardButton({
   const secondary = row.service.windows
     .filter((window) => window !== row.headline)
     .slice(0, 2);
+  // When the headline reports no numeric used/limit, show its reset countdown in
+  // that slot instead of "limit not reported" — and drop the footer reset so the
+  // same countdown isn't printed twice on the card.
+  const resetInline =
+    row.usedLimit == null && row.service.connected && reset != null;
 
   return (
     <button
@@ -128,7 +133,9 @@ const AccountCardButton = memo(function AccountCardButton({
             <div className="num mt-1 truncate text-xs text-text-faint">
               {row.usedLimit ??
                 (row.service.connected
-                  ? t("card.limitNotReported")
+                  ? reset
+                    ? t("card.resetsIn", { time: reset })
+                    : t("card.limitNotReported")
                   : row.service.error
                     ? formatServiceError(row.service.error, t)
                     : t("card.offline"))}
@@ -162,11 +169,13 @@ const AccountCardButton = memo(function AccountCardButton({
 
       <div className="mt-auto flex items-center justify-between pt-4 text-xs text-text-faint">
         <span className="num">
-          {reset
-            ? t("card.resetsIn", { time: reset })
-            : row.service.connected
-              ? t("card.noReset")
-              : t("card.disconnected")}
+          {!row.service.connected
+            ? t("card.disconnected")
+            : resetInline
+              ? null
+              : reset
+                ? t("card.resetsIn", { time: reset })
+                : t("card.noReset")}
         </span>
         <span className="opacity-0 transition-opacity group-hover:opacity-100">
           {t("card.viewDetails")}

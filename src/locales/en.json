@@ -12,11 +12,6 @@
     "refresh": "Refresh",
     "settings": "Settings"
   },
-  "tray": {
-    "refreshUsage": "Refresh usage",
-    "noConnected": "No connected providers.",
-    "openDashboard": "Open Dashboard →"
-  },
   "toolbar": {
     "searchPlaceholder": "Search accounts, providers, tags...",
     "addAccount": "Add Account"

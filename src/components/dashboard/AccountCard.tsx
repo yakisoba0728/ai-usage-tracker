@@ -9,6 +9,7 @@ import {
   formatResetShort,
   formatServiceError,
   percentSeverity,
+  remainingPercent,
 } from "@/lib/format";
 import type { AccountRow, AccountSection } from "@/lib/inspectorModel";
 import { severityToStatus } from "@/lib/status";
@@ -149,11 +150,11 @@ const AccountCardButton = memo(function AccountCardButton({
                 )}
               </div>
               <div className={cn("num text-lg font-semibold", statusTextClass(row.status))}>
-                {formatPercent(percent)}
+                {formatPercent(remainingPercent(percent))}
               </div>
             </div>
             <UsageBar
-              percent={percent}
+              percent={remainingPercent(percent)}
               tone={row.status}
               label={row.headline?.label ?? t("card.noUsageWindow")}
             />
@@ -220,10 +221,10 @@ function CompactWindowLine({
           )}
         </span>
         <span className={cn("num shrink-0", statusTextClass(tone))}>
-          {formatPercent(percent)}
+          {formatPercent(remainingPercent(percent))}
         </span>
       </div>
-      <UsageBar percent={percent} tone={tone} size="sm" label={window.label} />
+      <UsageBar percent={remainingPercent(percent)} tone={tone} size="sm" label={window.label} />
     </div>
   );
 }

@@ -12,11 +12,6 @@
     "refresh": "새로고침",
     "settings": "설정"
   },
-  "tray": {
-    "refreshUsage": "사용량 새로고침",
-    "noConnected": "연결된 제공자가 없습니다.",
-    "openDashboard": "대시보드 열기 →"
-  },
   "toolbar": {
     "searchPlaceholder": "계정, 제공자, 태그 검색...",
     "addAccount": "계정 추가"

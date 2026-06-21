@@ -18,6 +18,17 @@ export function formatPercent(p: number | null): string {
   return `${Math.round(p)}%`;
 }
 
+/**
+ * Remaining headroom for a usage percent: `100 − used`, clamped to [0, 100].
+ * `null` when there is no value. The UI displays remaining ("how much is left")
+ * rather than used — so an unused plan reads as 100%, an exhausted one as 0% —
+ * while severity/colors stay keyed off the underlying *used* percent.
+ */
+export function remainingPercent(usedPercent: number | null): number | null {
+  if (usedPercent == null) return null;
+  return Math.max(0, Math.min(100, 100 - usedPercent));
+}
+
 /** "<used> / <limit>" with `$` when the window label looks monetary. */
 export function formatUsedLimit(w: LimitWindow): string | null {
   if (w.used == null && w.limit == null) return null;

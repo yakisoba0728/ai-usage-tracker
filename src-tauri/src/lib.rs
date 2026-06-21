@@ -13,10 +13,12 @@ pub mod store;
 pub mod util;
 
 use tauri::{
-    menu::{Menu, MenuItem},
-    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Emitter, LogicalPosition, Manager, WindowEvent,
+    menu::{Menu, MenuBuilder, MenuItemBuilder},
+    tray::TrayIconBuilder,
+    Emitter, Listener, Manager, WindowEvent, Wry,
 };
+
+use crate::model::{Provider, UsageSnapshot};
 
 /// Toggle the macOS Dock presence: `Regular` shows the Dock icon (a normal
 /// app), `Accessory` hides it so the app lives only in the menu bar. No-op off
@@ -34,6 +36,82 @@ fn set_dock_visible(app: &tauri::AppHandle, visible: bool) {
 
 #[cfg(not(target_os = "macos"))]
 fn set_dock_visible(_app: &tauri::AppHandle, _visible: bool) {}
+
+/// Show the full dashboard window (+ Dock icon) from a tray menu item.
+fn open_dashboard(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+    set_dock_visible(app, true);
+}
+
+/// Canonical display name for a provider (matches the frontend `PROVIDER_LABEL`).
+fn provider_label(p: Provider) -> &'static str {
+    match p {
+        Provider::Claude => "Claude",
+        Provider::Codex => "Codex",
+        Provider::Gemini => "Gemini",
+        Provider::Copilot => "GitHub Copilot",
+        Provider::Cursor => "Cursor",
+        Provider::Zai => "z.ai",
+    }
+}
+
+/// Build the native tray menu: one (disabled, info-only) row per connected
+/// provider showing its headline usage, then the actions. Rebuilt on every
+/// usage refresh so the menu always shows live numbers — this is the real macOS
+/// `NSMenu`, not a webview, so it looks/behaves exactly like the system one.
+fn build_tray_menu(
+    app: &tauri::AppHandle,
+    snapshot: Option<&UsageSnapshot>,
+) -> tauri::Result<Menu<Wry>> {
+    let mut mb = MenuBuilder::new(app);
+
+    match snapshot {
+        None => {
+            mb = mb.item(
+                &MenuItemBuilder::with_id("status:loading", "Fetching usage…")
+                    .enabled(false)
+                    .build(app)?,
+            );
+        }
+        Some(snap) => {
+            let connected: Vec<_> = snap.services.iter().filter(|s| s.connected).collect();
+            if connected.is_empty() {
+                mb = mb.item(
+                    &MenuItemBuilder::with_id("status:none", "No connected providers")
+                        .enabled(false)
+                        .build(app)?,
+                );
+            } else {
+                for s in connected {
+                    let name = provider_label(s.provider);
+                    let pct = s.windows.first().and_then(|w| w.used_percent);
+                    // Show REMAINING headroom (100 − used) so an unused plan
+                    // reads as 100% rather than 0%.
+                    let label = match pct {
+                        Some(p) => {
+                            let remaining = (100.0 - p).round().clamp(0.0, 100.0) as i64;
+                            format!("{name}  ·  {remaining}%")
+                        }
+                        None => name.to_string(),
+                    };
+                    mb = mb.item(
+                        &MenuItemBuilder::with_id(format!("svc:{}", s.id), label).build(app)?,
+                    );
+                }
+            }
+        }
+    }
+
+    mb.separator()
+        .text("refresh", "Refresh now")
+        .text("show", "Show dashboard")
+        .separator()
+        .text("quit", "Quit")
+        .build()
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -54,27 +132,8 @@ pub fn run() {
             commands::cancel_login,
         ])
         .setup(|app| {
-            // --- Tray popover window (borderless, hidden initially) ---
-            let popover = tauri::WebviewWindowBuilder::new(
-                app,
-                "popover",
-                tauri::WebviewUrl::App("index.html?window=popover".into()),
-            )
-            .title("")
-            .decorations(false)
-            .skip_taskbar(true)
-            .resizable(false)
-            .visible(false)
-            .inner_size(360.0, 480.0)
-            .build()?;
-            let _ = popover.set_position(LogicalPosition::new(1e6, 1e6)); // off-screen until first toggle
-
-            // --- Tray (icon only, no title) ---
-            let show = MenuItem::with_id(app, "show", "Show dashboard", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let refresh_item =
-                MenuItem::with_id(app, "refresh", "Refresh now", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&refresh_item, &show, &quit])?;
+            // --- Tray with a native menu (usage rows + actions) ---
+            let menu = build_tray_menu(app.handle(), None)?;
 
             let mut builder = TrayIconBuilder::with_id("main").tooltip("AI Usage Tracker");
             if let Some(ic) = app.default_window_icon() {
@@ -82,64 +141,41 @@ pub fn run() {
             }
             builder
                 .menu(&menu)
-                // Left-click opens the usage popover; the menu (Refresh / Show /
-                // Quit) is right-click only. Without this, macOS shows the menu
-                // on left-click and the popover never appears.
-                .show_menu_on_left_click(false)
-                .on_menu_event(|app, event| match event.id().as_ref() {
-                    "show" => {
-                        if let Some(w) = app.get_webview_window("main") {
-                            let _ = w.show();
-                            let _ = w.set_focus();
+                // Show the native menu on a normal click (the system behavior).
+                .show_menu_on_left_click(true)
+                .on_menu_event(|app, event| {
+                    let id = event.id().as_ref();
+                    match id {
+                        "show" => open_dashboard(app),
+                        "refresh" => {
+                            let _ = app.emit("trigger-refresh", ());
                         }
-                        // A real window is on screen → show the Dock icon.
-                        set_dock_visible(app, true);
-                    }
-                    "refresh" => {
-                        let _ = app.emit("trigger-refresh", ());
-                    }
-                    "quit" => app.exit(0),
-                    _ => {}
-                })
-                .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
-                        ..
-                    } = event
-                    {
-                        let app = tray.app_handle();
-                        // Left-click toggles the custom popover (not the
-                        // main dashboard window). The popover is a borderless
-                        // window positioned just below the tray icon.
-                        if let Some(popover) = app.get_webview_window("popover") {
-                            if popover.is_visible().unwrap_or(false) {
-                                let _ = popover.hide();
-                            } else {
-                                // Position below the tray icon. On macOS the
-                                // tray lives in the menu bar at the top of the
-                                // screen; place the popover just below it,
-                                // right-aligned to the icon area.
-                                if let Some(monitor) = popover.primary_monitor().ok().flatten() {
-                                    let mon = monitor.size();
-                                    let mon_pos = monitor.position();
-                                    let _ = popover.set_position(LogicalPosition::new(
-                                        mon_pos.x as f64
-                                            + mon.width as f64 / monitor.scale_factor()
-                                            - 380.0,
-                                        (mon_pos.y as f64) / monitor.scale_factor() + 6.0,
-                                    ));
-                                }
-                                let _ = popover.show();
-                                let _ = popover.set_focus();
-                            }
-                        }
+                        "quit" => app.exit(0),
+                        // Clicking a provider usage row opens the dashboard.
+                        _ if id.starts_with("svc:") => open_dashboard(app),
+                        _ => {}
                     }
                 })
                 .build(app)?;
 
-            // Launch into the menu bar only — no Dock icon until the main
-            // window is opened from the tray menu.
+            // Rebuild the tray menu with live numbers on every usage refresh.
+            let handle = app.handle().clone();
+            app.handle().listen("usage-updated", move |event| {
+                let Ok(snap) = serde_json::from_str::<UsageSnapshot>(event.payload()) else {
+                    return;
+                };
+                let h = handle.clone();
+                let _ = handle.run_on_main_thread(move || {
+                    if let Some(tray) = h.tray_by_id("main") {
+                        if let Ok(menu) = build_tray_menu(&h, Some(&snap)) {
+                            let _ = tray.set_menu(Some(menu));
+                        }
+                    }
+                });
+            });
+
+            // Launch into the menu bar only — no Dock icon until the main window
+            // is opened from the tray menu.
             set_dock_visible(app.handle(), false);
 
             // --- Background poller ---
@@ -147,21 +183,13 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            let label = window.label();
-            // close-to-tray: main window hides instead of closing.
-            // Popover always hides (it has no close button — clicking
-            // outside or pressing Escape dismisses it).
-            if label == "main" {
+            // close-to-tray: the main window hides instead of closing, dropping
+            // the app back to the menu bar (Dock icon removed, tray kept).
+            if window.label() == "main" {
                 if let WindowEvent::CloseRequested { api, .. } = event {
                     let _ = window.hide();
                     api.prevent_close();
-                    // Closing the window drops the app back to the menu bar:
-                    // remove the Dock icon, keep the tray icon.
                     set_dock_visible(window.app_handle(), false);
-                }
-            } else if label == "popover" {
-                if let WindowEvent::Focused(false) = event {
-                    let _ = window.hide();
                 }
             }
         })

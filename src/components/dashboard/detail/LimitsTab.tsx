@@ -7,6 +7,7 @@ import {
   formatResetShort,
   formatUsedLimit,
   percentSeverity,
+  remainingPercent,
 } from "@/lib/format";
 import { severityToStatus } from "@/lib/status";
 import type { LimitWindow } from "@/lib/types";
@@ -57,10 +58,10 @@ function WindowRow({
           </p>
         </div>
         <span className={cn("num text-lg font-semibold", statusTextClass(tone))}>
-          {formatPercent(percent)}
+          {formatPercent(remainingPercent(percent))}
         </span>
       </div>
-      <UsageBar percent={percent} tone={tone} label={window.label} />
+      <UsageBar percent={remainingPercent(percent)} tone={tone} label={window.label} />
       <p className="num mt-3 text-xs text-text-faint">
         {window.resets_at
           ? t("detail.limits.resetsIn", {

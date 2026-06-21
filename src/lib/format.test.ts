@@ -8,6 +8,7 @@ import {
   formatUpdatedAgo,
   formatUsedLimit,
   percentSeverity,
+  remainingPercent,
 } from "@/lib/format";
 import type { LimitWindow } from "@/lib/types";
 
@@ -36,6 +37,17 @@ describe("percentSeverity", () => {
     expect(percentSeverity(85)).toBe("warn");
     expect(percentSeverity(85.1)).toBe("crit");
     expect(percentSeverity(100)).toBe("crit");
+  });
+});
+
+describe("remainingPercent", () => {
+  it("inverts used → remaining, clamped to [0,100]; null passes through", () => {
+    expect(remainingPercent(null)).toBeNull();
+    expect(remainingPercent(0)).toBe(100);
+    expect(remainingPercent(8)).toBe(92);
+    expect(remainingPercent(100)).toBe(0);
+    expect(remainingPercent(120)).toBe(0); // over-quota clamps to 0
+    expect(remainingPercent(-5)).toBe(100); // clamp top
   });
 });
 

@@ -109,7 +109,7 @@ fn read_copilot_token() -> Result<String, ProviderError> {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        // Windows Credential Manager / Linux Secret Service via the keyring crate.
+        // Windows Credential Manager via the keyring crate.
         if let Some(t) = read_copilot_keyring() {
             return Ok(t);
         }
@@ -164,6 +164,11 @@ fn read_copilot_keyring() -> Option<String> {
     let user = std::env::var("USER")
         .or_else(|_| std::env::var("USERNAME"))
         .unwrap_or_default();
+    // [NEEDS HARDWARE VERIFICATION] On Windows the credential lives in Windows
+    // Credential Manager under service "copilot-cli", but the ACCOUNT name the
+    // Copilot CLI uses is embedded in its native addon and undocumented. These
+    // candidates are a best-effort guess; the `~/.copilot/config.json` file
+    // fallback covers the miss. Verify on a real Windows box with `cmdkey /list`.
     let candidates = ["github.com", "copilot-cli", user.as_str()];
     for acct in candidates {
         if acct.is_empty() {

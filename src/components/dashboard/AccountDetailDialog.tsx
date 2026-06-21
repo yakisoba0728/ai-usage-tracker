@@ -31,13 +31,18 @@ import {
   formatResetShort,
   formatUpdatedAgo,
   formatUsedLimit,
+  percentSeverity,
 } from "@/lib/format";
 import { buildInspectorSummary } from "@/lib/inspectorModel";
 import {
   PROVIDER_ORDER,
   providerDisplayName,
 } from "@/lib/providers";
-import { serviceStatus, type ServiceStatus } from "@/lib/status";
+import {
+  serviceStatus,
+  severityToStatus,
+  type ServiceStatus,
+} from "@/lib/status";
 import type {
   AppConfig,
   LimitWindow,
@@ -304,14 +309,7 @@ function WindowRow({
 }) {
   const { t } = useTranslation();
   const percent = window.used_percent;
-  const tone =
-    percent == null
-      ? "unknown"
-      : percent > 85
-        ? "critical"
-        : percent >= 60
-          ? "warning"
-          : "ok";
+  const tone = severityToStatus(percentSeverity(percent));
   return (
     <div className="rounded-lg border border-border bg-surface/50 p-4">
       <div className="mb-3 flex items-start justify-between gap-4">

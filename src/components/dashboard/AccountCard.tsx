@@ -7,8 +7,10 @@ import {
   formatPercent,
   formatResetShort,
   formatServiceError,
+  percentSeverity,
 } from "@/lib/format";
 import type { AccountRow, AccountSection } from "@/lib/inspectorModel";
+import { severityToStatus } from "@/lib/status";
 import type { LimitWindow, Provider } from "@/lib/types";
 import { cn, clamp } from "@/lib/utils";
 
@@ -157,8 +159,12 @@ const AccountCardButton = memo(function AccountCardButton({
 
           {secondary.length > 0 && (
             <div className="mt-4 grid gap-2">
-              {secondary.map((window) => (
-                <CompactWindowLine key={window.label} window={window} nowMs={nowMs} />
+              {secondary.map((window, index) => (
+                <CompactWindowLine
+                  key={`${window.label}-${index}`}
+                  window={window}
+                  nowMs={nowMs}
+                />
               ))}
             </div>
           )}
@@ -199,14 +205,7 @@ function CompactWindowLine({
   const reset = window.resets_at
     ? formatResetShort(window.resets_at, nowMs, t)
     : null;
-  const tone =
-    percent == null
-      ? "unknown"
-      : percent > 85
-        ? "critical"
-        : percent >= 60
-          ? "warning"
-          : "ok";
+  const tone = severityToStatus(percentSeverity(percent));
   return (
     <div>
       <div className="mb-1 flex items-center justify-between gap-2 text-xs">

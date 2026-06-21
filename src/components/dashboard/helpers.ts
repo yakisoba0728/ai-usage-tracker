@@ -1,5 +1,5 @@
 import type { ServiceStatus } from "@/lib/status";
-import type { ServiceUsage } from "@/lib/types";
+import type { LimitWindow, ServiceUsage } from "@/lib/types";
 
 /** Text color utility for a status/tone band. */
 export function statusTextClass(status: ServiceStatus): string {
@@ -23,4 +23,15 @@ export function storedAccountId(service: ServiceUsage): string | null {
   const prefix = "stored:";
   if (service.source !== "stored" || !service.id.startsWith(prefix)) return null;
   return service.id.slice(prefix.length);
+}
+
+/** All windows for a service (card primary + detail), in display order. */
+export function allServiceWindows(service: ServiceUsage): LimitWindow[] {
+  return [...(service.windows ?? []), ...(service.detail_windows ?? [])];
+}
+
+/** The id shown under a card title — the service id minus its `auto:`/`stored:`
+ *  source prefix. */
+export function displayAccountId(service: ServiceUsage): string {
+  return service.id.replace(/^(auto|stored):/, "");
 }

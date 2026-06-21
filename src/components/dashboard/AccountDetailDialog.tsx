@@ -12,6 +12,7 @@ import { useTranslation } from "react-i18next";
 import { ProviderIconTile } from "@/components/dashboard/ProviderIconTile";
 import { UsageBar } from "@/components/dashboard/UsageBar";
 import {
+  allServiceWindows,
   statusTextClass,
   storedAccountId,
 } from "@/components/dashboard/helpers";
@@ -154,7 +155,7 @@ function DetailPanelContent({
   const { t } = useTranslation();
   const summary = buildInspectorSummary(service, config);
   const accountId = storedAccountId(service);
-  const allWindows = [...(service.windows ?? []), ...(service.detail_windows ?? [])];
+  const allWindows = allServiceWindows(service);
 
   const moreRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -434,7 +435,7 @@ function InspectorSettings({
 }) {
   const idx = PROVIDER_ORDER.indexOf(service.provider);
   const providerConfig: ProviderConfig | null = config?.providers[idx] ?? null;
-  const allWindows = [...(service.windows ?? []), ...(service.detail_windows ?? [])];
+  const allWindows = allServiceWindows(service);
   const labels = Array.from(new Set(allWindows.map((window) => window.label)));
   const { t } = useTranslation();
   const [nameDraft, setNameDraft] = useState(providerConfig?.custom_name ?? "");

@@ -84,7 +84,6 @@
     "edit": "편집",
     "moreActions": "추가 계정 작업",
     "tab": {
-      "overview": "개요",
       "limits": "한도",
       "sessions": "세션",
       "raw": "원문",
@@ -95,19 +94,6 @@
       "reauth": "재인증",
       "settings": "앱 설정",
       "remove": "계정 제거"
-    },
-    "overview": {
-      "overallUsage": "전체 사용량",
-      "noLimit": "한도 미보고",
-      "resetsIn": "초기화까지",
-      "currentWindow": "현재 창",
-      "noReset": "초기화 없음",
-      "noDetailWindows": "이 제공자는 상세 할당량 창을 보고하지 않았습니다."
-    },
-    "metric": {
-      "used": "사용",
-      "resetsIn": "{{time}} 후 초기화",
-      "noReset": "초기화 없음"
     },
     "limits": {
       "noWindows": "이 계정에 대해 보고된 할당량 창이 없습니다.",

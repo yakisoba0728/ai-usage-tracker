@@ -32,10 +32,7 @@ import {
   formatUpdatedAgo,
   formatUsedLimit,
 } from "@/lib/format";
-import {
-  buildInspectorSummary,
-  type InspectorMetric,
-} from "@/lib/inspectorModel";
+import { buildInspectorSummary } from "@/lib/inspectorModel";
 import {
   PROVIDER_ORDER,
   providerDisplayName,
@@ -245,13 +242,6 @@ function DetailPanelContent({
       </div>
 
       <div className="px-5 py-5">
-        {tab === "overview" && (
-          <OverviewTab
-            service={service}
-            summary={summary}
-            metrics={summary.metricCards}
-          />
-        )}
         {tab === "limits" && (
           <LimitsTab windows={allWindows} nowMs={nowMs} />
         )}
@@ -275,118 +265,6 @@ function DetailPanelContent({
         )}
       </div>
     </section>
-  );
-}
-
-function OverviewTab({
-  service,
-  summary,
-  metrics,
-}: {
-  service: ServiceUsage;
-  summary: ReturnType<typeof buildInspectorSummary>;
-  metrics: InspectorMetric[];
-}) {
-  const { t } = useTranslation();
-  const status = serviceStatus(service, null);
-  return (
-    <div className="space-y-5">
-      <div className="grid gap-4 sm:grid-cols-2">
-        <OverviewStat
-          label={t("detail.overview.overallUsage")}
-          value={formatPercent(summary.overallPercent)}
-          subvalue={summary.primaryUsedLimit ?? t("detail.overview.noLimit")}
-          tone={status}
-        />
-        <OverviewStat
-          label={t("detail.overview.resetsIn")}
-          value={summary.resetLabel ?? "—"}
-          subvalue={
-            summary.resetLabel
-              ? t("detail.overview.currentWindow")
-              : t("detail.overview.noReset")
-          }
-        />
-      </div>
-
-      <div className="grid gap-3 xl:grid-cols-3">
-        {metrics.length > 0 ? (
-          metrics
-            .slice(0, 3)
-            .map((metric) => <MetricCard key={metric.label} metric={metric} />)
-        ) : (
-          <div className="rounded-lg border border-border bg-surface/60 p-4 text-sm text-text-faint xl:col-span-3">
-            {t("detail.overview.noDetailWindows")}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function OverviewStat({
-  label,
-  value,
-  subvalue,
-  tone = "unknown",
-}: {
-  label: string;
-  value: string;
-  subvalue: string;
-  tone?: ServiceStatus;
-}) {
-  return (
-    <div className="rounded-lg border border-border bg-surface/50 p-4">
-      <div className="mb-3 text-xs font-medium text-text-faint">{label}</div>
-      <div className={cn("num text-2xl font-semibold", statusTextClass(tone))}>
-        {value}
-      </div>
-      <div className="num mt-1 text-sm text-text-dim">{subvalue}</div>
-    </div>
-  );
-}
-
-function MetricCard({ metric }: { metric: InspectorMetric }) {
-  const { t } = useTranslation();
-  const width = `${clamp(metric.percent ?? 0, 0, 100)}%`;
-  const tone =
-    metric.percent == null
-      ? "unknown"
-      : metric.percent > 85
-        ? "critical"
-        : metric.percent >= 60
-          ? "warning"
-          : "ok";
-  return (
-    <div className="rounded-lg border border-border bg-surface/50 p-4">
-      <div className="flex items-center justify-between gap-3">
-        <h3 className="truncate text-sm font-semibold">{metric.label}</h3>
-        {metric.usedLimit && (
-          <span className="num shrink-0 text-xs text-text-faint">{metric.usedLimit}</span>
-        )}
-      </div>
-      <div className={cn("num mt-5 text-lg font-semibold", statusTextClass(tone))}>
-        {metric.usedLimit?.split(" / ")[0] ?? formatPercent(metric.percent)}
-        <span className="ml-1 text-xs font-medium text-text-dim">
-          {t("detail.metric.used")}
-        </span>
-      </div>
-      <div className="mt-2 flex items-center gap-2">
-        <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-white/[0.10]">
-          {metric.percent != null && (
-            <div className={cn("h-full rounded-full", statusFillClass(tone))} style={{ width }} />
-          )}
-        </div>
-        <span className={cn("num text-xs", statusTextClass(tone))}>
-          {formatPercent(metric.percent)}
-        </span>
-      </div>
-      <div className="num mt-3 text-xs text-text-faint">
-        {metric.resetLabel
-          ? t("detail.metric.resetsIn", { time: metric.resetLabel })
-          : t("detail.metric.noReset")}
-      </div>
-    </div>
   );
 }
 

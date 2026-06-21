@@ -84,7 +84,6 @@
     "edit": "Edit",
     "moreActions": "More account actions",
     "tab": {
-      "overview": "Overview",
       "limits": "Limits",
       "sessions": "Sessions",
       "raw": "Raw",
@@ -95,19 +94,6 @@
       "reauth": "Re-authenticate",
       "settings": "App settings",
       "remove": "Remove account"
-    },
-    "overview": {
-      "overallUsage": "Overall usage",
-      "noLimit": "No limit reported",
-      "resetsIn": "Resets in",
-      "currentWindow": "Current window",
-      "noReset": "No reset",
-      "noDetailWindows": "This provider did not report detailed quota windows."
-    },
-    "metric": {
-      "used": "used",
-      "resetsIn": "Resets in {{time}}",
-      "noReset": "No reset"
     },
     "limits": {
       "noWindows": "No quota windows were reported for this account.",

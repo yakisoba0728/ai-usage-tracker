@@ -63,7 +63,7 @@ export function Dashboard() {
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [openServiceId, setOpenServiceId] = useState<string | null>(null);
-  const [inspectorTab, setInspectorTab] = useState<InspectorTab>("overview");
+  const [inspectorTab, setInspectorTab] = useState<InspectorTab>("limits");
 
   const [sortBy, setSortBy] = useState<SortBy>("custom");
   const [showOffline, setShowOffline] = useState(true);
@@ -84,7 +84,7 @@ export function Dashboard() {
   // or a provider-loading event fires.
   const handleSelectService = useCallback((id: string) => {
     setOpenServiceId(id);
-    setInspectorTab("overview");
+    setInspectorTab("limits");
   }, []);
 
   useEffect(() => {

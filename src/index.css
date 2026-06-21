@@ -19,7 +19,9 @@
   /* ── Text ──────────────────────────────────────────────────────────────── */
   --text: #f0f1f3;
   --text-dim: #a4a7ad;
-  --text-faint: #737780;
+  /* Bumped from #737780 (which failed WCAG AA ~3:1 at 11-12px) to clear 4.5:1
+   * on every surface incl. the lightest (--surface-2). */
+  --text-faint: #969aa2;
 
   /* ── Severity (usage bar fills ONLY — muted green/amber/red) ───────────── */
   --ok: #73b875;

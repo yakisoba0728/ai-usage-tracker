@@ -132,7 +132,7 @@ function PopoverRow({
         <div className="num mt-1.5 text-[11px] text-text-faint">
           {headline?.label}
           {reset && (
-            <span className="text-text-faint/70"> · {t("card.resetsIn", { time: reset })}</span>
+            <span> · {t("card.resetsIn", { time: reset })}</span>
           )}
         </div>
       )}

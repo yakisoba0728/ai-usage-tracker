@@ -132,7 +132,7 @@ const AccountCardButton = memo(function AccountCardButton({
                     {row.headline?.label ?? t("card.noUsageWindow")}
                   </span>
                   {reset && (
-                    <span className="num shrink-0 text-[11px] text-text-faint/70">
+                    <span className="num shrink-0 text-[11px] text-text-faint">
                       · {t("card.resetsIn", { time: reset })}
                     </span>
                   )}
@@ -212,7 +212,7 @@ function CompactWindowLine({
         <span className="flex min-w-0 items-baseline gap-1.5 text-text-faint">
           <span className="truncate">{window.label}</span>
           {reset && (
-            <span className="num shrink-0 text-[11px] text-text-faint/70">
+            <span className="num shrink-0 text-[11px] text-text-faint">
               · {t("card.resetsIn", { time: reset })}
             </span>
           )}

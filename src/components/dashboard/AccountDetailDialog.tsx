@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Cloud,
   Edit3,
@@ -156,6 +156,18 @@ function DetailPanelContent({
   const accountId = storedAccountId(service);
   const allWindows = [...(service.windows ?? []), ...(service.detail_windows ?? [])];
 
+  const moreRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!moreOpen) return;
+    function onPointerDown(e: PointerEvent) {
+      if (moreRef.current && !moreRef.current.contains(e.target as Node)) {
+        onMoreOpenChange(false);
+      }
+    }
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [moreOpen, onMoreOpenChange]);
+
   return (
     <section className="scroll-area h-full min-h-0 overflow-y-auto bg-[#1b1d20]">
       <div className="sticky top-0 z-20 border-b border-border bg-[#1b1d20]/95 px-5 py-5 backdrop-blur">
@@ -187,7 +199,7 @@ function DetailPanelContent({
             </div>
           </div>
 
-          <div className="relative flex shrink-0 items-center gap-2">
+          <div className="relative flex shrink-0 items-center gap-2" ref={moreRef}>
             <Button variant="ghost" size="sm" onClick={() => onTabChange("settings")}>
               <Edit3 className="size-4" />
               {t("detail.edit")}
@@ -203,7 +215,11 @@ function DetailPanelContent({
               <MoreHorizontal className="size-4" />
             </Button>
             {moreOpen && (
-              <div className="menu-pop absolute right-0 top-10 z-40 w-56 rounded-lg border border-border-strong bg-[#25272b]/95 p-1.5 shadow-2xl shadow-black/40">
+              <div
+                role="menu"
+                aria-label={t("detail.moreActions")}
+                className="menu-pop absolute right-0 top-10 z-40 w-56 rounded-lg border border-border-strong bg-[#25272b]/95 p-1.5 shadow-2xl shadow-black/40"
+              >
                 <MenuItem icon={<RefreshCw className={refreshing ? "size-4 animate-spin" : "size-4"} />} onClick={onRefresh}>
                   {t("detail.menu.refresh")}
                 </MenuItem>
@@ -579,6 +595,7 @@ function MenuItem({
   return (
     <button
       type="button"
+      role="menuitem"
       disabled={disabled}
       onClick={onClick}
       className={cn(

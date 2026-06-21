@@ -11,6 +11,13 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
  * `bg-canvas`, so the brief gap the slide exposes is the same color — seamless.
  */
 function playDropIn(el: HTMLElement | null) {
+  // The CSS reduced-motion block can't reach WAAPI animations, so guard here.
+  if (
+    typeof matchMedia === "function" &&
+    matchMedia("(prefers-reduced-motion: reduce)").matches
+  ) {
+    return;
+  }
   el?.animate(
     [
       { opacity: 0, transform: "translateY(-12px)" },

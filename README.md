@@ -80,9 +80,9 @@ pnpm exec tsc --noEmit              # type-check
 ```
 
 CI (`.github/workflows/`) runs the frontend type-check + vitest on Linux and
-`cargo fmt` / `clippy` / `cargo test --lib` across a **macOS + Windows + Linux**
-matrix on every push and PR; `build-smoke.yml` does a debug `tauri build` on the
-same three OSes. (Release bundling / signing / notarization is a separate, not-
+`cargo test --lib` across a **macOS + Windows + Linux** matrix on every push and
+PR (with `cargo fmt --check` / `clippy` on Linux); `build-smoke.yml` does a debug
+`tauri build` on the same three OSes. (Release bundling / signing / notarization is a separate, not-
 yet-configured pipeline.)
 
 ## Build
@@ -100,7 +100,7 @@ the Tauri CLI reject `--ci`). If `.dmg` creation fails in some sandboxes
 ```
 React + TS + Tailwind + shadcn/ui  ──IPC──▶  Rust (Tauri 2)
                                             ├─ commands    (the #[tauri::command] surface + refresh_once)
-                                            ├─ scheduler   (tokio interval, generation-guarded; parallel fetch_all)
+                                            ├─ scheduler   (tokio timer loop, generation-guarded; parallel fetch_all)
                                             ├─ providers   (ProviderApi trait + claude/codex/gemini/copilot/cursor/zai)
                                             ├─ login       (device-code OAuth: Codex / Copilot)
                                             ├─ oauth_login (browser + localhost-callback OAuth: Codex / Gemini)

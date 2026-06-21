@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type KeyboardEvent } from "react";
 import {
   Cloud,
   Edit3,
@@ -146,8 +146,13 @@ function DetailPanelContent({
   const allWindows = allServiceWindows(service);
 
   const moreRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     if (!moreOpen) return;
+    // Move focus into the menu so the Arrow keys drive it immediately.
+    moreRef.current
+      ?.querySelector<HTMLButtonElement>('[role="menuitem"]')
+      ?.focus();
     function onPointerDown(e: PointerEvent) {
       if (moreRef.current && !moreRef.current.contains(e.target as Node)) {
         onMoreOpenChange(false);
@@ -156,6 +161,40 @@ function DetailPanelContent({
     document.addEventListener("pointerdown", onPointerDown);
     return () => document.removeEventListener("pointerdown", onPointerDown);
   }, [moreOpen, onMoreOpenChange]);
+
+  function onMenuKeyDown(e: KeyboardEvent<HTMLDivElement>) {
+    const items = Array.from(
+      e.currentTarget.querySelectorAll<HTMLButtonElement>(
+        '[role="menuitem"]:not([disabled])',
+      ),
+    );
+    if (items.length === 0) return;
+    const idx = items.findIndex((el) => el === document.activeElement);
+    switch (e.key) {
+      case "ArrowDown":
+        e.preventDefault();
+        items[(idx + 1) % items.length]?.focus();
+        break;
+      case "ArrowUp":
+        e.preventDefault();
+        items[(idx - 1 + items.length) % items.length]?.focus();
+        break;
+      case "Home":
+        e.preventDefault();
+        items[0]?.focus();
+        break;
+      case "End":
+        e.preventDefault();
+        items[items.length - 1]?.focus();
+        break;
+      case "Escape":
+        e.preventDefault();
+        e.stopPropagation();
+        onMoreOpenChange(false);
+        triggerRef.current?.focus();
+        break;
+    }
+  }
 
   return (
     <section className="scroll-area h-full min-h-0 overflow-y-auto bg-[#1b1d20]">
@@ -194,6 +233,7 @@ function DetailPanelContent({
               {t("detail.edit")}
             </Button>
             <Button
+              ref={triggerRef}
               variant="ghost"
               size="icon"
               onClick={() => onMoreOpenChange(!moreOpen)}
@@ -207,6 +247,7 @@ function DetailPanelContent({
               <div
                 role="menu"
                 aria-label={t("detail.moreActions")}
+                onKeyDown={onMenuKeyDown}
                 className="menu-pop absolute right-0 top-10 z-40 w-56 rounded-lg border border-border-strong bg-[#25272b]/95 p-1.5 shadow-2xl shadow-black/40"
               >
                 <MenuItem icon={<RefreshCw className={refreshing ? "size-4 animate-spin" : "size-4"} />} onClick={onRefresh}>

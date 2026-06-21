@@ -26,6 +26,22 @@ A web-research pass (per-provider, cited) cross-checked the current code against
 
 Also confirmed correct for Windows: the `keyring` v3 `windows-native` feature covers Windows Credential Manager; `dirs::{home_dir,config_dir,data_dir}` resolve correctly on Windows (`%USERPROFILE%` / `%APPDATA%` Roaming / `%LOCALAPPDATA%`); `lib.rs` `set_dock_visible` is already a no-op off-macOS and the tray is the cross-platform Tauri `MenuBuilder` (no change). CI already builds a multi-OS matrix.
 
+## Advisor review: the verification gate may not exist + build risks
+
+The advisor flagged that **"CI build green" is the spec's primary gate, but CI has almost certainly never run on this code.** `main` is **37 commits ahead of `origin/main`** (everything this session is unpushed). The 3-OS workflow *files* exist; they have not *executed* on the current tree. So today "Windows support" = "compiles in theory; never once compiled in practice."
+
+Combined with "no Windows hardware" and "can't cross-compile macOS → `windows-msvc` locally (needs MSVC + WebView2)", there is exactly one way to even *compile-check* Windows: **push a branch so GitHub Actions runs.** This collides with the standing "local-only, don't push" rule.
+
+**→ REQUIRED USER DECISION before the plan's verification can be real (the only honest choice):**
+- **(P) Push a branch** (e.g. `feat/windows-support`) so CI actually compiles + unit-tests on Windows. This is the only way to verify Windows even builds. (Does not require pushing `main`.)
+- **(N) Don't push** — accept that Windows is **static-review-only, not even compiled**. The plan still makes the code correct-by-research, but no Windows build is proven.
+
+Track three honesty tiers, not two: **compile-verified via CI** > **static/research-correct (not compiled)** > **runtime `[NEEDS HARDWARE VERIFICATION]`**.
+
+**Build risks (compile-time, not path-time) — first task must establish a Windows compile:**
+- **keyring features:** drop **`sync-secret-service`** (Linux Secret Service only — that platform was just cut; it drags in `secret-service`/`zbus`/dbus which is exactly the kind of non-target-gated optional dep that breaks a Windows build). Re-derive to `["apple-native", "windows-native"]` and check whether **`crypto-rust`** is still needed (it backed the secret-service session). Each change gets its own compile check.
+- **Cursor SQLite:** `rusqlite = { version = "0.32", features = ["bundled"] }` — **confirmed bundled**, so it compiles its own SQLite on Windows with no system dep. ✅ No action beyond confirming the CI Windows build links it.
+
 ## Decisions
 
 - **Gemini = OAuth only** (user decision). Remove the CLI file auto-detect (the legacy `oauth_creds.json` path is migrated-away/deleted, and the modern keychain/encrypted-file formats can't be confirmed without hardware). Gemini is supported solely via the in-app **browser OAuth** flow → stored account, which is pure HTTP and already cross-OS. The Gemini auto-detect `fetch()` no longer reads any file; it returns `not_logged_in` (hint: add via OAuth) so a connected stored Gemini is the only "online" Gemini. `secrets::gemini_creds_path()` + the auto file-read become dead and are removed.
@@ -40,6 +56,7 @@ Also confirmed correct for Windows: the `keyring` v3 `windows-native` feature co
 3. **Docs/comments** — annotate the Windows credential paths with confidence / `[NEEDS HARDWARE VERIFICATION]` where applicable.
 4. **CI** (`.github/workflows/`) — set the cross-OS matrix to **macOS + Windows only** (remove the Linux runner from both the `cargo test` matrix and the `build-smoke` `tauri build`). No Linux system deps needed. Confirm the Windows runner produces bundle artifacts (`targets: "all"` → nsis/msi) and macOS produces app/dmg. Update `cargo fmt --check`/`clippy` host if it was pinned to Linux (move to macOS or Windows runner).
 5. **README** — a **macOS + Windows support matrix** (per provider: where its credential lives on each of the two OSes + confidence), a "Gemini = OAuth (Add account) only" note, the Copilot `[NEEDS HARDWARE VERIFICATION]` + the verify command (`cmdkey /list` on Windows), an updated platform-status line that states **Linux is not supported**, and removal of Linux mentions from the build/CI section.
+6. **`src-tauri/Cargo.toml` — Windows-compile foundation (the plan sequences this FIRST).** keyring features → `["apple-native", "windows-native"]` (drop `sync-secret-service`; drop `crypto-rust` if a compile check shows it unneeded). Confirm `rusqlite` stays `bundled`. This is the riskiest unknown (a Windows *compile*, not a path), so it leads the plan; its verification depends on the push decision (P → CI compiles on Windows; N → only macOS `cargo build` confirms non-Windows still builds, Windows stays static-only).
 
 ## Error handling
 

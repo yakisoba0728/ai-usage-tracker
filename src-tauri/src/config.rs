@@ -155,9 +155,10 @@ mod tests {
         let json = serde_json::to_string(&c).unwrap();
         let back: AppConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(back.auto_anchor.get("stored:zai-1"), Some(&true));
-        // Old configs without the field still load.
-        let old: AppConfig =
-            serde_json::from_str(r#"{"poll_seconds":300,"providers":[]}"#).unwrap_or_default();
+        // Old configs without auto_anchor still load via serde's field default.
+        let mut v = serde_json::to_value(AppConfig::default()).unwrap();
+        v.as_object_mut().unwrap().remove("auto_anchor");
+        let old: AppConfig = serde_json::from_value(v).unwrap(); // must succeed (not unwrap_or_default)
         assert!(old.auto_anchor.is_empty());
     }
 }

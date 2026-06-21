@@ -1,13 +1,14 @@
 //! Window anchoring: send a minimal throwaway message so a provider's rolling
 //! usage window starts at a predictable time. The app's only write path — kept
-//! entirely in Rust (tokens never cross IPC). Supported: Claude, Codex, z.ai
-//! (all use the message-send path; no reset-credit consumption).
+//! entirely in Rust (tokens never cross IPC). Supported: Claude, Codex, z.ai.
+//! Claude & z.ai send a 1-token message; Codex sends a minimal turn via the
+//! Responses API (no 1-token cap — reasoning models reject it).
 
 use std::collections::HashMap;
 use std::sync::Mutex;
 
 use crate::http;
-use crate::model::{stored_service_id, Provider};
+use crate::model::Provider;
 use crate::providers::ProviderError;
 
 // Coding-plan endpoint (not the general /api/paas/v4) so the message draws on the
@@ -30,7 +31,9 @@ const CODEX_RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex/respons
 const CODEX_MODEL: &str = "gpt-5.5";
 const CODEX_UA: &str = "codex_cli_rs/0.141.0 (ai-usage-tracker)";
 
-/// Cooldown so the auto-trigger sends at most once per window per service.
+/// Per-service cooldown (seconds) so the auto-trigger sends at most once per this
+/// interval — NOT once per usage-window (the window is hours long; this only
+/// debounces repeat fires while the API still reports the window as empty).
 const COOLDOWN_SECS: i64 = 600;
 
 /// Providers where anchoring is meaningful AND a send path exists.
@@ -163,9 +166,7 @@ fn resolve_codex_auto() -> Result<(String, Option<String>), ProviderError> {
 
 /// Resolve the stored credential whose UI id is `service_id` (`stored:<id>`).
 fn resolve_stored(service_id: &str) -> Option<crate::store::StoredCredential> {
-    crate::store::list()
-        .into_iter()
-        .find(|c| stored_service_id(&c.id) == service_id)
+    crate::store::find_by_service_id(service_id)
 }
 
 /// Send an anchor message for the given UI `service_id`.
@@ -244,6 +245,26 @@ mod tests {
     use crate::model::Provider;
 
     #[test]
+    fn cooldown_allows_first_blocks_within_window_and_clears() {
+        let id = "test:cooldown:unique-xyz";
+        clear(id); // no prior state
+        let t0 = 1_000_000i64;
+        assert!(try_begin(id, t0), "first send allowed");
+        assert!(!try_begin(id, t0 + 1), "within cooldown blocked");
+        assert!(
+            !try_begin(id, t0 + COOLDOWN_SECS - 1),
+            "still within cooldown"
+        );
+        assert!(
+            try_begin(id, t0 + COOLDOWN_SECS),
+            "at/after cooldown allowed"
+        );
+        clear(id);
+        assert!(try_begin(id, t0 + 2), "after clear, allowed again");
+        clear(id); // cleanup
+    }
+
+    #[test]
     fn supported_is_claude_codex_zai() {
         assert!(supported(Provider::Claude));
         assert!(supported(Provider::Codex));
@@ -297,14 +318,14 @@ mod tests {
         use wiremock::{Mock, MockServer, ResponseTemplate};
         let server = MockServer::start().await;
         Mock::given(method("POST"))
-            .and(path("/api/paas/v4/chat/completions"))
+            .and(path("/api/coding/paas/v4/chat/completions"))
             .and(header("authorization", "Bearer zk-test"))
             .and(body_partial_json(serde_json::json!({"max_tokens": 1})))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"id":"x"})))
             .mount(&server)
             .await;
         let client = crate::http::build_client();
-        let url = format!("{}/api/paas/v4/chat/completions", server.uri());
+        let url = format!("{}/api/coding/paas/v4/chat/completions", server.uri());
         send_zai(&client, "zk-test", &url).await.unwrap();
     }
 

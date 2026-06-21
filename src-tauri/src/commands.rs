@@ -260,12 +260,10 @@ pub async fn refresh_account(
     snap: State<'_, SnapshotStore>,
     service_id: String,
 ) -> Result<(), String> {
-    use crate::model::{auto_service_id, stored_service_id};
+    use crate::model::auto_service_id;
     // Resolve the fresh ServiceUsage for this id.
     let fresh: Option<crate::model::ServiceUsage> = if service_id.starts_with("stored:") {
-        let cred = crate::store::list()
-            .into_iter()
-            .find(|c| stored_service_id(&c.id) == service_id);
+        let cred = crate::store::find_by_service_id(&service_id);
         match cred {
             Some(c) => {
                 let _ = app.emit("provider-loading", c.provider);

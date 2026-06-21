@@ -52,7 +52,11 @@ fn store_path() -> std::path::PathBuf {
         return std::path::PathBuf::from(p);
     }
     let base = dirs::config_dir()
-        .unwrap_or_else(|| dirs::home_dir().unwrap().join(".config"))
+        .unwrap_or_else(|| {
+            dirs::home_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join(".config")
+        })
         .join("ai-usage-tracker");
     let _ = std::fs::create_dir_all(&base);
     base.join("accounts.json")
@@ -159,6 +163,13 @@ pub fn rotate_credential(
 
 pub fn list() -> Vec<StoredCredential> {
     load()
+}
+
+/// Find a stored credential by its UI service id (`stored:<account-id>`).
+pub fn find_by_service_id(service_id: &str) -> Option<StoredCredential> {
+    list()
+        .into_iter()
+        .find(|c| crate::model::stored_service_id(&c.id) == service_id)
 }
 
 /// Load all stored accounts. A record with an empty access token (e.g. a stale

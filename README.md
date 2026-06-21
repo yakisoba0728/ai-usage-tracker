@@ -21,10 +21,25 @@ tokens stay on-device**.
 |---|---|---|---|
 | **Claude** | Claude Code — macOS Keychain `Claude Code-credentials` / `~/.claude/.credentials.json` (auto); or in-app **session-key** paste (manual) | `api.anthropic.com/api/oauth/usage` + `/api/oauth/profile`; session-key accounts use `claude.ai/api/organizations[/{uuid}/usage]` | OAuth: self-refresh via `platform.claude.com/v1/oauth/token` (fallback `api.anthropic.com/v1/oauth/token`) reusing the public Claude Code client_id; rotated tokens are written back. The usage call is only re-refreshed on `401` — a `429` is a real quota signal and must not burn the rotating refresh token. |
 | **Codex** (ChatGPT) | Codex CLI — `~/.codex/auth.json` (`CODEX_HOME`) (auto); or in-app **browser OAuth** (manual) | `chatgpt.com/backend-api/wham/usage` with `ChatGPT-Account-Id` + a `codex_cli_rs/` User-Agent | OAuth: self-refresh via `auth.openai.com/oauth/token` reusing the public Codex CLI client_id; rotated tokens written back to `auth.json`. |
-| **Gemini** | Gemini CLI — `~/.gemini/oauth_creds.json` (auto); or in-app **browser OAuth** (manual) | Google Code Assist `loadCodeAssist` / `retrieveUserQuota` | OAuth: self-refresh via `oauth2.googleapis.com/token` reusing the Gemini CLI's public client_id/secret. In-app login uses Authorization Code + loopback redirect (the same flow `gemini` uses); Google's installed-app client_id does NOT support the device-code grant. |
+| **Gemini** | **OAuth only** (Add account) via in-app **browser OAuth** | Google Code Assist `loadCodeAssist` / `retrieveUserQuota` | OAuth: self-refresh via `oauth2.googleapis.com/token` reusing the Gemini CLI's public client_id/secret. In-app login uses Authorization Code + loopback redirect (the same flow `gemini` uses); Google's installed-app client_id does NOT support the device-code grant. |
 | **GitHub Copilot** | Copilot CLI — macOS Keychain `copilot-cli` / `~/.copilot/config.json` (`COPILOT_HOME`) (auto); or **in-app GitHub device-code OAuth** (`gho_` token) **or** a pasted token (manual) | `api.github.com/copilot_internal/user` with `Editor-Version`, `Editor-Plugin-Version`, `Copilot-Integration-Id` headers | No refresh — GitHub OAuth/PAT tokens are non-expiring. Accepted token types: `gho_` (OAuth), `ghu_` (GitHub App user), `github_pat_` (fine-grained PAT with the **Copilot Requests** account permission). Classic `ghp_` PATs are **not** supported. |
 | **Cursor** (experimental) | `state.vscdb` → `ItemTable[cursorAuth/accessToken]` (auto-only — no add flow) | Connect-RPC `api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage` | No public refresh path. |
 | **z.ai** (GLM Coding Plan) | `ZAI_API_KEY` env (auto); or a pasted **API key** (manual) | `api.z.ai/api/monitor/usage/quota/limit` (community-documented; returns 5h + weekly limits) | No refresh — long-lived API key. |
+
+### Platform support (macOS + Windows)
+
+Linux is **not a supported target**. Credential auto-detection per OS:
+
+| Provider | macOS | Windows | Notes |
+|---|---|---|---|
+| **Claude** | Keychain `Claude Code-credentials` → file | `%USERPROFILE%\.claude\.credentials.json` (+ `%CLAUDE_CONFIG_DIR%`) | no Credential Manager off-macOS |
+| **Codex** | `~/.codex/auth.json` (+ `CODEX_HOME`) | `%USERPROFILE%\.codex\auth.json` (+ `%CODEX_HOME%`) | |
+| **Gemini** | **OAuth only** (Add account) | **OAuth only** (Add account) | CLI auto-detect dropped — the CLI encrypts/migrates its token store |
+| **Copilot** | Keychain `copilot-cli` → file | Credential Manager `copilot-cli` → `%USERPROFILE%\.copilot\config.json` | Windows keyring account name `[NEEDS HARDWARE VERIFICATION]` — verify with `cmdkey /list` |
+| **Cursor** | `~/Library/.../Cursor/.../state.vscdb` | `%APPDATA%\Cursor\User\globalStorage\state.vscdb` | |
+| **z.ai** | `ZAI_API_KEY` env / pasted key | `ZAI_API_KEY` env / pasted key | |
+
+Windows support is CI-compile-verified; live runtime (tray, real credential reads, anchor send) is not yet hardware-tested.
 
 ### Design principles
 
@@ -83,9 +98,9 @@ pnpm exec tsc --noEmit              # type-check
 ```
 
 CI (`.github/workflows/`) runs the frontend type-check + vitest on Linux and
-`cargo test --lib` across a **macOS + Windows + Linux** matrix on every push and
+`cargo test --lib` across a **macOS + Windows** matrix on every push and
 PR (with `cargo fmt --check` / `clippy` on Linux); `build-smoke.yml` does a debug
-`tauri build` on the same three OSes. (Release bundling / signing / notarization is a separate, not-
+`tauri build` on macOS and Windows. (Release bundling / signing / notarization is a separate, not-
 yet-configured pipeline.)
 
 ## Build
@@ -171,7 +186,5 @@ React + TS + Tailwind + shadcn/ui  ──IPC──▶  Rust (Tauri 2)
 - Claude's primary refresh endpoint is `platform.claude.com/v1/oauth/token`,
   with `api.anthropic.com/v1/oauth/token` as a fallback on network / non-2xx
   errors (a 2xx parse error is not retried, to avoid burning a rotated token).
-- macOS is the primary dev/test platform; Linux/Windows are CI-built and
-  unit-tested, but the menu-bar/tray placement is macOS-tuned and the non-macOS
-  credential paths are exercised in CI only (not on real hardware).
+- macOS is the primary dev/test platform; **Windows is CI-compile-verified but not yet hardware-tested**; **Linux is not supported.**
 - The z.ai usage endpoint is undocumented and may change without notice.

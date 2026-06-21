@@ -50,6 +50,25 @@ pub async fn get_json<T: serde::de::DeserializeOwned>(
     decode_json(resp, url).await
 }
 
+/// Authenticated POST of a JSON body that JSON-decodes the response. Mirrors
+/// `get_json`; used for Bearer-auth JSON APIs (e.g. Gemini Code Assist).
+pub async fn post_json<T: serde::de::DeserializeOwned>(
+    client: &reqwest::Client,
+    token: &str,
+    url: &str,
+    body: &serde_json::Value,
+) -> Result<T, ProviderError> {
+    let resp = client
+        .post(url)
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Content-Type", "application/json")
+        .json(body)
+        .send()
+        .await
+        .map_err(|e| ProviderError::Network(e.to_string()))?;
+    decode_json(resp, url).await
+}
+
 /// Read a response to a status/body, mapping non-2xx to ProviderError::Status.
 pub async fn send_for_json(
     resp: reqwest::Response,
@@ -212,6 +231,32 @@ mod tests {
                 .await
                 .unwrap_err();
         assert!(matches!(err, ProviderError::Parse(_)), "got: {err:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn post_json_sends_bearer_and_body_and_decodes() {
+        use wiremock::matchers::{body_json, header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/x"))
+            .and(header("authorization", "Bearer tk"))
+            .and(body_json(serde_json::json!({"a": 1})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})))
+            .mount(&server)
+            .await;
+
+        let client = build_client();
+        let v: serde_json::Value = post_json(
+            &client,
+            "tk",
+            &format!("{}/x", server.uri()),
+            &serde_json::json!({"a": 1}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(v["ok"], true);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

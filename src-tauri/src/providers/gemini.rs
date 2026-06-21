@@ -77,17 +77,7 @@ impl GeminiProvider {
         method: &str,
         payload: Value,
     ) -> Result<Value, ProviderError> {
-        let url = format!("{CODE_ASSIST_BASE}:{method}");
-        let resp = self
-            .http
-            .post(&url)
-            .header("Authorization", format!("Bearer {token}"))
-            .header("Content-Type", "application/json")
-            .json(&payload)
-            .send()
-            .await
-            .map_err(|e| ProviderError::Network(e.to_string()))?;
-        http::send_for_json(resp, &url).await
+        post_code_assist(&self.http, token, method, payload).await
     }
 }
 
@@ -355,16 +345,13 @@ async fn post_code_assist(
     method: &str,
     payload: Value,
 ) -> Result<Value, ProviderError> {
-    let url = format!("{CODE_ASSIST_BASE}:{method}");
-    let resp = http
-        .post(&url)
-        .header("Authorization", format!("Bearer {token}"))
-        .header("Content-Type", "application/json")
-        .json(&payload)
-        .send()
-        .await
-        .map_err(|e| ProviderError::Network(e.to_string()))?;
-    http::send_for_json(resp, &url).await
+    http::post_json(
+        http,
+        token,
+        &format!("{CODE_ASSIST_BASE}:{method}"),
+        &payload,
+    )
+    .await
 }
 
 /// Fetch Gemini usage given an explicit token (manually-added accounts).

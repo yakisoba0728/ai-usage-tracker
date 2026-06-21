@@ -8,9 +8,7 @@ import {
 import {
   Check,
   Command,
-  Filter,
   Languages,
-  LayoutList,
   Loader2,
   Plus,
   RefreshCw,
@@ -393,13 +391,6 @@ function AccountToolbar({
       >
         <Plus className="size-4" />
         <span className="hidden sm:inline">{t("toolbar.addAccount")}</span>
-      </Button>
-
-      <Button variant="ghost" size="icon" className="h-10 w-10 border border-border bg-surface/50">
-        <LayoutList className="size-4" />
-      </Button>
-      <Button variant="ghost" size="icon" className="h-10 w-10 border border-border bg-surface/50">
-        <Filter className="size-4" />
       </Button>
     </div>
   );

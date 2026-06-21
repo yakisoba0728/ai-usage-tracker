@@ -100,6 +100,34 @@ pub fn cancel() {
     }
 }
 
+/// Install `new` as the active cancel flag, cancelling any prior in-flight login
+/// first so its server thread exits promptly (freeing the callback port) instead
+/// of lingering until its own timeout.
+fn install_cancel_flag(new: std::sync::Arc<AtomicBool>) {
+    if let Ok(mut g) = ACTIVE.lock() {
+        if let Some(prev) = g.take() {
+            prev.store(true, Ordering::SeqCst);
+        }
+        *g = Some(new);
+    }
+}
+
+/// Clears `ACTIVE` when a login's server thread exits, but only if `ACTIVE` still
+/// points at this login's flag (a newer login may have already replaced it).
+struct ActiveGuard(std::sync::Arc<AtomicBool>);
+
+impl Drop for ActiveGuard {
+    fn drop(&mut self) {
+        if let Ok(mut g) = ACTIVE.lock() {
+            if g.as_ref()
+                .is_some_and(|cur| std::sync::Arc::ptr_eq(cur, &self.0))
+            {
+                *g = None;
+            }
+        }
+    }
+}
+
 /// Start a login. Returns the authorize URL for the browser.
 pub fn start(app: AppHandle, provider: Provider) -> Result<String, String> {
     let spec = spec_for(provider)
@@ -118,9 +146,7 @@ pub fn start(app: AppHandle, provider: Provider) -> Result<String, String> {
             let auth_url = build_authorize_url(&spec, &redirect_uri, &challenge, &state);
 
             let cancelled = std::sync::Arc::new(AtomicBool::new(false));
-            if let Ok(mut g) = ACTIVE.lock() {
-                *g = Some(cancelled.clone());
-            }
+            install_cancel_flag(cancelled.clone());
             let app2 = app.clone();
             let client_id = spec.client_id.clone();
             let client_secret = spec.client_secret.clone();
@@ -157,6 +183,9 @@ fn run_server(
     expected_state: String,
     cancelled: std::sync::Arc<AtomicBool>,
 ) {
+    // Clear ACTIVE when this server thread exits (any return path), unless a
+    // newer login has already taken over.
+    let _active = ActiveGuard(cancelled.clone());
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(TIMEOUT_SECS);
     let mut got_code: Option<String> = None;
     while got_code.is_none() {
@@ -503,5 +532,57 @@ mod tests {
         assert_eq!(cred.access_token, "at");
         assert_eq!(cred.label, "Codex account");
         assert_eq!(cred.account_id, None);
+    }
+
+    // Serializes the ACTIVE-static tests against each other (other oauth tests
+    // don't touch ACTIVE). Reset ACTIVE at both ends to avoid cross-run bleed.
+    static ACTIVE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn cancel_flag_lifecycle() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let _g = ACTIVE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        if let Ok(mut a) = ACTIVE.lock() {
+            *a = None;
+        }
+
+        // Installing a second login cancels the first and installs itself.
+        let first = Arc::new(AtomicBool::new(false));
+        install_cancel_flag(first.clone());
+        let second = Arc::new(AtomicBool::new(false));
+        install_cancel_flag(second.clone());
+        assert!(
+            first.load(Ordering::SeqCst),
+            "a new login must cancel the previous one"
+        );
+        assert!(!second.load(Ordering::SeqCst));
+
+        // cancel() targets the current (second) flag.
+        cancel();
+        assert!(second.load(Ordering::SeqCst));
+
+        // An ActiveGuard clears ACTIVE iff it owns the current flag.
+        let owned = Arc::new(AtomicBool::new(false));
+        install_cancel_flag(owned.clone());
+        drop(ActiveGuard(owned.clone()));
+        assert!(
+            ACTIVE.lock().unwrap().is_none(),
+            "guard owning the current flag clears ACTIVE on drop"
+        );
+
+        // A stale guard must NOT clear a newer login's flag.
+        let newer = Arc::new(AtomicBool::new(false));
+        install_cancel_flag(newer.clone());
+        drop(ActiveGuard(Arc::new(AtomicBool::new(false))));
+        assert!(
+            ACTIVE.lock().unwrap().is_some(),
+            "a stale guard must not clear the newer login's flag"
+        );
+
+        if let Ok(mut a) = ACTIVE.lock() {
+            *a = None;
+        }
     }
 }

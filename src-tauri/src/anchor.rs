@@ -1,6 +1,7 @@
 //! Window anchoring: send a minimal throwaway message so a provider's rolling
 //! usage window starts at a predictable time. The app's only write path — kept
-//! entirely in Rust (tokens never cross IPC). Supported: Claude, Codex, z.ai.
+//! entirely in Rust (tokens never cross IPC). Supported: Claude, Codex, z.ai
+//! (all use the message-send path; no reset-credit consumption).
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -19,14 +20,17 @@ const CLAUDE_VERSION: &str = "2023-06-01";
 const CLAUDE_OAUTH_BETA: &str = "oauth-2025-04-20";
 const CLAUDE_MODEL: &str = "claude-3-5-haiku-20241022";
 
+const CODEX_RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
+// Best-effort model name; verify live (Codex model names churn).
+const CODEX_MODEL: &str = "codex-mini-latest";
+const CODEX_UA: &str = "codex_cli_rs/0.141.0 (ai-usage-tracker)";
+
 /// Cooldown so the auto-trigger sends at most once per window per service.
 const COOLDOWN_SECS: i64 = 600;
 
 /// Providers where anchoring is meaningful AND a send path exists.
-/// Codex is excluded: reset credits are finite and manual-only (see
-/// `reset_codex_for`); the auto/message anchor path is SSE-only and fragile.
 pub fn supported(provider: Provider) -> bool {
-    matches!(provider, Provider::Claude | Provider::Zai)
+    matches!(provider, Provider::Claude | Provider::Codex | Provider::Zai)
 }
 
 /// A minimal 1-token user message body (shared by the chat-completions shapes).
@@ -66,6 +70,49 @@ pub async fn send_claude(
     Ok(())
 }
 
+pub async fn send_codex(
+    http: &reqwest::Client,
+    access_token: &str,
+    account_id: Option<&str>,
+    url: &str,
+) -> Result<(), ProviderError> {
+    let body = serde_json::json!({
+        "model": CODEX_MODEL,
+        "instructions": "",
+        "input": [{ "role": "user", "content": [{ "type": "input_text", "text": "." }] }],
+        "tools": [],
+        "tool_choice": "none",
+        "parallel_tool_calls": false,
+        "store": false,
+        "stream": true
+    });
+    let mut req = http
+        .post(url)
+        .header("Authorization", format!("Bearer {access_token}"))
+        .header("User-Agent", CODEX_UA)
+        .header("Content-Type", "application/json")
+        .header("Accept", "text/event-stream");
+    if let Some(acc) = account_id {
+        req = req.header("ChatGPT-Account-Id", acc);
+    }
+    let resp = req
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| ProviderError::Network(e.to_string()))?;
+    let status = resp.status();
+    // Drain the SSE stream so the turn completes; we only need a 2xx (no token in the body).
+    let text = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        let snippet: String = text.chars().take(200).collect();
+        return Err(ProviderError::Status {
+            status: status.as_u16(),
+            body: format!("codex anchor: {snippet}"),
+        });
+    }
+    Ok(())
+}
+
 /// Resolve the z.ai API key from the environment.
 fn resolve_zai_auto() -> Result<String, ProviderError> {
     match std::env::var("ZAI_API_KEY") {
@@ -93,6 +140,22 @@ fn resolve_claude_auto() -> Result<String, ProviderError> {
     ))
 }
 
+fn resolve_codex_auto() -> Result<(String, Option<String>), ProviderError> {
+    let v = crate::secrets::read_json_file(&crate::secrets::codex_auth_path())?;
+    let tokens = v
+        .get("tokens")
+        .ok_or_else(|| ProviderError::NotLoggedIn("codex auth.json: no tokens".into()))?;
+    let access = tokens
+        .get("access_token")
+        .and_then(|s| s.as_str())
+        .ok_or_else(|| ProviderError::NotLoggedIn("codex: no access_token".into()))?;
+    let account_id = tokens
+        .get("account_id")
+        .and_then(|s| s.as_str())
+        .map(String::from);
+    Ok((access.to_string(), account_id))
+}
+
 /// Resolve the stored credential whose UI id is `service_id` (`stored:<id>`).
 fn resolve_stored(service_id: &str) -> Option<crate::store::StoredCredential> {
     crate::store::list()
@@ -115,7 +178,15 @@ pub async fn send(service_id: &str) -> Result<(), ProviderError> {
         return match cred.provider {
             Provider::Zai => send_zai(&http, &cred.access_token, ZAI_CHAT_URL).await,
             Provider::Claude => send_claude(&http, &cred.access_token, CLAUDE_MESSAGES_URL).await,
-            // Codex stored send added in a later task.
+            Provider::Codex => {
+                send_codex(
+                    &http,
+                    &cred.access_token,
+                    cred.account_id.as_deref(),
+                    CODEX_RESPONSES_URL,
+                )
+                .await
+            }
             other => Err(ProviderError::NotLoggedIn(format!(
                 "anchoring for stored {other:?} not implemented yet"
             ))),
@@ -124,79 +195,14 @@ pub async fn send(service_id: &str) -> Result<(), ProviderError> {
     match service_id {
         "auto:claude" => send_claude(&http, &resolve_claude_auto()?, CLAUDE_MESSAGES_URL).await,
         "auto:zai" => send_zai(&http, &resolve_zai_auto()?, ZAI_CHAT_URL).await,
+        "auto:codex" => {
+            let (access, account_id) = resolve_codex_auto()?;
+            send_codex(&http, &access, account_id.as_deref(), CODEX_RESPONSES_URL).await
+        }
         other => Err(ProviderError::NotLoggedIn(format!(
             "anchoring not implemented for {other}"
         ))),
     }
-}
-
-// ── Codex manual reset-credit ───────────────────────────────────────────────
-
-const CODEX_RESET_URL: &str =
-    "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume";
-const CODEX_UA: &str = "codex_cli_rs/0.141.0 (ai-usage-tracker)";
-
-/// Consume one Codex rate-limit-reset credit (the official action the Codex CLI
-/// uses). Returns the response `code` ("reset" | "nothing_to_reset" | "no_credit"
-/// | "already_redeemed"). A fresh idempotency key per call so each deliberate
-/// click attempts a reset.
-pub async fn reset_codex(
-    http: &reqwest::Client,
-    access_token: &str,
-    account_id: Option<&str>,
-    url: &str,
-) -> Result<String, ProviderError> {
-    let redeem = format!(
-        "ait-{}",
-        chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
-    );
-    let mut req = http
-        .post(url)
-        .header("Authorization", format!("Bearer {access_token}"))
-        .header("User-Agent", CODEX_UA)
-        .header("Content-Type", "application/json");
-    if let Some(acc) = account_id {
-        req = req.header("ChatGPT-Account-Id", acc);
-    }
-    let resp = req
-        .json(&serde_json::json!({ "redeem_request_id": redeem }))
-        .send()
-        .await
-        .map_err(|e| ProviderError::Network(e.to_string()))?;
-    let v = http::send_for_json(resp, "codex reset-credit").await?;
-    Ok(v.get("code")
-        .and_then(|c| c.as_str())
-        .unwrap_or("unknown")
-        .to_string())
-}
-
-fn resolve_codex_auto() -> Result<(String, Option<String>), ProviderError> {
-    let v = crate::secrets::read_json_file(&crate::secrets::codex_auth_path())?;
-    let tokens = v
-        .get("tokens")
-        .ok_or_else(|| ProviderError::NotLoggedIn("codex auth.json: no tokens".into()))?;
-    let access = tokens
-        .get("access_token")
-        .and_then(|s| s.as_str())
-        .ok_or_else(|| ProviderError::NotLoggedIn("codex: no access_token".into()))?;
-    let account_id = tokens
-        .get("account_id")
-        .and_then(|s| s.as_str())
-        .map(String::from);
-    Ok((access.to_string(), account_id))
-}
-
-/// Manual Codex reset-credit for a UI service id (`auto:codex` or `stored:<id>`).
-pub async fn reset_codex_for(service_id: &str) -> Result<String, ProviderError> {
-    let http = http::shared();
-    let (access, account_id) = if service_id.starts_with("stored:") {
-        let cred = resolve_stored(service_id)
-            .ok_or_else(|| ProviderError::NotLoggedIn(format!("no stored account {service_id}")))?;
-        (cred.access_token, cred.account_id)
-    } else {
-        resolve_codex_auto()?
-    };
-    reset_codex(&http, &access, account_id.as_deref(), CODEX_RESET_URL).await
 }
 
 // ── Cooldown guard ──────────────────────────────────────────────────────────
@@ -233,11 +239,10 @@ mod tests {
     use crate::model::Provider;
 
     #[test]
-    fn supported_is_claude_and_zai_only() {
+    fn supported_is_claude_codex_zai() {
         assert!(supported(Provider::Claude));
+        assert!(supported(Provider::Codex));
         assert!(supported(Provider::Zai));
-        // Codex is manual reset-credit only (finite credits) — no auto/message anchor.
-        assert!(!supported(Provider::Codex));
         assert!(!supported(Provider::Copilot));
         assert!(!supported(Provider::Gemini));
         assert!(!supported(Provider::Cursor));
@@ -299,29 +304,21 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn reset_codex_posts_redeem_id_and_returns_code() {
+    async fn send_codex_posts_bearer_account_and_streams() {
         use wiremock::matchers::{body_partial_json, header, method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
         let server = MockServer::start().await;
         Mock::given(method("POST"))
-            .and(path("/backend-api/wham/rate-limit-reset-credits/consume"))
-            .and(header("authorization", "Bearer cx-test"))
-            .and(header("chatgpt-account-id", "acc-1"))
-            .and(body_partial_json(serde_json::json!({})))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({"code":"reset","windows_reset":2})),
-            )
+            .and(path("/backend-api/codex/responses"))
+            .and(header("authorization", "Bearer cx"))
+            .and(header("chatgpt-account-id", "acc"))
+            .and(header("accept", "text/event-stream"))
+            .and(body_partial_json(serde_json::json!({"stream": true})))
+            .respond_with(ResponseTemplate::new(200).set_body_string("event: done\ndata: {}\n\n"))
             .mount(&server)
             .await;
         let client = crate::http::build_client();
-        let url = format!(
-            "{}/backend-api/wham/rate-limit-reset-credits/consume",
-            server.uri()
-        );
-        let code = reset_codex(&client, "cx-test", Some("acc-1"), &url)
-            .await
-            .unwrap();
-        assert_eq!(code, "reset");
+        let url = format!("{}/backend-api/codex/responses", server.uri());
+        send_codex(&client, "cx", Some("acc"), &url).await.unwrap();
     }
 }

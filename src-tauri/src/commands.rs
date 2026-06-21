@@ -236,15 +236,6 @@ pub async fn send_anchor_now(service_id: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// Consume a Codex rate-limit-reset credit for one service. Returns the result
-/// code string. Tokens stay in Rust.
-#[tauri::command]
-pub async fn reset_codex_now(service_id: String) -> Result<String, String> {
-    crate::anchor::reset_codex_for(&service_id)
-        .await
-        .map_err(|e| e.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

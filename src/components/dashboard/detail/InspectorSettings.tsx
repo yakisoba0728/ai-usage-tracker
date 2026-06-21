@@ -5,7 +5,7 @@ import { useTranslation } from "react-i18next";
 import { allServiceWindows } from "@/components/dashboard/helpers";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { sendAnchorNow, resetCodexNow } from "@/lib/ipc";
+import { sendAnchorNow } from "@/lib/ipc";
 import {
   patchProviderConfig,
   PROVIDER_ORDER,
@@ -35,12 +35,10 @@ export function InspectorSettings({
   const [thresholdDraft, setThresholdDraft] = useState("");
 
   // Message-anchor providers (auto toggle + manual 1-token send).
-  const MESSAGE_ANCHOR = new Set(["claude", "zai"]);
+  const MESSAGE_ANCHOR = new Set(["claude", "codex", "zai"]);
   const messageAnchor = MESSAGE_ANCHOR.has(service.provider);
-  const codexReset = service.provider === "codex";
   const autoOn = config?.auto_anchor?.[service.id] ?? false;
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [codexConfirmOpen, setCodexConfirmOpen] = useState(false);
   const [anchorStatus, setAnchorStatus] = useState<string | null>(null);
 
   function toggleAuto(next: boolean) {
@@ -187,28 +185,6 @@ export function InspectorSettings({
                     .catch((e) => setAnchorStatus(t("detail.anchor.failed", { error: String(e) })));
                 }}
                 onOpenChange={setConfirmOpen}
-              />
-            </>
-          ) : codexReset ? (
-            <>
-              <p className="text-xs text-text-faint">{t("detail.anchor.codexNote")}</p>
-              <Button variant="ghost" onClick={() => setCodexConfirmOpen(true)}>
-                {t("detail.anchor.resetCredit")}
-              </Button>
-              <ConfirmDialog
-                open={codexConfirmOpen}
-                title={t("detail.anchor.codexConfirmTitle")}
-                body={t("detail.anchor.codexConfirmBody")}
-                confirmLabel={t("detail.anchor.resetCredit")}
-                onConfirm={() => {
-                  setAnchorStatus(t("detail.anchor.sending"));
-                  resetCodexNow(service.id)
-                    .then((code) =>
-                      setAnchorStatus(t(`detail.anchor.codexResult.${code}`, { defaultValue: code })),
-                    )
-                    .catch((e) => setAnchorStatus(t("detail.anchor.failed", { error: String(e) })));
-                }}
-                onOpenChange={setCodexConfirmOpen}
               />
             </>
           ) : (

@@ -131,7 +131,6 @@ pub fn run() {
             commands::add_session_key,
             commands::cancel_login,
             commands::send_anchor_now,
-            commands::reset_codex_now,
         ])
         .setup(|app| {
             // --- Tray with a native menu (usage rows + actions) ---

@@ -36,6 +36,7 @@ import {
 } from "@/lib/inspectorModel";
 import {
   getConfig,
+  onAnchorResult,
   onTriggerRefresh,
   removeAccount,
   setConfig,
@@ -144,6 +145,18 @@ export function Dashboard() {
   const dismissToast = useCallback((id: number) => {
     setToasts((t) => t.filter((x) => x.id !== id));
   }, []);
+
+  useEffect(() => {
+    const un = onAnchorResult((p) => {
+      pushToast(p.ok ? t("toast.anchorSent") : t("toast.anchorFailed", { error: p.detail ?? "" }));
+    }).catch((e) => {
+      console.error("subscribe anchor-result failed:", e);
+      return undefined;
+    });
+    return () => {
+      void un.then((u) => u?.());
+    };
+  }, [pushToast, t]);
 
   useEffect(() => {
     if (!snapshot || !config) return;

@@ -11,6 +11,7 @@ import {
   percentSeverity,
   remainingPercent,
 } from "@/lib/format";
+import { refreshAccount, sendAnchorNow } from "@/lib/ipc";
 import type { AccountRow, AccountSection } from "@/lib/inspectorModel";
 import { severityToStatus } from "@/lib/status";
 import type { LimitWindow, Provider } from "@/lib/types";
@@ -83,20 +84,24 @@ const AccountCardButton = memo(function AccountCardButton({
     .filter((window) => window !== row.headline)
     .slice(0, 2);
 
+  const ANCHOR_SUPPORTED = new Set(["claude", "codex", "zai"]);
+  const anchorSupported = ANCHOR_SUPPORTED.has(row.service.provider);
+
   return (
-    <button
-      type="button"
-      onClick={() => onSelect(row.id)}
-      className={cn(
-        "group relative flex min-h-[188px] w-full flex-col overflow-hidden rounded-lg border p-4 text-left",
-        "transition-[background-color,border-color,box-shadow,transform,opacity] duration-150 hover:-translate-y-0.5 hover:border-border-strong hover:bg-surface",
-        selected
-          ? "border-border-strong bg-surface-2 shadow-lg shadow-black/10"
-          : connected
-            ? "border-border bg-surface/60 hover:border-border-strong hover:bg-surface"
-            : "border-border bg-surface/40 opacity-55 hover:bg-surface/60 hover:opacity-100",
-      )}
-    >
+    <div className="group relative">
+      <button
+        type="button"
+        onClick={() => onSelect(row.id)}
+        className={cn(
+          "relative flex min-h-[188px] w-full flex-col overflow-hidden rounded-lg border p-4 text-left",
+          "transition-[background-color,border-color,box-shadow,transform,opacity] duration-150 hover:-translate-y-0.5 hover:border-border-strong hover:bg-surface",
+          selected
+            ? "border-border-strong bg-surface-2 shadow-lg shadow-black/10"
+            : connected
+              ? "border-border bg-surface/60 hover:border-border-strong hover:bg-surface"
+              : "border-border bg-surface/40 opacity-55 hover:bg-surface/60 hover:opacity-100",
+        )}
+      >
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
           <ProviderIconTile provider={row.service.provider} status={row.status} />
@@ -119,13 +124,26 @@ const AccountCardButton = memo(function AccountCardButton({
             </div>
           </div>
         </div>
-        <span className="rounded-md border border-border bg-surface px-2 py-1 text-xs text-text-dim">
-          {connected
-            ? row.service.source === "stored"
-              ? t("card.session")
-              : t("card.oauth")
-            : t("card.loggedOut")}
-        </span>
+        <div className="flex items-center gap-1.5">
+          <span className="rounded-md border border-border bg-surface px-2 py-1 text-xs text-text-dim">
+            {connected
+              ? row.service.source === "stored"
+                ? t("card.session")
+                : t("card.oauth")
+              : t("card.loggedOut")}
+          </span>
+          <span
+            className={cn(
+              "rounded-md border px-2 py-1 text-[10px]",
+              anchorSupported
+                ? "border-border bg-surface text-text-dim"
+                : "border-border bg-surface/50 text-text-faint",
+            )}
+            title={anchorSupported ? t("card.autoAvail") : t("card.autoUnavail")}
+          >
+            {anchorSupported ? t("card.autoAvail") : t("card.autoUnavail")}
+          </span>
+        </div>
       </div>
 
       {connected ? (
@@ -192,7 +210,31 @@ const AccountCardButton = memo(function AccountCardButton({
       {loading && (
         <span className="provider-fetch-dot absolute right-2 top-2 size-2 rounded-full bg-[#73b8f4]" />
       )}
-    </button>
+      </button>
+
+      <div className="absolute bottom-2 right-2 z-10 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+        <button
+          type="button"
+          title={t("card.refresh")}
+          aria-label={t("card.refresh")}
+          onClick={(e) => { e.stopPropagation(); void refreshAccount(row.id); }}
+          className="rounded-md border border-border bg-surface px-2 py-1 text-xs text-text-dim hover:bg-surface-2"
+        >
+          {t("card.refresh")}
+        </button>
+        {anchorSupported && connected && (
+          <button
+            type="button"
+            title={t("card.sendRequest")}
+            aria-label={t("card.sendRequest")}
+            onClick={(e) => { e.stopPropagation(); void sendAnchorNow(row.id); }}
+            className="rounded-md border border-border bg-surface px-2 py-1 text-xs text-text-dim hover:bg-surface-2"
+          >
+            {t("card.sendRequest")}
+          </button>
+        )}
+      </div>
+    </div>
   );
 });
 

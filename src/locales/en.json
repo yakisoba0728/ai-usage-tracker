@@ -32,7 +32,11 @@
     "resetsIn": "Resets in {{time}}",
     "noReset": "No reset",
     "disconnected": "Disconnected",
-    "viewDetails": "View details"
+    "viewDetails": "View details",
+    "refresh": "Refresh",
+    "sendRequest": "Send request",
+    "autoAvail": "Auto-request",
+    "autoUnavail": "No auto"
   },
   "error": {
     "not_logged_in": "Not signed in.",
@@ -213,7 +217,9 @@
     "removeFailed": "Remove failed: {{error}}",
     "reached": "{{provider}} reached {{percent}}%.",
     "scanning": "Local sessions are being scanned again.",
-    "dismiss": "Dismiss notification"
+    "dismiss": "Dismiss notification",
+    "anchorSent": "Anchor message sent.",
+    "anchorFailed": "Anchor failed: {{error}}"
   },
   "time": {
     "justNow": "Updated just now",

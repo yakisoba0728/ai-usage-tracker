@@ -94,6 +94,25 @@ export function sendAnchorNow(serviceId: string): Promise<void> {
   return invoke<void>("send_anchor_now", { serviceId });
 }
 
+export function refreshAccount(serviceId: string): Promise<void> {
+  if (!hasTauriRuntime()) {
+    void serviceId;
+    return Promise.resolve();
+  }
+  return invoke<void>("refresh_account", { serviceId });
+}
+
+export function onAnchorResult(
+  handler: (payload: { id: string; ok: boolean; detail: string | null }) => void,
+): Promise<UnlistenFn> {
+  if (!hasTauriRuntime()) {
+    void handler;
+    return Promise.resolve(() => undefined);
+  }
+  return listen<{ id: string; ok: boolean; detail: string | null }>("anchor-result", (event) => {
+    handler(event.payload);
+  });
+}
 
 export function onUsageUpdated(
   cb: (snapshot: UsageSnapshot) => void,

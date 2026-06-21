@@ -32,7 +32,11 @@
     "resetsIn": "{{time}} 후 초기화",
     "noReset": "초기화 없음",
     "disconnected": "연결 끊김",
-    "viewDetails": "상세 보기"
+    "viewDetails": "상세 보기",
+    "refresh": "새로고침",
+    "sendRequest": "요청 보내기",
+    "autoAvail": "자동요청",
+    "autoUnavail": "자동불가"
   },
   "error": {
     "not_logged_in": "로그인되어 있지 않습니다.",
@@ -213,7 +217,9 @@
     "removeFailed": "제거 실패: {{error}}",
     "reached": "{{provider}}이(가) {{percent}}%에 도달했습니다.",
     "scanning": "로컬 세션을 다시 검색하는 중입니다.",
-    "dismiss": "알림 닫기"
+    "dismiss": "알림 닫기",
+    "anchorSent": "앵커 메시지를 보냈습니다.",
+    "anchorFailed": "앵커 실패: {{error}}"
   },
   "time": {
     "justNow": "방금 업데이트됨",

@@ -1,4 +1,5 @@
 import { X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 export interface Toast {
   id: number;
@@ -18,22 +19,23 @@ export function Toaster({
   toasts: Toast[];
   onDismiss: (id: number) => void;
 }) {
+  const { t } = useTranslation();
   if (toasts.length === 0) return null;
   return (
     <div className="pointer-events-none fixed right-4 top-4 z-[60] flex w-72 flex-col gap-2">
-      {toasts.map((t) => (
+      {toasts.map((toast) => (
         <div
-          key={t.id}
+          key={toast.id}
           role="status"
           className="pointer-events-auto flex items-start gap-2.5 rounded-md border border-border-strong bg-surface px-3 py-2.5 shadow-lg"
         >
           <p className="min-w-0 flex-1 leading-relaxed text-text" style={{ fontSize: 12 }}>
-            {t.message}
+            {toast.message}
           </p>
           <button
             type="button"
-            onClick={() => onDismiss(t.id)}
-            aria-label="Dismiss notification"
+            onClick={() => onDismiss(toast.id)}
+            aria-label={t("toast.dismiss")}
             className="-mr-1 -mt-0.5 shrink-0 rounded-sm p-0.5 text-text-faint transition-colors hover:text-text"
           >
             <X className="size-3.5" />

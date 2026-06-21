@@ -195,6 +195,8 @@ function DetailPanelContent({
               size="icon"
               onClick={() => onMoreOpenChange(!moreOpen)}
               aria-label={t("detail.moreActions")}
+              aria-haspopup="menu"
+              aria-expanded={moreOpen}
             >
               <MoreHorizontal className="size-4" />
             </Button>
@@ -487,6 +489,7 @@ function InspectorSettings({
           value={providerConfig?.primary_window ?? ""}
           disabled={config == null || labels.length === 0}
           onChange={(event) => patch({ primary_window: event.target.value || null })}
+          aria-label={t("detail.settings.primaryWindow")}
           className="w-full rounded-md border border-border bg-canvas px-3 py-2 text-sm text-text outline-none focus:border-border-strong"
         >
           <option value="">{t("detail.settings.autoWindow")}</option>

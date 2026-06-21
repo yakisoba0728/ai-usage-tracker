@@ -319,7 +319,7 @@ function MobileHeader({
   onRefresh: () => void;
   onOpenSettings: () => void;
 }) {
-  const { i18n } = useTranslation();
+  const { t, i18n } = useTranslation();
   const nextLang = i18n.resolvedLanguage === "ko" ? "en" : "ko";
   return (
     <header className="flex h-12 items-center justify-between border-b border-border px-4">
@@ -332,15 +332,26 @@ function MobileHeader({
           variant="ghost"
           size="icon"
           onClick={() => void i18n.changeLanguage(nextLang)}
-          aria-label="Language"
-          title={nextLang === "ko" ? "한국어" : "English"}
+          aria-label={t("language.label")}
+          title={t(nextLang === "ko" ? "language.korean" : "language.english")}
         >
           <Languages className="size-4" />
         </Button>
-        <Button variant="ghost" size="icon" onClick={onRefresh} disabled={refreshing}>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={onRefresh}
+          disabled={refreshing}
+          aria-label={t("common.refresh")}
+        >
           <RefreshCw className={refreshing ? "size-4 animate-spin" : "size-4"} />
         </Button>
-        <Button variant="ghost" size="icon" onClick={onOpenSettings}>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={onOpenSettings}
+          aria-label={t("common.settings")}
+        >
           <Settings className="size-4" />
         </Button>
       </div>
@@ -377,6 +388,7 @@ function AccountToolbar({
         variant="outline"
         size="default"
         onClick={onAddAccount}
+        aria-label={t("toolbar.addAccount")}
         className="h-10 gap-2 border-border bg-surface/80"
       >
         <Plus className="size-4" />

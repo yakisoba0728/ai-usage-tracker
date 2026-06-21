@@ -8,7 +8,8 @@
     "accounts": "Accounts"
   },
   "common": {
-    "refresh": "Refresh"
+    "refresh": "Refresh",
+    "settings": "Settings"
   },
   "tray": {
     "refreshUsage": "Refresh usage",
@@ -204,7 +205,8 @@
     "removed": "Stored account removed.",
     "removeFailed": "Remove failed: {{error}}",
     "reached": "{{provider}} reached {{percent}}%.",
-    "scanning": "Local sessions are being scanned again."
+    "scanning": "Local sessions are being scanned again.",
+    "dismiss": "Dismiss notification"
   },
   "time": {
     "justNow": "Updated just now",

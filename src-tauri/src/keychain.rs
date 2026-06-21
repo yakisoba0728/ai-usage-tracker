@@ -57,29 +57,66 @@ fn backend() -> &'static dyn Backend {
 }
 
 /// In test builds the backend is a process-wide in-memory map, so unit tests
-/// never touch (or prompt) the real OS keychain.
+/// never touch (or prompt) the real OS keychain. It also supports per-id write
+/// failure injection so store.rs can test the keychain-write-failure path.
 #[cfg(test)]
-fn backend() -> &'static dyn Backend {
-    use std::collections::HashMap;
+mod test_backend {
+    use super::Backend;
+    use std::collections::{HashMap, HashSet};
     use std::sync::{Mutex, OnceLock};
 
-    struct Mem(Mutex<HashMap<String, String>>);
+    pub struct Mem {
+        map: Mutex<HashMap<String, String>>,
+        fail_ids: Mutex<HashSet<String>>,
+    }
+
     impl Backend for Mem {
         fn store(&self, id: &str, blob: &str) -> Result<(), String> {
-            self.0.lock().unwrap().insert(id.into(), blob.into());
+            if self.fail_ids.lock().unwrap().contains(id) {
+                return Err("injected keychain store failure".into());
+            }
+            self.map.lock().unwrap().insert(id.into(), blob.into());
             Ok(())
         }
         fn load(&self, id: &str) -> Result<Option<String>, String> {
-            Ok(self.0.lock().unwrap().get(id).cloned())
+            Ok(self.map.lock().unwrap().get(id).cloned())
         }
         fn delete(&self, id: &str) -> Result<(), String> {
-            self.0.lock().unwrap().remove(id);
+            self.map.lock().unwrap().remove(id);
             Ok(())
         }
     }
 
     static MEM: OnceLock<Mem> = OnceLock::new();
-    MEM.get_or_init(|| Mem(Mutex::new(HashMap::new())))
+
+    pub fn mem() -> &'static Mem {
+        MEM.get_or_init(|| Mem {
+            map: Mutex::new(HashMap::new()),
+            fail_ids: Mutex::new(HashSet::new()),
+        })
+    }
+
+    /// Make `store(id, ..)` fail (or stop failing) for one id. Keyed by id so
+    /// concurrent tests using other ids are unaffected.
+    pub fn set_fail(id: &str, fail: bool) {
+        let mut s = mem().fail_ids.lock().unwrap();
+        if fail {
+            s.insert(id.into());
+        } else {
+            s.remove(id);
+        }
+    }
+}
+
+#[cfg(test)]
+fn backend() -> &'static dyn Backend {
+    test_backend::mem()
+}
+
+/// Test hook: toggle keychain write failure for a single account id.
+#[cfg(test)]
+pub(crate) fn fail_store_for(id: &str, fail: bool) {
+    test_backend::set_fail(id, fail);
 }
 
 /// Persist the secret blob for an account, overwriting any existing value.

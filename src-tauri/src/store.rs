@@ -135,36 +135,40 @@ pub fn remove(id: &str) -> bool {
 }
 
 /// Replace a stored credential in place (the refresh path persists rotated
-/// tokens). Returns true if the id was found. A keychain write failure is logged
-/// but not fatal — the in-memory token is still used for this cycle.
+/// tokens). Returns `true` only if the id was found AND the rotated secret was
+/// written to the keychain; on a keychain-write failure the on-disk metadata is
+/// left untouched and `false` is returned (the caller keeps using the in-memory
+/// token for this cycle and the account self-heals next refresh).
 pub fn update(cred: &StoredCredential) -> bool {
     let mut records = read_records();
-    let mut found = false;
-    for r in records.iter_mut() {
-        if r.id == cred.id {
-            r.provider = cred.provider;
-            r.label = cred.label.clone();
-            r.expires_at = cred.expires_at;
-            r.account_id = cred.account_id.clone();
-            found = true;
-            break;
+    let Some(idx) = records.iter().position(|r| r.id == cred.id) else {
+        return false; // unknown id; nothing to update
+    };
+    // Persist the secret FIRST. If the keychain write fails we must NOT advance
+    // the on-disk metadata: that would leave accounts.json claiming a new
+    // expiry/identity while the keychain still holds the OLD secret, desyncing
+    // the two (and, for single-use rotating refresh tokens, risking lockout).
+    let blob = match secret_blob_of(cred) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("keychain: serialize secret failed for {}: {e}", cred.id);
+            return false;
         }
+    };
+    if let Err(e) = crate::keychain::store_secret(&cred.id, &blob) {
+        eprintln!(
+            "keychain: failed to persist updated secret for {}: {e}",
+            cred.id
+        );
+        return false;
     }
-    if found {
-        match secret_blob_of(cred) {
-            Ok(blob) => {
-                if let Err(e) = crate::keychain::store_secret(&cred.id, &blob) {
-                    eprintln!(
-                        "keychain: failed to persist updated secret for {}: {e}",
-                        cred.id
-                    );
-                }
-            }
-            Err(e) => eprintln!("keychain: serialize secret failed for {}: {e}", cred.id),
-        }
-        persist_records(&records);
-    }
-    found
+    let r = &mut records[idx];
+    r.provider = cred.provider;
+    r.label = cred.label.clone();
+    r.expires_at = cred.expires_at;
+    r.account_id = cred.account_id.clone();
+    persist_records(&records);
+    true
 }
 
 pub fn list() -> Vec<StoredCredential> {
@@ -265,5 +269,62 @@ mod tests {
         assert!(!s.contains("access_token"));
         assert!(!s.contains("refresh_token"));
         assert!(s.contains("\"acct\""));
+    }
+
+    #[test]
+    fn update_does_not_advance_metadata_when_keychain_write_fails() {
+        let _g = ENV_LOCK.lock().unwrap();
+        let path = temp_path("update_fail");
+        let _ = std::fs::remove_file(&path);
+        std::env::set_var("AIT_ACCOUNTS_PATH", &path);
+
+        // Seed one account: token V1, expiry 100.
+        let id = add(StoredCredential {
+            id: "desync-test-acct".into(),
+            provider: Provider::Codex,
+            label: "a@b.c".into(),
+            access_token: "ACCESS-V1".into(),
+            refresh_token: Some("REFRESH-V1".into()),
+            expires_at: 100,
+            id_token: None,
+            account_id: None,
+        })
+        .unwrap();
+
+        // Make the keychain reject writes for this id, then attempt a rotation
+        // that would advance the metadata (token V2, expiry far in the future).
+        crate::keychain::fail_store_for(&id, true);
+        let rotated = StoredCredential {
+            id: id.clone(),
+            provider: Provider::Codex,
+            label: "a@b.c".into(),
+            access_token: "ACCESS-V2".into(),
+            refresh_token: Some("REFRESH-V2".into()),
+            expires_at: 999_999,
+            id_token: None,
+            account_id: None,
+        };
+        assert!(
+            !update(&rotated),
+            "update must report failure when the keychain write fails"
+        );
+
+        // Re-enable writes and assert NOTHING advanced: the file keeps expiry 100
+        // and the keychain keeps token V1 (no desync, no lockout).
+        crate::keychain::fail_store_for(&id, false);
+        let loaded = load();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(
+            loaded[0].expires_at, 100,
+            "metadata expiry must not advance when the secret write failed"
+        );
+        assert_eq!(
+            loaded[0].access_token, "ACCESS-V1",
+            "the old secret must remain in the keychain"
+        );
+
+        assert!(remove(&id));
+        std::env::remove_var("AIT_ACCOUNTS_PATH");
+        let _ = std::fs::remove_file(&path);
     }
 }

@@ -310,21 +310,13 @@ fn exhausted_window(code: i64, data: Option<&Value>) -> LimitWindow {
     }
 }
 
-fn capitalize(s: &str) -> String {
-    let mut c = s.chars();
-    match c.next() {
-        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
-        None => String::new(),
-    }
-}
-
 /// Subscription tier → display plan, dropping empty/"unknown".
 fn plan_from_level_str(level: Option<&str>) -> Option<String> {
     let level = level?.trim();
     if level.is_empty() || level.eq_ignore_ascii_case("unknown") {
         return None;
     }
-    Some(capitalize(level))
+    Some(crate::util::capitalize(level))
 }
 
 #[async_trait]

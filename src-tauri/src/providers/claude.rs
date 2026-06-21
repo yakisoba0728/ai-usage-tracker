@@ -109,13 +109,7 @@ fn millis_field(
 /// (e.g. "default_claude_max_20x" → "Max 20x"). Falls back to the subscription
 /// type capitalized.
 fn format_plan(tier: &Option<String>, sub: &Option<String>) -> Option<String> {
-    fn cap(s: &str) -> String {
-        let mut c = s.chars();
-        match c.next() {
-            Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
-            None => String::new(),
-        }
-    }
+    use crate::util::capitalize as cap;
     if let Some(t) = tier {
         let lower = t.to_lowercase();
         let toks: Vec<&str> = lower.split('_').collect();

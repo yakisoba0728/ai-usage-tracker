@@ -231,14 +231,6 @@ fn normalize(u: &WhamUsage) -> (Vec<LimitWindow>, Vec<LimitWindow>) {
     (ws, detail)
 }
 
-fn capitalize(s: &str) -> String {
-    let mut c = s.chars();
-    match c.next() {
-        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
-        None => String::new(),
-    }
-}
-
 /// Subscription renewal date (YYYY-MM-DD) from the id_token, if present.
 fn renewal_date(id_token: &Option<String>) -> Option<String> {
     let claims = jwt_payload(id_token.as_deref()?).ok()?;
@@ -319,7 +311,7 @@ pub(crate) async fn fetch_with(
     let raw_json = serde_json::to_string_pretty(&raw).ok();
     let u: WhamUsage = serde_json::from_value(raw)
         .map_err(|e| ProviderError::Parse(format!("codex usage: {e}")))?;
-    let plan = u.plan_type.as_deref().map(capitalize);
+    let plan = u.plan_type.as_deref().map(crate::util::capitalize);
     let account = match label_override {
         Some(l) => Some(l.to_string()),
         None => match (u.email.as_ref(), renewal_date(id_token)) {

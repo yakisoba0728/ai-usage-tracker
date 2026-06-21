@@ -12,6 +12,13 @@ use crate::providers::ProviderError;
 const ZAI_CHAT_URL: &str = "https://api.z.ai/api/paas/v4/chat/completions";
 const ZAI_MODEL: &str = "glm-4-flash";
 
+const CLAUDE_MESSAGES_URL: &str = "https://api.anthropic.com/v1/messages";
+const CLAUDE_VERSION: &str = "2023-06-01";
+// Claude Code's OAuth tokens require the OAuth beta flag on the Messages API.
+// Verify the exact tag with the guarded test-send (Step 8) and adjust if 401/400.
+const CLAUDE_OAUTH_BETA: &str = "oauth-2025-04-20";
+const CLAUDE_MODEL: &str = "claude-3-5-haiku-20241022";
+
 /// Cooldown so the auto-trigger sends at most once per window per service.
 const COOLDOWN_SECS: i64 = 600;
 
@@ -38,6 +45,44 @@ pub async fn send_zai(
     Ok(())
 }
 
+pub async fn send_claude(
+    http: &reqwest::Client,
+    token: &str,
+    url: &str,
+) -> Result<(), ProviderError> {
+    let resp = http
+        .post(url)
+        .header("Authorization", format!("Bearer {token}"))
+        .header("anthropic-version", CLAUDE_VERSION)
+        .header("anthropic-beta", CLAUDE_OAUTH_BETA)
+        .header("Content-Type", "application/json")
+        .json(&anchor_body(CLAUDE_MODEL))
+        .send()
+        .await
+        .map_err(|e| ProviderError::Network(e.to_string()))?;
+    let _ = http::send_for_json(resp, "claude anchor").await?;
+    Ok(())
+}
+
+/// Extract the current Claude access token from the Claude Code credential store.
+fn resolve_claude_auto() -> Result<String, ProviderError> {
+    let v = crate::secrets::read_claude_creds_json()?;
+    for key in ["claudeAiOauth", "claude_ai_oauth", "oauth"] {
+        if let Some(obj) = v.get(key).and_then(|o| o.as_object()) {
+            if let Some(tok) = obj
+                .get("accessToken")
+                .or_else(|| obj.get("access_token"))
+                .and_then(|s| s.as_str())
+            {
+                return Ok(tok.to_string());
+            }
+        }
+    }
+    Err(ProviderError::NotLoggedIn(
+        "claude creds: no accessToken".into(),
+    ))
+}
+
 /// Resolve the stored credential whose UI id is `service_id` (`stored:<id>`).
 fn resolve_stored(service_id: &str) -> Option<crate::store::StoredCredential> {
     crate::store::list()
@@ -59,15 +104,19 @@ pub async fn send(service_id: &str) -> Result<(), ProviderError> {
         }
         return match cred.provider {
             Provider::Zai => send_zai(&http, &cred.access_token, ZAI_CHAT_URL).await,
-            // Claude/Codex stored sends are added in later tasks.
+            Provider::Claude => send_claude(&http, &cred.access_token, CLAUDE_MESSAGES_URL).await,
+            // Codex stored send added in a later task.
             other => Err(ProviderError::NotLoggedIn(format!(
                 "anchoring for stored {other:?} not implemented yet"
             ))),
         };
     }
-    Err(ProviderError::NotLoggedIn(format!(
-        "anchoring not implemented for {service_id}"
-    )))
+    match service_id {
+        "auto:claude" => send_claude(&http, &resolve_claude_auto()?, CLAUDE_MESSAGES_URL).await,
+        other => Err(ProviderError::NotLoggedIn(format!(
+            "anchoring not implemented for {other}"
+        ))),
+    }
 }
 
 // ── Cooldown guard ──────────────────────────────────────────────────────────
@@ -120,6 +169,27 @@ mod tests {
         assert_eq!(b["max_tokens"], 1);
         assert_eq!(b["messages"][0]["role"], "user");
         assert!(b["messages"][0]["content"].is_string());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn send_claude_posts_oauth_bearer_version_and_one_token() {
+        use wiremock::matchers::{body_partial_json, header, header_exists, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .and(header("authorization", "Bearer oat-test"))
+            .and(header("anthropic-version", "2023-06-01"))
+            .and(header_exists("anthropic-beta"))
+            .and(body_partial_json(serde_json::json!({"max_tokens": 1})))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"id":"msg_x"})),
+            )
+            .mount(&server)
+            .await;
+        let client = crate::http::build_client();
+        let url = format!("{}/v1/messages", server.uri());
+        send_claude(&client, "oat-test", &url).await.unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

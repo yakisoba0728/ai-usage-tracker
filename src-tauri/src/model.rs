@@ -58,7 +58,10 @@ pub struct ServiceError {
 }
 
 impl ServiceError {
-    /// Code-only error (no technical detail).
+    /// Code-only error (no technical detail). Test-only: production errors are
+    /// minted solely via `From<ProviderError>`, which keeps `code` constrained
+    /// to the known `ProviderError` taxonomy.
+    #[cfg(test)]
     pub fn code(code: &str) -> Self {
         Self {
             code: code.to_string(),

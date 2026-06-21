@@ -16,7 +16,7 @@
 - Tokens stay in Rust; only masked metadata + usage snapshots cross IPC (P0). Never print token values to the terminal/transcript.
 - `panic = "abort"` must NOT be set.
 - Replies to the user in Korean.
-- Supported providers: **Claude, Codex, z.ai**. Unsupported (marked, never silently hidden): **Copilot, Gemini, Cursor**.
+- Supported: **Claude, z.ai** = message-anchor (auto toggle + manual send). **Codex** = manual reset-credit only (official `consume` endpoint; finite credits → no auto). Unsupported (marked, never silently hidden): **Copilot, Gemini, Cursor**. `anchor::supported()` (the auto/message gate) = Claude + z.ai only.
 - Auto-trigger rule (unified, user-approved): fire when the **5-hour** window's `used_percent == 0` (100% remaining), guarded by a 600 s per-`service_id` cooldown.
 - Run all `cargo` commands from `src-tauri/` (the crate root). Run `pnpm` from the repo root.
 
@@ -342,29 +342,152 @@ git checkout main && git merge --ff-only feat/anchor-claude && git branch -d fea
 
 ---
 
-### Task 3: Codex SPIKE — decide send mechanism
+### Task 3: Codex manual reset-credit (spike decided: A — manual-only, official endpoint)
 
-The native `rate_limit_reset_credits` is finite (force-reset, not anchoring) → unsuitable for auto. Sending via the (unofficial) ChatGPT backend is uncertain. Resolve here.
+**Spike outcome (user-approved):** auto-anchor for Codex is DROPPED — the message path (`/backend-api/codex/responses`) is SSE-only, model-name-sensitive, and unofficial/fragile. Codex instead gets a **manual** "use a reset credit" action via the official `POST https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume` (confirmed from openai/codex source + tests). Reset credits are **finite** (`available_count`), so this is manual-only, never auto. `supported()` (the auto/message-anchor gate) therefore drops Codex.
 
 **Files:**
-- Modify: `src-tauri/src/anchor.rs`
+- Modify: `src-tauri/src/anchor.rs`, `src-tauri/src/commands.rs`, `src-tauri/src/lib.rs`
 
-- [ ] **Step 1: Investigate** (read-only): check `openai/codex` references + `src-tauri/src/providers/codex.rs` for any message/conversation POST shape usable with the existing `auth.json` Bearer + `ChatGPT-Account-Id`. Determine if a minimal completion can be POSTed (e.g. `chatgpt.com/backend-api/...`).
+**Interfaces:**
+- `anchor::supported(provider)` becomes `matches!(provider, Provider::Claude | Provider::Zai)` (Codex removed).
+- Produces: `anchor::reset_codex(http, access_token, account_id, url) -> Result<String, ProviderError>` (returns the response `code`); `anchor::reset_codex_for(service_id) -> Result<String, ProviderError>`; command `reset_codex_now(service_id: String) -> Result<String, String>`.
+- Consumes: `crate::secrets::{read_json_file, codex_auth_path}`, `crate::http::{shared, send_for_json, build_client}`, `resolve_stored` (from Task 1).
 
-- [ ] **Step 2: Decide & record** the outcome inline in `anchor.rs` doc comments:
-  - **(a) Feasible** → implement `send_codex(http, token, account_id, url)` mirroring `send_claude` with the codex headers (`ChatGPT-Account-Id`, `codex_cli_rs/` UA), add `resolve_codex_auto()` (read `tokens.access_token` + `tokens.account_id` from `secrets::codex_auth_path()`), wire `auto:codex` + stored Codex into `send()`, add a wiremock request-shape test like Task 2.
-  - **(b) Infeasible** → make Codex **not supported for now**: keep `supported(Provider::Codex) == true` only if (a); otherwise change `supported()` to exclude Codex and update the Task-1 test (`supported_only_claude_codex_zai` → `supported_only_claude_zai`) + this plan's Global Constraints note. Record why.
+- [ ] **Step 1: Update the Task-1 `supported` test** in `anchor.rs` — replace `supported_only_claude_codex_zai` with:
 
-- [ ] **Step 3: Run checks.** Run: `cargo fmt && cargo clippy --lib --all-targets && cargo test --lib anchor::` — Expected: PASS.
+```rust
+    #[test]
+    fn supported_is_claude_and_zai_only() {
+        use crate::model::Provider;
+        assert!(supported(Provider::Claude));
+        assert!(supported(Provider::Zai));
+        // Codex is manual reset-credit only (finite credits) — no auto/message anchor.
+        assert!(!supported(Provider::Codex));
+        assert!(!supported(Provider::Copilot));
+        assert!(!supported(Provider::Gemini));
+        assert!(!supported(Provider::Cursor));
+    }
+```
 
-- [ ] **Step 4 (guarded live verification if (a) — REQUIRES USER CONFIRMATION):** `anchor::send("auto:codex")` → expect `Ok`; adjust endpoint/headers until 2xx or fall back to (b).
+- [ ] **Step 2: Run, verify fail.** Run: `cargo test --lib anchor::tests::supported` — Expected: FAIL (`supported(Codex)` still true).
 
-- [ ] **Step 5: Commit.**
+- [ ] **Step 3: Change `supported()`** body to `matches!(provider, Provider::Claude | Provider::Zai)`.
+
+- [ ] **Step 4: Write the failing reset test** in the `anchor.rs` test module:
+
+```rust
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn reset_codex_posts_redeem_id_and_returns_code() {
+        use wiremock::matchers::{body_partial_json, header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/backend-api/wham/rate-limit-reset-credits/consume"))
+            .and(header("authorization", "Bearer cx-test"))
+            .and(header("chatgpt-account-id", "acc-1"))
+            .and(body_partial_json(serde_json::json!({})))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"code":"reset","windows_reset":2})),
+            )
+            .mount(&server)
+            .await;
+        let client = crate::http::build_client();
+        let url = format!(
+            "{}/backend-api/wham/rate-limit-reset-credits/consume",
+            server.uri()
+        );
+        let code = reset_codex(&client, "cx-test", Some("acc-1"), &url).await.unwrap();
+        assert_eq!(code, "reset");
+    }
+```
+
+- [ ] **Step 5: Run, verify fail.** Run: `cargo test --lib anchor::tests::reset_codex` — Expected: FAIL (`reset_codex` not defined).
+
+- [ ] **Step 6: Implement** in `anchor.rs` (constants near the top, functions in the body):
+
+```rust
+const CODEX_RESET_URL: &str = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume";
+const CODEX_UA: &str = "codex_cli_rs/0.141.0 (ai-usage-tracker)";
+
+/// Consume one Codex rate-limit-reset credit (the official action the Codex CLI
+/// uses). Returns the response `code` ("reset" | "nothing_to_reset" | "no_credit"
+/// | "already_redeemed"). A fresh idempotency key per call so each deliberate
+/// click attempts a reset.
+pub async fn reset_codex(
+    http: &reqwest::Client,
+    access_token: &str,
+    account_id: Option<&str>,
+    url: &str,
+) -> Result<String, ProviderError> {
+    let redeem = format!("ait-{}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0));
+    let mut req = http
+        .post(url)
+        .header("Authorization", format!("Bearer {access_token}"))
+        .header("User-Agent", CODEX_UA)
+        .header("Content-Type", "application/json");
+    if let Some(acc) = account_id {
+        req = req.header("ChatGPT-Account-Id", acc);
+    }
+    let resp = req
+        .json(&serde_json::json!({ "redeem_request_id": redeem }))
+        .send()
+        .await
+        .map_err(|e| ProviderError::Network(e.to_string()))?;
+    let v = http::send_for_json(resp, "codex reset-credit").await?;
+    Ok(v.get("code").and_then(|c| c.as_str()).unwrap_or("unknown").to_string())
+}
+
+fn resolve_codex_auto() -> Result<(String, Option<String>), ProviderError> {
+    let v = crate::secrets::read_json_file(&crate::secrets::codex_auth_path())?;
+    let tokens = v
+        .get("tokens")
+        .ok_or_else(|| ProviderError::NotLoggedIn("codex auth.json: no tokens".into()))?;
+    let access = tokens
+        .get("access_token")
+        .and_then(|s| s.as_str())
+        .ok_or_else(|| ProviderError::NotLoggedIn("codex: no access_token".into()))?;
+    let account_id = tokens.get("account_id").and_then(|s| s.as_str()).map(String::from);
+    Ok((access.to_string(), account_id))
+}
+
+/// Manual Codex reset-credit for a UI service id (`auto:codex` or `stored:<id>`).
+pub async fn reset_codex_for(service_id: &str) -> Result<String, ProviderError> {
+    let http = http::shared();
+    let (access, account_id) = if service_id.starts_with("stored:") {
+        let cred = resolve_stored(service_id)
+            .ok_or_else(|| ProviderError::NotLoggedIn(format!("no stored account {service_id}")))?;
+        (cred.access_token, cred.account_id)
+    } else {
+        resolve_codex_auto()?
+    };
+    reset_codex(&http, &access, account_id.as_deref(), CODEX_RESET_URL).await
+}
+```
+
+- [ ] **Step 7: Add the command** to `commands.rs`:
+
+```rust
+/// Consume a Codex rate-limit-reset credit for one service. Returns the result
+/// code string. Tokens stay in Rust.
+#[tauri::command]
+pub async fn reset_codex_now(service_id: String) -> Result<String, String> {
+    crate::anchor::reset_codex_for(&service_id).await.map_err(|e| e.to_string())
+}
+```
+
+- [ ] **Step 8: Register** `commands::reset_codex_now` in the `lib.rs` `tauri::generate_handler!` list.
+
+- [ ] **Step 9: Run checks.** Run: `cargo fmt && cargo clippy --lib --all-targets && cargo test --lib` — Expected: PASS (all anchor tests + no regressions).
+
+- [ ] **Step 10 (guarded live verification — REQUIRES USER CONFIRMATION; consumes a FINITE reset credit):** deferred — the controller runs this with the user. `anchor::reset_codex_for("auto:codex")` → expect `Ok("reset")` (or `"no_credit"`/`"nothing_to_reset"`).
+
+- [ ] **Step 11: Commit** (branch only; controller merges after review). Message: `feat(anchor): Codex manual reset-credit (official consume endpoint)`.
 
 ```bash
-git checkout -b feat/anchor-codex
-git add -A && git commit -m "feat(anchor): codex send mechanism (spike outcome)"
-git checkout main && git merge --ff-only feat/anchor-codex && git branch -d feat/anchor-codex
+git checkout -b feat/anchor-codex-reset
+git add -A && git commit -m "feat(anchor): Codex manual reset-credit (official consume endpoint)"
 ```
 
 ---
@@ -553,6 +676,15 @@ export function sendAnchorNow(serviceId: string): Promise<void> {
   }
   return invoke<void>("send_anchor_now", { serviceId });
 }
+
+/** Codex-only: consume a rate-limit-reset credit. Returns the result code. */
+export function resetCodexNow(serviceId: string): Promise<string> {
+  if (!hasTauriRuntime()) {
+    void serviceId;
+    return Promise.resolve("nothing_to_reset");
+  }
+  return invoke<string>("reset_codex_now", { serviceId });
+}
 ```
 
 - [ ] **Step 2: Add the config helper** to `src/lib/providers.ts`:
@@ -639,18 +771,21 @@ export function ConfirmDialog({
 
 ```tsx
 import { useState } from "react";
-import { sendAnchorNow } from "@/lib/ipc";
+import { sendAnchorNow, resetCodexNow } from "@/lib/ipc";
 import { setAutoAnchor } from "@/lib/providers";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 ```
 
-Inside the component (after the existing `patch`/`commitName` helpers), add the supported-set + handlers:
+Inside the component (after the existing `patch`/`commitName` helpers), add the per-provider classification + handlers. There are three cases: **message-anchor** providers (Claude, z.ai) get an auto toggle + "send now"; **Codex** gets a manual reset-credit button (no auto — finite credits); everything else is unsupported.
 
 ```tsx
-  const ANCHOR_SUPPORTED = new Set(["claude", "codex", "zai"]);
-  const anchorSupported = ANCHOR_SUPPORTED.has(service.provider);
+  // Message-anchor providers (auto toggle + manual 1-token send).
+  const MESSAGE_ANCHOR = new Set(["claude", "zai"]);
+  const messageAnchor = MESSAGE_ANCHOR.has(service.provider);
+  const codexReset = service.provider === "codex";
   const autoOn = config?.auto_anchor?.[service.id] ?? false;
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [codexConfirmOpen, setCodexConfirmOpen] = useState(false);
 
   function toggleAuto(next: boolean) {
     if (!config) return;
@@ -665,7 +800,7 @@ Render a new block (place it above the Danger zone):
         <h4 className="text-xs font-semibold text-text-faint">
           {t("detail.anchor.title")}
         </h4>
-        {anchorSupported ? (
+        {messageAnchor ? (
           <>
             <label className="flex items-center justify-between gap-3 text-sm">
               <span>{t("detail.anchor.auto")}</span>
@@ -687,6 +822,21 @@ Render a new block (place it above the Danger zone):
               onOpenChange={setConfirmOpen}
             />
           </>
+        ) : codexReset ? (
+          <>
+            <p className="text-xs text-text-faint">{t("detail.anchor.codexNote")}</p>
+            <Button variant="ghost" onClick={() => setCodexConfirmOpen(true)}>
+              {t("detail.anchor.resetCredit")}
+            </Button>
+            <ConfirmDialog
+              open={codexConfirmOpen}
+              title={t("detail.anchor.codexConfirmTitle")}
+              body={t("detail.anchor.codexConfirmBody")}
+              confirmLabel={t("detail.anchor.resetCredit")}
+              onConfirm={() => void resetCodexNow(service.id)}
+              onOpenChange={setCodexConfirmOpen}
+            />
+          </>
         ) : (
           <p className="text-xs text-text-faint">{t("detail.anchor.unsupported")}</p>
         )}
@@ -703,7 +853,11 @@ en.json:
       "sendNow": "Send a message now",
       "unsupported": "Not supported for this provider (calendar quota / no send path).",
       "confirmTitle": "Send an anchor message?",
-      "confirmBody": "This sends a real 1-token message, consumes quota, and may violate the provider's terms. Continue?"
+      "confirmBody": "This sends a real 1-token message, consumes quota, and may violate the provider's terms. Continue?",
+      "codexNote": "Codex resets the 5-hour window with a finite reset credit (manual only).",
+      "resetCredit": "Use a reset credit",
+      "codexConfirmTitle": "Use a Codex reset credit?",
+      "codexConfirmBody": "This consumes one of your finite Codex reset credits to reset the 5-hour window now. Continue?"
     },
 ```
 
@@ -715,7 +869,11 @@ ko.json:
       "sendNow": "지금 메시지 보내기",
       "unsupported": "이 제공자는 지원하지 않음 (달력형 쿼터 / 전송 경로 없음).",
       "confirmTitle": "앵커 메시지를 보낼까요?",
-      "confirmBody": "실제 1-토큰 메시지를 전송하며 쿼터를 소모하고 제공자 약관에 위배될 수 있습니다. 계속할까요?"
+      "confirmBody": "실제 1-토큰 메시지를 전송하며 쿼터를 소모하고 제공자 약관에 위배될 수 있습니다. 계속할까요?",
+      "codexNote": "Codex는 유한한 리셋 크레딧으로 5시간 윈도우를 리셋합니다 (수동 전용).",
+      "resetCredit": "리셋 크레딧 사용",
+      "codexConfirmTitle": "Codex 리셋 크레딧을 사용할까요?",
+      "codexConfirmBody": "유한한 Codex 리셋 크레딧 1개를 소모해 지금 5시간 윈도우를 리셋합니다. 계속할까요?"
     },
 ```
 
@@ -740,13 +898,14 @@ git checkout main && git merge --ff-only feat/anchor-frontend && git branch -d f
 
 ```markdown
 - **Window anchoring (opt-in, off by default).** For providers with a rolling
-  5-hour window (Claude, Codex, z.ai), the app can send a minimal 1-token
-  message to anchor a fresh window so its reset time is predictable — via a
+  5-hour window, the app can start a fresh window so its reset time is
+  predictable. **Claude and z.ai** send a minimal 1-token message — via a
   per-account toggle (auto-fire when the 5-hour window is empty) or a confirmed
-  manual button in the detail dialog. The send happens entirely in Rust (tokens
+  manual button. **Codex** instead uses its official, finite *reset credit*
+  (manual button only — no auto). The action happens entirely in Rust (tokens
   never cross IPC). Copilot/Gemini (calendar quotas) and Cursor (no send path)
-  are shown as **not supported**. Sending consumes real quota and may be subject
-  to each provider's terms.
+  are shown as **not supported**. These actions consume real quota/credits and
+  may be subject to each provider's terms.
 ```
 
 - [ ] **Step 2: Verify markdown** renders (no broken table). Run: `git diff README.md` and eyeball.

@@ -101,14 +101,19 @@ const AccountCardButton = memo(function AccountCardButton({
           <ProviderIconTile provider={row.service.provider} status={row.status} />
           <div className="min-w-0">
             <div className="flex min-w-0 items-center gap-2">
-              <span className="truncate text-sm font-semibold">{row.title}</span>
+              <span className="truncate text-sm font-semibold" title={row.title}>
+                {row.title}
+              </span>
               {row.service.source === "stored" && (
                 <span className="rounded border border-border bg-surface px-1.5 py-0.5 text-[10px] text-text-faint">
                   {t("card.stored")}
                 </span>
               )}
             </div>
-            <div className="num mt-0.5 truncate text-xs text-text-faint">
+            <div
+              className="num mt-0.5 truncate text-xs text-text-faint"
+              title={row.subtitle ?? undefined}
+            >
               {row.subtitle ?? row.service.id.replace("auto:", "").replace("stored:", "")}
             </div>
           </div>
@@ -167,7 +172,7 @@ const AccountCardButton = memo(function AccountCardButton({
           )}
 
           <div className="mt-auto flex items-center justify-end pt-4 text-xs text-text-faint">
-            <span className="opacity-0 transition-opacity group-hover:opacity-100">
+            <span className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
               {t("card.viewDetails")}
             </span>
           </div>

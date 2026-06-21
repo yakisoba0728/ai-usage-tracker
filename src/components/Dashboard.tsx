@@ -369,11 +369,23 @@ function AccountToolbar({
   onAddAccount: () => void;
 }) {
   const { t } = useTranslation();
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        inputRef.current?.focus();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   return (
     <div className="flex items-center gap-2 px-4 py-5">
       <label className="relative min-w-0 flex-1">
         <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-text-faint" />
         <input
+          ref={inputRef}
           value={query}
           onChange={(event) => onQueryChange(event.target.value)}
           placeholder={t("toolbar.searchPlaceholder")}

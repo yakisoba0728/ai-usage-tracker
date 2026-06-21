@@ -12,20 +12,6 @@ export function percentSeverity(p: number | null): Severity | null {
   return "ok";
 }
 
-/** Solid fill utility for a usage percent (bars, dots). */
-export function severityBarClass(sev: Severity | null): string {
-  switch (sev) {
-    case "crit":
-      return "bg-crit";
-    case "warn":
-      return "bg-warn";
-    case "ok":
-      return "bg-ok";
-    default:
-      return "bg-text-faint/40";
-  }
-}
-
 /** "72%" or "—" when there is no value; whole-number percent. */
 export function formatPercent(p: number | null): string {
   if (p == null) return "—";

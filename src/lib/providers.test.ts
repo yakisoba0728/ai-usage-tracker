@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   highestBurnWindow,
   providerIndex,
-  providerOrder,
   resolveHeadlineWindow,
 } from "@/lib/providers";
 import type {
@@ -45,8 +44,6 @@ function service(partial: Partial<ServiceUsage>): ServiceUsage {
     ...partial,
   };
 }
-
-const CANONICAL = ["claude", "codex", "gemini", "copilot", "cursor", "zai"];
 
 describe("providerIndex", () => {
   it("maps a provider to its canonical slot", () => {
@@ -91,27 +88,5 @@ describe("resolveHeadlineWindow", () => {
       detail_windows: [win("a", 10), win("b", 65)],
     });
     expect(resolveHeadlineWindow(s, null)?.label).toBe("b");
-  });
-});
-
-describe("providerOrder", () => {
-  it("uses canonical order for a null config or all-zero sort_index", () => {
-    expect(providerOrder(null)).toEqual(CANONICAL);
-    expect(
-      providerOrder(cfg([pc(0), pc(0), pc(0), pc(0), pc(0), pc(0)])),
-    ).toEqual(CANONICAL);
-  });
-
-  it("sorts by sort_index when it is set", () => {
-    // reverse the indices so zai (canonical 5) gets the lowest sort_index
-    const config = cfg([pc(5), pc(4), pc(3), pc(2), pc(1), pc(0)]);
-    expect(providerOrder(config)).toEqual([
-      "zai",
-      "cursor",
-      "copilot",
-      "gemini",
-      "codex",
-      "claude",
-    ]);
   });
 });

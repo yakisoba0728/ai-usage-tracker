@@ -20,11 +20,9 @@ export interface AccountRow {
   service: ServiceUsage;
   title: string;
   subtitle: string | null;
-  providerName: string;
   status: ServiceStatus;
   headline: LimitWindow | null;
   headlinePercent: number | null;
-  resetLabel: string | null;
   usedLimit: string | null;
 }
 
@@ -123,17 +121,14 @@ function toAccountRow(
   config: AppConfig | null,
 ): AccountRow {
   const headline = resolveHeadlineWindow(service, config);
-  const providerName = providerDisplayName(config, service.provider);
   return {
     id: service.id,
     service,
-    title: providerName,
+    title: providerDisplayName(config, service.provider),
     subtitle: service.account,
-    providerName,
     status: serviceStatus(service, config),
     headline,
     headlinePercent: headline?.used_percent ?? null,
-    resetLabel: null,
     usedLimit: headline ? formatUsedLimit(headline) : null,
   };
 }
@@ -169,7 +164,6 @@ function rowMatchesQuery(row: AccountRow, query: string): boolean {
   return [
     row.title,
     row.subtitle,
-    row.providerName,
     row.service.provider,
     row.service.plan,
     row.service.id,

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { serviceStatus, severityToStatus, summarizeServices } from "@/lib/status";
-import type { LimitWindow, Provider, ServiceUsage } from "@/lib/types";
+import { serviceStatus, severityToStatus } from "@/lib/status";
+import type { LimitWindow, ServiceUsage } from "@/lib/types";
 
 function win(label: string, used_percent: number | null): LimitWindow {
   return { label, used_percent, resets_at: null, used: null, limit: null };
@@ -50,32 +50,5 @@ describe("serviceStatus", () => {
 
   it("is unknown when connected but has no usable percent", () => {
     expect(serviceStatus(service({ windows: [] }), null)).toBe("unknown");
-  });
-});
-
-describe("summarizeServices", () => {
-  it("counts connection + severity buckets and tracks the burn leader", () => {
-    const provider = (p: Provider, pct: number | null, connected = true) =>
-      service({
-        id: `auto:${p}`,
-        provider: p,
-        connected,
-        windows: pct == null ? [] : [win("5-hour", pct)],
-      });
-    const services = [
-      provider("claude", 92), // critical
-      provider("codex", 70), // warning
-      provider("gemini", null, false), // offline
-    ];
-
-    const s = summarizeServices(services, null);
-    expect(s.total).toBe(3);
-    expect(s.connected).toBe(2);
-    expect(s.offline).toBe(1);
-    expect(s.critical).toBe(1);
-    expect(s.warning).toBe(1);
-    expect(s.maxPercent).toBe(92);
-    expect(s.maxProvider).toBe("claude");
-    expect(s.averagePercent).toBe(81); // (92 + 70) / 2
   });
 });

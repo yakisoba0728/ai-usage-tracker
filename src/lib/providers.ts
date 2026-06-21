@@ -42,24 +42,6 @@ export function providerDisplayName(
 }
 
 /**
- * Ordered provider list for the grid, derived from `sort_index`. When every
- * sort_index is 0 (the default / fresh state), falls back to canonical order so
- * the very first render is deterministic before the user reorders anything.
- */
-export function providerOrder(config: AppConfig | null): Provider[] {
-  if (!config) return [...PROVIDER_ORDER];
-  const allDefault = config.providers.every((p) => p.sort_index === 0);
-  if (allDefault) return [...PROVIDER_ORDER];
-  return [...PROVIDER_ORDER].sort((a, b) => {
-    const sa = config.providers[providerIndex(a)].sort_index;
-    const sb = config.providers[providerIndex(b)].sort_index;
-    if (sa !== sb) return sa - sb;
-    // Stable tie-break on canonical position.
-    return providerIndex(a) - providerIndex(b);
-  });
-}
-
-/**
  * Resolve the headline window for a card / toast — the user's pinned
  * `primary_window` if set and present, else the first primary window, else the
  * highest-burn window across primary + detail. Returns null when there is no
@@ -100,20 +82,4 @@ export function highestBurnWindow(
     }
   }
   return best;
-}
-
-/**
- * Windows to render on a card: the resolved headline first, then the remaining
- * primary windows (the headline is not duplicated). Detail windows never spill
- * onto the card except when the user has explicitly pinned one as primary.
- */
-export function cardWindows(
-  service: ServiceUsage,
-  config: AppConfig | null,
-): LimitWindow[] {
-  const primary = service.windows ?? [];
-  const headline = resolveHeadlineWindow(service, config);
-  if (!headline) return primary;
-  const rest = primary.filter((w) => w !== headline);
-  return [headline, ...rest];
 }

@@ -29,6 +29,7 @@
     "oauth": "OAuth",
     "offline": "Offline",
     "online": "Online",
+    "loggedOut": "Not logged in",
     "noUsageWindow": "No usage window",
     "limitNotReported": "Limit not reported",
     "resetsIn": "Resets in {{time}}",

@@ -29,6 +29,7 @@
     "oauth": "OAuth",
     "offline": "오프라인",
     "online": "온라인",
+    "loggedOut": "로그인 안됨",
     "noUsageWindow": "사용량 창 없음",
     "limitNotReported": "한도 미보고",
     "resetsIn": "{{time}} 후 초기화",

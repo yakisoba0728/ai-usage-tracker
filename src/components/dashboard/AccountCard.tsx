@@ -70,6 +70,7 @@ const AccountCardButton = memo(function AccountCardButton({
   onSelect: (id: string) => void;
 }) {
   const { t } = useTranslation();
+  const connected = row.service.connected;
   const reset = row.headline?.resets_at
     ? formatResetShort(row.headline.resets_at, nowMs, t)
     : null;
@@ -78,11 +79,6 @@ const AccountCardButton = memo(function AccountCardButton({
   const secondary = row.service.windows
     .filter((window) => window !== row.headline)
     .slice(0, 2);
-  // When the headline reports no numeric used/limit, show its reset countdown in
-  // that slot instead of "limit not reported" — and drop the footer reset so the
-  // same countdown isn't printed twice on the card.
-  const resetInline =
-    row.usedLimit == null && row.service.connected && reset != null;
 
   return (
     <button
@@ -90,12 +86,12 @@ const AccountCardButton = memo(function AccountCardButton({
       onClick={() => onSelect(row.id)}
       className={cn(
         "group relative flex min-h-[188px] w-full flex-col overflow-hidden rounded-lg border p-4 text-left",
-        "transition-[background-color,border-color,box-shadow,transform] duration-150 hover:-translate-y-0.5 hover:border-border-strong hover:bg-surface",
+        "transition-[background-color,border-color,box-shadow,transform,opacity] duration-150 hover:-translate-y-0.5 hover:border-border-strong hover:bg-surface",
         selected
           ? "border-border-strong bg-surface-2 shadow-lg shadow-black/10"
-          : row.status === "offline"
-            ? "border-border bg-surface/40 hover:bg-surface/60"
-            : "border-border bg-surface/60 hover:border-border-strong hover:bg-surface",
+          : connected
+            ? "border-border bg-surface/60 hover:border-border-strong hover:bg-surface"
+            : "border-border bg-surface/40 opacity-55 hover:bg-surface/60 hover:opacity-100",
       )}
     >
       <div className="flex items-start justify-between gap-3">
@@ -116,71 +112,73 @@ const AccountCardButton = memo(function AccountCardButton({
           </div>
         </div>
         <span className="rounded-md border border-border bg-surface px-2 py-1 text-xs text-text-dim">
-          {row.service.connected
+          {connected
             ? row.service.source === "stored"
               ? t("card.session")
               : t("card.oauth")
-            : t("card.offline")}
+            : t("card.loggedOut")}
         </span>
       </div>
 
-      <div className="mt-5">
-        <div className="mb-2 flex items-end justify-between gap-3">
-          <div className="min-w-0">
-            <div className="truncate text-xs font-medium text-text-faint">
-              {row.headline?.label ?? t("card.noUsageWindow")}
+      {connected ? (
+        <>
+          <div className="mt-5">
+            <div className="mb-2 flex items-end justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex items-baseline gap-1.5">
+                  <span className="truncate text-xs font-medium text-text-faint">
+                    {row.headline?.label ?? t("card.noUsageWindow")}
+                  </span>
+                  {reset && (
+                    <span className="num shrink-0 text-[11px] text-text-faint/70">
+                      · {t("card.resetsIn", { time: reset })}
+                    </span>
+                  )}
+                </div>
+                {row.usedLimit && (
+                  <div className="num mt-1 truncate text-xs text-text-faint">
+                    {row.usedLimit}
+                  </div>
+                )}
+              </div>
+              <div className={cn("num text-lg font-semibold", statusTextClass(row.status))}>
+                {formatPercent(percent)}
+              </div>
             </div>
-            <div className="num mt-1 truncate text-xs text-text-faint">
-              {row.usedLimit ??
-                (row.service.connected
-                  ? reset
-                    ? t("card.resetsIn", { time: reset })
-                    : t("card.limitNotReported")
-                  : row.service.error
-                    ? formatServiceError(row.service.error, t)
-                    : t("card.offline"))}
+            <div className="h-1.5 overflow-hidden rounded-full bg-white/[0.10]">
+              {percent != null && (
+                <div
+                  className={cn("h-full rounded-full transition-[width] duration-300", statusFillClass(row.status))}
+                  style={{ width }}
+                />
+              )}
             </div>
           </div>
-          <div className={cn("num text-lg font-semibold", statusTextClass(row.status))}>
-            {formatPercent(percent)}
+
+          {secondary.length > 0 && (
+            <div className="mt-4 grid gap-2">
+              {secondary.map((window) => (
+                <CompactWindowLine key={window.label} window={window} nowMs={nowMs} />
+              ))}
+            </div>
+          )}
+
+          <div className="mt-auto flex items-center justify-end pt-4 text-xs text-text-faint">
+            <span className="opacity-0 transition-opacity group-hover:opacity-100">
+              {t("card.viewDetails")}
+            </span>
           </div>
-        </div>
-        <div className="h-1.5 overflow-hidden rounded-full bg-white/[0.10]">
-          {percent != null && (
-            <div
-              className={cn("h-full rounded-full transition-[width] duration-300", statusFillClass(row.status))}
-              style={{ width }}
-            />
+        </>
+      ) : (
+        <div className="mt-6 flex flex-1 flex-col justify-center gap-1">
+          <span className="text-sm font-medium text-text-dim">{t("card.loggedOut")}</span>
+          {row.service.error && (
+            <span className="text-xs text-text-faint">
+              {formatServiceError(row.service.error, t)}
+            </span>
           )}
         </div>
-      </div>
-
-      <div className="mt-4 grid gap-2">
-        {secondary.map((window) => (
-          <CompactWindowLine key={window.label} window={window} />
-        ))}
-        {secondary.length === 0 && (
-          <div className="flex items-center justify-between text-xs text-text-faint">
-            <span>{row.service.connected ? t("card.online") : t("card.offline")}</span>
-            <span className="num">{reset ?? "—"}</span>
-          </div>
-        )}
-      </div>
-
-      <div className="mt-auto flex items-center justify-between pt-4 text-xs text-text-faint">
-        <span className="num">
-          {!row.service.connected
-            ? t("card.disconnected")
-            : resetInline
-              ? null
-              : reset
-                ? t("card.resetsIn", { time: reset })
-                : t("card.noReset")}
-        </span>
-        <span className="opacity-0 transition-opacity group-hover:opacity-100">
-          {t("card.viewDetails")}
-        </span>
-      </div>
+      )}
 
       {loading && (
         <span className="provider-fetch-dot absolute right-2 top-2 size-2 rounded-full bg-[#73b8f4]" />
@@ -189,8 +187,18 @@ const AccountCardButton = memo(function AccountCardButton({
   );
 });
 
-function CompactWindowLine({ window }: { window: LimitWindow }) {
+function CompactWindowLine({
+  window,
+  nowMs,
+}: {
+  window: LimitWindow;
+  nowMs: number;
+}) {
+  const { t } = useTranslation();
   const percent = window.used_percent;
+  const reset = window.resets_at
+    ? formatResetShort(window.resets_at, nowMs, t)
+    : null;
   const tone =
     percent == null
       ? "unknown"
@@ -202,7 +210,14 @@ function CompactWindowLine({ window }: { window: LimitWindow }) {
   return (
     <div>
       <div className="mb-1 flex items-center justify-between gap-2 text-xs">
-        <span className="truncate text-text-faint">{window.label}</span>
+        <span className="flex min-w-0 items-baseline gap-1.5 text-text-faint">
+          <span className="truncate">{window.label}</span>
+          {reset && (
+            <span className="num shrink-0 text-[11px] text-text-faint/70">
+              · {t("card.resetsIn", { time: reset })}
+            </span>
+          )}
+        </span>
         <span className={cn("num shrink-0", statusTextClass(tone))}>
           {formatPercent(percent)}
         </span>

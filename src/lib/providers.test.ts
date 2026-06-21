@@ -4,6 +4,7 @@ import {
   highestBurnWindow,
   providerIndex,
   resolveHeadlineWindow,
+  setAutoAnchor,
 } from "@/lib/providers";
 import type {
   AppConfig,
@@ -64,6 +65,17 @@ describe("highestBurnWindow", () => {
     ).toBe("b");
     expect(highestBurnWindow([win("a", null)])).toBeNull();
     expect(highestBurnWindow([])).toBeNull();
+  });
+});
+
+describe("setAutoAnchor", () => {
+  it("sets and overrides the flag immutably", () => {
+    const base = { poll_seconds: 300, providers: [] as never, auto_anchor: {} } as never;
+    const a = setAutoAnchor(base, "stored:zai-1", true);
+    expect(a.auto_anchor["stored:zai-1"]).toBe(true);
+    const b = setAutoAnchor(a, "stored:zai-1", false);
+    expect(b.auto_anchor["stored:zai-1"]).toBe(false);
+    expect(a.auto_anchor["stored:zai-1"]).toBe(true); // original untouched
   });
 });
 

@@ -120,6 +120,18 @@
       "dangerZone": "위험 구역",
       "reauthAccount": "계정 재인증"
     },
+    "anchor": {
+      "title": "윈도우 앵커링",
+      "auto": "5시간 윈도우가 비면 자동으로 앵커링",
+      "sendNow": "지금 메시지 보내기",
+      "unsupported": "이 제공자는 지원하지 않음 (달력형 쿼터 / 전송 경로 없음).",
+      "confirmTitle": "앵커 메시지를 보낼까요?",
+      "confirmBody": "실제 1-토큰 메시지를 전송하며 쿼터를 소모하고 제공자 약관에 위배될 수 있습니다. 계속할까요?",
+      "codexNote": "Codex는 유한한 리셋 크레딧으로 5시간 윈도우를 리셋합니다 (수동 전용).",
+      "resetCredit": "리셋 크레딧 사용",
+      "codexConfirmTitle": "Codex 리셋 크레딧을 사용할까요?",
+      "codexConfirmBody": "유한한 Codex 리셋 크레딧 1개를 소모해 지금 5시간 윈도우를 리셋합니다. 계속할까요?"
+    },
     "raw": {
       "empty": "원문 응답 없음 — 이 계정은 이번 주기에 HTTP 호출을 하지 않았습니다."
     },

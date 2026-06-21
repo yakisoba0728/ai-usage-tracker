@@ -49,6 +49,15 @@ export function patchProviderConfig(
   return { ...config, providers };
 }
 
+/** Immutably set the per-service auto-anchor opt-in flag. */
+export function setAutoAnchor(
+  config: AppConfig,
+  serviceId: string,
+  enabled: boolean,
+): AppConfig {
+  return { ...config, auto_anchor: { ...config.auto_anchor, [serviceId]: enabled } };
+}
+
 /**
  * Display name for a provider — honors a user `custom_name`, else the canonical
  * label. Mirrors `AppConfig::display_name` in config.rs.

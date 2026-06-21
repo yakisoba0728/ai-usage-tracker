@@ -4,10 +4,13 @@ import { useTranslation } from "react-i18next";
 
 import { allServiceWindows } from "@/components/dashboard/helpers";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { sendAnchorNow, resetCodexNow } from "@/lib/ipc";
 import {
   patchProviderConfig,
   PROVIDER_ORDER,
   providerDisplayName,
+  setAutoAnchor,
 } from "@/lib/providers";
 import type { AppConfig, ProviderConfig, ServiceUsage } from "@/lib/types";
 import { clamp } from "@/lib/utils";
@@ -30,6 +33,19 @@ export function InspectorSettings({
   const { t } = useTranslation();
   const [nameDraft, setNameDraft] = useState(providerConfig?.custom_name ?? "");
   const [thresholdDraft, setThresholdDraft] = useState("");
+
+  // Message-anchor providers (auto toggle + manual 1-token send).
+  const MESSAGE_ANCHOR = new Set(["claude", "zai"]);
+  const messageAnchor = MESSAGE_ANCHOR.has(service.provider);
+  const codexReset = service.provider === "codex";
+  const autoOn = config?.auto_anchor?.[service.id] ?? false;
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [codexConfirmOpen, setCodexConfirmOpen] = useState(false);
+
+  function toggleAuto(next: boolean) {
+    if (!config) return;
+    onConfigChange(setAutoAnchor(config, service.id, next));
+  }
 
   useEffect(() => {
     setNameDraft(providerConfig?.custom_name ?? "");
@@ -138,6 +154,54 @@ export function InspectorSettings({
             {t("detail.settings.add")}
           </Button>
         </div>
+      </div>
+
+      <div className="rounded-lg border border-border bg-surface/50 p-4">
+        <section className="space-y-2">
+          <h4 className="text-xs font-semibold text-text-faint">
+            {t("detail.anchor.title")}
+          </h4>
+          {messageAnchor ? (
+            <>
+              <label className="flex items-center justify-between gap-3 text-sm">
+                <span>{t("detail.anchor.auto")}</span>
+                <input
+                  type="checkbox"
+                  checked={autoOn}
+                  onChange={(e) => toggleAuto(e.target.checked)}
+                />
+              </label>
+              <Button variant="ghost" onClick={() => setConfirmOpen(true)}>
+                {t("detail.anchor.sendNow")}
+              </Button>
+              <ConfirmDialog
+                open={confirmOpen}
+                title={t("detail.anchor.confirmTitle")}
+                body={t("detail.anchor.confirmBody")}
+                confirmLabel={t("detail.anchor.sendNow")}
+                onConfirm={() => void sendAnchorNow(service.id)}
+                onOpenChange={setConfirmOpen}
+              />
+            </>
+          ) : codexReset ? (
+            <>
+              <p className="text-xs text-text-faint">{t("detail.anchor.codexNote")}</p>
+              <Button variant="ghost" onClick={() => setCodexConfirmOpen(true)}>
+                {t("detail.anchor.resetCredit")}
+              </Button>
+              <ConfirmDialog
+                open={codexConfirmOpen}
+                title={t("detail.anchor.codexConfirmTitle")}
+                body={t("detail.anchor.codexConfirmBody")}
+                confirmLabel={t("detail.anchor.resetCredit")}
+                onConfirm={() => void resetCodexNow(service.id)}
+                onOpenChange={setCodexConfirmOpen}
+              />
+            </>
+          ) : (
+            <p className="text-xs text-text-faint">{t("detail.anchor.unsupported")}</p>
+          )}
+        </section>
       </div>
 
       <div className="rounded-lg border border-border bg-surface/50 p-4">

@@ -86,6 +86,23 @@ export function removeAccount(id: string): Promise<boolean> {
   return invoke<boolean>("remove_account", { id });
 }
 
+export function sendAnchorNow(serviceId: string): Promise<void> {
+  if (!hasTauriRuntime()) {
+    void serviceId;
+    return Promise.resolve();
+  }
+  return invoke<void>("send_anchor_now", { serviceId });
+}
+
+/** Codex-only: consume a rate-limit-reset credit. Returns the result code. */
+export function resetCodexNow(serviceId: string): Promise<string> {
+  if (!hasTauriRuntime()) {
+    void serviceId;
+    return Promise.resolve("nothing_to_reset");
+  }
+  return invoke<string>("reset_codex_now", { serviceId });
+}
+
 export function onUsageUpdated(
   cb: (snapshot: UsageSnapshot) => void,
 ): Promise<UnlistenFn> {

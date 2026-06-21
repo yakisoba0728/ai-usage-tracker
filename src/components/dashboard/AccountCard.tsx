@@ -13,6 +13,7 @@ import {
 } from "@/lib/format";
 import { refreshAccount, sendAnchorNow } from "@/lib/ipc";
 import type { AccountRow, AccountSection } from "@/lib/inspectorModel";
+import { anchorSupported } from "@/lib/providers";
 import { severityToStatus } from "@/lib/status";
 import type { LimitWindow, Provider } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -84,8 +85,7 @@ const AccountCardButton = memo(function AccountCardButton({
     .filter((window) => window !== row.headline)
     .slice(0, 2);
 
-  const ANCHOR_SUPPORTED = new Set(["claude", "codex", "zai"]);
-  const anchorSupported = ANCHOR_SUPPORTED.has(row.service.provider);
+  const isAnchorSupported = anchorSupported(row.service.provider);
 
   return (
     <div className="group relative">
@@ -135,13 +135,13 @@ const AccountCardButton = memo(function AccountCardButton({
           <span
             className={cn(
               "rounded-md border px-2 py-1 text-[10px]",
-              anchorSupported
+              isAnchorSupported
                 ? "border-border bg-surface text-text-dim"
                 : "border-border bg-surface/50 text-text-faint",
             )}
-            title={anchorSupported ? t("card.autoAvail") : t("card.autoUnavail")}
+            title={isAnchorSupported ? t("card.autoAvail") : t("card.autoUnavail")}
           >
-            {anchorSupported ? t("card.autoAvail") : t("card.autoUnavail")}
+            {isAnchorSupported ? t("card.autoAvail") : t("card.autoUnavail")}
           </span>
         </div>
       </div>
@@ -190,7 +190,7 @@ const AccountCardButton = memo(function AccountCardButton({
             </div>
           )}
 
-          <div className="mt-auto flex items-center justify-end pt-4 text-xs text-text-faint">
+          <div className="mt-auto flex items-center justify-start pt-4 text-xs text-text-faint">
             <span className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
               {t("card.viewDetails")}
             </span>
@@ -222,7 +222,7 @@ const AccountCardButton = memo(function AccountCardButton({
         >
           {t("card.refresh")}
         </button>
-        {anchorSupported && connected && (
+        {isAnchorSupported && connected && (
           <button
             type="button"
             title={t("card.sendRequest")}

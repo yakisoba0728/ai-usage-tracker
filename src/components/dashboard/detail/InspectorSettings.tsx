@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { sendAnchorNow } from "@/lib/ipc";
 import {
+  anchorSupported,
   patchProviderConfig,
   PROVIDER_ORDER,
   providerDisplayName,
@@ -35,8 +36,7 @@ export function InspectorSettings({
   const [thresholdDraft, setThresholdDraft] = useState("");
 
   // Message-anchor providers (auto toggle + manual 1-token send).
-  const MESSAGE_ANCHOR = new Set(["claude", "codex", "zai"]);
-  const messageAnchor = MESSAGE_ANCHOR.has(service.provider);
+  const messageAnchor = anchorSupported(service.provider);
   const autoOn = config?.auto_anchor?.[service.id] ?? false;
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [anchorStatus, setAnchorStatus] = useState<string | null>(null);
@@ -48,6 +48,7 @@ export function InspectorSettings({
 
   useEffect(() => {
     setNameDraft(providerConfig?.custom_name ?? "");
+    setAnchorStatus(null);
   }, [providerConfig?.custom_name, service.provider]);
 
   function patch(patchValue: Partial<ProviderConfig>) {

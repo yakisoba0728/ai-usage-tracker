@@ -317,7 +317,10 @@ function createBrowserSnapshot(): UsageSnapshot {
         plan: "Pro",
         account: "z.ai workspace",
         error: null,
-        windows: [windowUsage("Weekly", 77, now + 3 * 24 * 60 * 60, 77, 100)],
+        windows: [
+          windowUsage("5-hour", 0, now + 5 * 60 * 60, 0, 100),
+          windowUsage("Weekly", 77, now + 3 * 24 * 60 * 60, 77, 100),
+        ],
         detail_windows: [windowUsage("GLM-4.5", 58, now + 3 * 24 * 60 * 60, 58, 100)],
         raw_response: JSON.stringify(
           {

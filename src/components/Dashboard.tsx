@@ -148,7 +148,7 @@ export function Dashboard() {
 
   useEffect(() => {
     const un = onAnchorResult((p) => {
-      pushToast(p.ok ? t("toast.anchorSent") : t("toast.anchorFailed", { error: p.detail ?? "" }));
+      pushToast(p.ok ? t("toast.anchorSent") : t("toast.anchorFailed", { error: p.detail ?? t("error.unknown") }));
     }).catch((e) => {
       console.error("subscribe anchor-result failed:", e);
       return undefined;
@@ -188,7 +188,7 @@ export function Dashboard() {
         );
       }
     }
-  }, [snapshot, config, pushToast]);
+  }, [snapshot, config, pushToast, t]);
 
   const hasConfigured = allServices.length > 0;
   const fetchedAt = snapshot?.fetched_at ?? null;

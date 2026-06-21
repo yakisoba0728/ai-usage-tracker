@@ -7,6 +7,12 @@ import type {
   ServiceUsage,
 } from "@/lib/types";
 
+/** Providers where anchoring works (mirrors Rust anchor::supported() = Claude, Codex, z.ai). */
+const ANCHOR_SUPPORTED: ReadonlySet<Provider> = new Set<Provider>(["claude", "codex", "zai"]);
+export function anchorSupported(provider: Provider): boolean {
+  return ANCHOR_SUPPORTED.has(provider);
+}
+
 /**
  * Canonical provider order — MUST mirror `provider_index` in the Rust
  * `config.rs` and `AppConfig.providers: [ProviderConfig; 6]`. The index of a

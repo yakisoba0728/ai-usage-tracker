@@ -296,16 +296,9 @@ async fn post_refresh(
         .send()
         .await
         .map_err(|e| ProviderError::Network(e.to_string()))?;
-    let status = resp.status();
-    let text = resp.text().await.unwrap_or_default();
-    if !status.is_success() {
-        return Err(ProviderError::Status {
-            status: status.as_u16(),
-            body: text.chars().take(200).collect(),
-        });
-    }
-    serde_json::from_str::<Refreshed>(&text)
-        .map_err(|e| ProviderError::Parse(format!("refresh: {e}")))
+    let v = http::send_for_json(resp, "claude refresh").await?;
+    serde_json::from_value::<Refreshed>(v)
+        .map_err(|e| ProviderError::Parse(format!("claude refresh: {e}")))
 }
 
 /// Refresh the OAuth token using the public Claude Code client_id. The usage-API

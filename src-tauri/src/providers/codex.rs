@@ -402,15 +402,8 @@ async fn refresh_oauth(
         .send()
         .await
         .map_err(|e| ProviderError::Network(e.to_string()))?;
-    let status = resp.status();
-    let text = resp.text().await.unwrap_or_default();
-    if !status.is_success() {
-        return Err(ProviderError::Status {
-            status: status.as_u16(),
-            body: text.chars().take(200).collect(),
-        });
-    }
-    serde_json::from_str::<Refreshed>(&text)
+    let v = http::send_for_json(resp, "codex refresh").await?;
+    serde_json::from_value::<Refreshed>(v)
         .map_err(|e| ProviderError::Parse(format!("codex refresh: {e}")))
 }
 

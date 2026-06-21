@@ -147,34 +147,26 @@ pub fn start(app: AppHandle, provider: Provider) -> Result<String, String> {
 
             let cancelled = std::sync::Arc::new(AtomicBool::new(false));
             install_cancel_flag(cancelled.clone());
-            let app2 = app.clone();
-            let client_id = spec.client_id.clone();
-            let client_secret = spec.client_secret.clone();
-            let token_url = spec.token_url.clone();
-            std::thread::spawn(move || {
-                run_server(
-                    app2,
-                    provider,
-                    server,
-                    client_id,
-                    client_secret,
-                    token_url,
-                    redirect_uri,
-                    verifier,
-                    state,
-                    cancelled,
-                );
-            });
+            let ctx = RunCtx {
+                app: app.clone(),
+                provider,
+                client_id: spec.client_id.clone(),
+                client_secret: spec.client_secret.clone(),
+                token_url: spec.token_url.clone(),
+                redirect_uri,
+                verifier,
+                expected_state: state,
+                cancelled,
+            };
+            std::thread::spawn(move || run_server(server, ctx));
             Ok(auth_url)
         }
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn run_server(
+struct RunCtx {
     app: AppHandle,
     provider: Provider,
-    server: Server,
     client_id: String,
     client_secret: Option<String>,
     token_url: String,
@@ -182,7 +174,20 @@ fn run_server(
     verifier: String,
     expected_state: String,
     cancelled: std::sync::Arc<AtomicBool>,
-) {
+}
+
+fn run_server(server: Server, ctx: RunCtx) {
+    let RunCtx {
+        app,
+        provider,
+        client_id,
+        client_secret,
+        token_url,
+        redirect_uri,
+        verifier,
+        expected_state,
+        cancelled,
+    } = ctx;
     // Clear ACTIVE when this server thread exits (any return path), unless a
     // newer login has already taken over.
     let _active = ActiveGuard(cancelled.clone());

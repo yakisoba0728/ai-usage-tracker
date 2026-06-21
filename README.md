@@ -1,10 +1,11 @@
 # AI Usage Tracker
 
 A Tauri 2 desktop app that shows **live, real** subscription usage for AI coding
-services in your menu bar. A left-click opens a compact popover; the full
-dashboard opens from the tray menu. It reuses the credential each service's
-official CLI already stores locally and calls that provider's usage API
-directly — **no estimation, no proxy server, tokens stay on-device**.
+services in your menu bar. Clicking the menu-bar icon drops down a native macOS
+menu listing each provider's remaining headroom; the full dashboard opens from
+it. It reuses the credential each service's official CLI already stores locally
+and calls that provider's usage API directly — **no estimation, no proxy server,
+tokens stay on-device**.
 
 > The app supports two ways to connect a provider:
 >
@@ -118,10 +119,12 @@ React + TS + Tailwind + shadcn/ui  ──IPC──▶  Rust (Tauri 2)
   mark — no component changes.
 - **i18n** — English + Korean via react-i18next; the locale is auto-detected,
   persisted to `localStorage` (`ait-lang`), and toggled from the header.
-- **Tray** shows the highest usage % across all windows; **left-click opens a
-  compact popover**, right-click opens a menu (Refresh now / Show dashboard /
-  Quit). Closing a window hides it to the tray (the app keeps running and
-  polling every 5 minutes by default).
+- **Tray** is a native macOS `NSMenu` (built in Rust, rebuilt on each refresh):
+  a row per connected provider showing its **remaining headroom** (`100 − used`,
+  so a fresh plan reads 100%), then Refresh now / Show dashboard / Quit. The
+  dashboard, detail windows, and menu all display remaining (severity/colors stay
+  keyed off used). Closing the window hides it to the tray (the app keeps running
+  and polling every 5 minutes by default).
 - **Stored accounts** hold the user-added credentials. `fetch_credential`
   checks `expires_at` before each poll and refreshes in-app when the access
   token is expired, persisting the rotated tokens back (the on-disk metadata is

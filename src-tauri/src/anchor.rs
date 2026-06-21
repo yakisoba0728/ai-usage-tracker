@@ -10,19 +10,24 @@ use crate::http;
 use crate::model::{stored_service_id, Provider};
 use crate::providers::ProviderError;
 
-const ZAI_CHAT_URL: &str = "https://api.z.ai/api/paas/v4/chat/completions";
-const ZAI_MODEL: &str = "glm-4-flash";
+// Coding-plan endpoint (not the general /api/paas/v4) so the message draws on the
+// GLM Coding Plan window the tracker shows. `glm-4-flash` is rejected (code 1211);
+// use a current coding model.
+const ZAI_CHAT_URL: &str = "https://api.z.ai/api/coding/paas/v4/chat/completions";
+const ZAI_MODEL: &str = "glm-4.6";
 
 const CLAUDE_MESSAGES_URL: &str = "https://api.anthropic.com/v1/messages";
 const CLAUDE_VERSION: &str = "2023-06-01";
 // Claude Code's OAuth tokens require the OAuth beta flag on the Messages API.
 // Verify the exact tag with the guarded test-send (Step 8) and adjust if 401/400.
 const CLAUDE_OAUTH_BETA: &str = "oauth-2025-04-20";
-const CLAUDE_MODEL: &str = "claude-3-5-haiku-20241022";
+// claude-3-5-haiku is retired (404); use a current cheap model.
+const CLAUDE_MODEL: &str = "claude-haiku-4-5-20251001";
 
 const CODEX_RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
-// Best-effort model name; verify live (Codex model names churn).
-const CODEX_MODEL: &str = "codex-mini-latest";
+// ChatGPT-account Codex rejects `codex-mini-latest` ("model is not supported");
+// it accepts the current Codex CLI models (e.g. gpt-5.5 — the CLI's own default).
+const CODEX_MODEL: &str = "gpt-5.5";
 const CODEX_UA: &str = "codex_cli_rs/0.141.0 (ai-usage-tracker)";
 
 /// Cooldown so the auto-trigger sends at most once per window per service.

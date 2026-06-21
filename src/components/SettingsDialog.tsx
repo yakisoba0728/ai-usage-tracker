@@ -16,7 +16,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { ProviderMark, PROVIDER_LABEL } from "@/components/ProviderMark";
-import { PROVIDER_ORDER } from "@/lib/providers";
+import { patchProviderConfig, PROVIDER_ORDER } from "@/lib/providers";
 import { cn } from "@/lib/utils";
 import type { AppConfig, Provider } from "@/lib/types";
 
@@ -77,10 +77,7 @@ export function SettingsDialog({
 
   function toggleProvider(provider: Provider, enabled: boolean) {
     if (!config) return;
-    const index = PROVIDER_ORDER.indexOf(provider);
-    const providers = [...config.providers] as AppConfig["providers"];
-    providers[index] = { ...providers[index], enabled };
-    onConfigChange({ ...config, providers });
+    onConfigChange(patchProviderConfig(config, provider, { enabled }));
   }
 
   return (

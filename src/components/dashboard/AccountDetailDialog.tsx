@@ -35,6 +35,7 @@ import {
 } from "@/lib/format";
 import { buildInspectorSummary } from "@/lib/inspectorModel";
 import {
+  patchProviderConfig,
   PROVIDER_ORDER,
   providerDisplayName,
 } from "@/lib/providers";
@@ -433,9 +434,7 @@ function InspectorSettings({
 
   function patch(patchValue: Partial<ProviderConfig>) {
     if (!config) return;
-    const providers = [...config.providers] as AppConfig["providers"];
-    providers[idx] = { ...providers[idx], ...patchValue };
-    onConfigChange({ ...config, providers });
+    onConfigChange(patchProviderConfig(config, service.provider, patchValue));
   }
 
   function commitName() {

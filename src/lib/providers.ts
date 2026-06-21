@@ -1,5 +1,11 @@
 import { PROVIDER_LABEL } from "@/components/ProviderMark";
-import type { AppConfig, LimitWindow, Provider, ServiceUsage } from "@/lib/types";
+import type {
+  AppConfig,
+  LimitWindow,
+  Provider,
+  ProviderConfig,
+  ServiceUsage,
+} from "@/lib/types";
 
 /**
  * Canonical provider order — MUST mirror `provider_index` in the Rust
@@ -26,6 +32,21 @@ export function providerConfigFor(
   provider: Provider,
 ) {
   return config?.providers[providerIndex(provider)] ?? null;
+}
+
+/**
+ * Immutably patch one provider's config slot, centralizing the fixed-tuple
+ * map + cast so call sites don't each re-cast `[ProviderConfig; 6]`.
+ */
+export function patchProviderConfig(
+  config: AppConfig,
+  provider: Provider,
+  patch: Partial<ProviderConfig>,
+): AppConfig {
+  const providers = config.providers.map((p, i) =>
+    i === providerIndex(provider) ? { ...p, ...patch } : p,
+  ) as AppConfig["providers"];
+  return { ...config, providers };
 }
 
 /**

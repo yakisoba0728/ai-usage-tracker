@@ -1,6 +1,5 @@
-//! Codex (ChatGPT) via Codex CLI. Reads `~/.codex/auth.json`, decodes the
-//! `id_token` for subscription/renewal info, and calls the SAME endpoint the
-//! official codex CLI polls: `chatgpt.com/backend-api/wham/usage` with
+//! Codex (ChatGPT) via Codex CLI. Reads `~/.codex/auth.json` and calls the SAME
+//! endpoint the official codex CLI polls: `chatgpt.com/backend-api/wham/usage` with
 //! `Authorization: Bearer <access_token>`, `ChatGPT-Account-Id`, and a
 //! `codex_cli_rs/` User-Agent. Surfaces the main 5h/weekly rate limits, every
 //! additional rate limit (e.g. `GPT-5.3-Codex-Spark`), credits, and available
@@ -13,7 +12,6 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::http;
-use crate::jwt::jwt_payload;
 use crate::model::{auto_service_id, LimitWindow, Provider, ServiceSource, ServiceUsage};
 use crate::providers::ProviderError;
 use crate::secrets;
@@ -231,18 +229,6 @@ fn normalize(u: &WhamUsage) -> (Vec<LimitWindow>, Vec<LimitWindow>) {
     (ws, detail)
 }
 
-/// Subscription renewal date (YYYY-MM-DD) from the id_token, if present.
-fn renewal_date(id_token: &Option<String>) -> Option<String> {
-    let claims = jwt_payload(id_token.as_deref()?).ok()?;
-    let until = claims
-        .get("https://api.openai.com/auth")
-        .and_then(|a| a.get("chatgpt_subscription_active_until"))
-        .and_then(|v| v.as_str())?;
-    chrono::DateTime::parse_from_rfc3339(until)
-        .ok()
-        .map(|d| d.format("%Y-%m-%d").to_string())
-}
-
 #[async_trait]
 impl crate::providers::ProviderApi for CodexProvider {
     fn key(&self) -> Provider {
@@ -282,14 +268,7 @@ impl crate::providers::ProviderApi for CodexProvider {
                 }
             }
         }
-        fetch_with(
-            &self.http,
-            &t.access_token,
-            t.account_id.as_deref(),
-            &t.id_token,
-            None,
-        )
-        .await
+        fetch_with(&self.http, &t.access_token, t.account_id.as_deref(), None).await
     }
 }
 
@@ -298,7 +277,6 @@ pub(crate) async fn fetch_with(
     http: &reqwest::Client,
     access_token: &str,
     account_id: Option<&str>,
-    id_token: &Option<String>,
     label_override: Option<&str>,
 ) -> Result<ServiceUsage, ProviderError> {
     let mut extra: Vec<(&str, &str)> = vec![("User-Agent", CODEX_UA)];
@@ -314,12 +292,7 @@ pub(crate) async fn fetch_with(
     let plan = u.plan_type.as_deref().map(crate::util::capitalize);
     let account = match label_override {
         Some(l) => Some(l.to_string()),
-        None => match (u.email.as_ref(), renewal_date(id_token)) {
-            (Some(email), Some(d)) => Some(format!("{email} · renews {d}")),
-            (Some(email), None) => Some(email.clone()),
-            (None, Some(d)) => Some(format!("renews {d}")),
-            (None, None) => None,
-        },
+        None => u.email.clone(),
     };
     let (windows, detail_windows) = normalize(&u);
     Ok(ServiceUsage {
@@ -427,7 +400,6 @@ pub(crate) async fn fetch_stored(
         http,
         &cred.access_token,
         cred.account_id.as_deref(),
-        &cred.id_token,
         Some(&cred.label),
     )
     .await

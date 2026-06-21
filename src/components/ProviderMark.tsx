@@ -47,9 +47,10 @@ export function CursorMark({ className }: { className?: string }) {
 }
 
 export function ZaiMark({ className }: { className?: string }) {
+  // z.ai is not on Simple Icons — a clean bold "Z" (top bar, diagonal, bottom bar).
   return (
     <svg viewBox="0 0 24 24" className={className} fill="currentColor" aria-hidden>
-      <path d="M4 4h12l-8 7h6l-6 9 12-13h-6l4-3z" />
+      <path d="M5 4h14v3.2L9.8 17H19v3H5v-3.2L14.2 7H5z" />
     </svg>
   );
 }

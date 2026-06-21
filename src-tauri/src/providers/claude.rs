@@ -366,6 +366,16 @@ pub(crate) async fn refresh_stored(
     ))
 }
 
+/// Fetch usage for a stored Claude account (uniform stored-fetch adapter).
+/// Manual Claude accounts are session-key based, so this uses the claude.ai
+/// web API path.
+pub(crate) async fn fetch_stored(
+    http: &reqwest::Client,
+    cred: &crate::store::StoredCredential,
+) -> Result<ServiceUsage, ProviderError> {
+    fetch_with_session_key(http, &cred.access_token).await
+}
+
 fn write_back(
     orig: &serde_json::Value,
     access_token: &str,

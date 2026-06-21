@@ -313,6 +313,14 @@ pub(crate) async fn refresh_stored(
     None
 }
 
+/// Fetch usage for a stored Copilot account (uniform stored-fetch adapter).
+pub(crate) async fn fetch_stored(
+    http: &reqwest::Client,
+    cred: &crate::store::StoredCredential,
+) -> Result<ServiceUsage, ProviderError> {
+    fetch_with(http, &cred.access_token).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

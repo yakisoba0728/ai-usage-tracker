@@ -418,6 +418,21 @@ pub(crate) async fn refresh_stored(
     Some(build_refreshed_cred(cred, &fresh))
 }
 
+/// Fetch usage for a stored Codex account (uniform stored-fetch adapter).
+pub(crate) async fn fetch_stored(
+    http: &reqwest::Client,
+    cred: &crate::store::StoredCredential,
+) -> Result<ServiceUsage, ProviderError> {
+    fetch_with(
+        http,
+        &cred.access_token,
+        cred.account_id.as_deref(),
+        &cred.id_token,
+        Some(&cred.label),
+    )
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

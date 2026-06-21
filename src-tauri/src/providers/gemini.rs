@@ -440,6 +440,14 @@ pub(crate) async fn refresh_stored(
     Some(build_refreshed_cred(cred, &fresh, now_ms))
 }
 
+/// Fetch usage for a stored Gemini account (uniform stored-fetch adapter).
+pub(crate) async fn fetch_stored(
+    http: &reqwest::Client,
+    cred: &crate::store::StoredCredential,
+) -> Result<ServiceUsage, ProviderError> {
+    fetch_with(http, &cred.access_token, Some(&cred.label)).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

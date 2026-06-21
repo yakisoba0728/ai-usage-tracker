@@ -111,30 +111,12 @@ pub async fn fetch_credential(cred: &crate::store::StoredCredential) -> ServiceU
         cred.clone()
     };
 
-    let label = active.label.as_str();
     let res = match active.provider {
-        Provider::Codex => {
-            crate::providers::codex::fetch_with(
-                &http,
-                &active.access_token,
-                active.account_id.as_deref(),
-                &active.id_token,
-                Some(label),
-            )
-            .await
-        }
-        Provider::Gemini => {
-            crate::providers::gemini::fetch_with(&http, &active.access_token, Some(label)).await
-        }
-        Provider::Claude => {
-            crate::providers::claude::fetch_with_session_key(&http, &active.access_token).await
-        }
-        Provider::Copilot => {
-            crate::providers::copilot::fetch_with(&http, &active.access_token).await
-        }
-        Provider::Zai => {
-            crate::providers::zai::fetch_with(&http, &active.access_token, Some(label)).await
-        }
+        Provider::Codex => crate::providers::codex::fetch_stored(&http, &active).await,
+        Provider::Gemini => crate::providers::gemini::fetch_stored(&http, &active).await,
+        Provider::Claude => crate::providers::claude::fetch_stored(&http, &active).await,
+        Provider::Copilot => crate::providers::copilot::fetch_stored(&http, &active).await,
+        Provider::Zai => crate::providers::zai::fetch_stored(&http, &active).await,
         Provider::Cursor => Err(ProviderError::NotLoggedIn(
             "manual accounts not supported for Cursor (CLI-detected only)".into(),
         )),
@@ -269,6 +251,34 @@ mod tests {
         assert_eq!(
             se.detail.as_deref(),
             Some("unexpected response (429): rate limited")
+        );
+    }
+
+    /// Guards the `fetch_credential` dispatch (the sole consumer of the
+    /// per-provider stored-fetch adapters). Cursor is the one explicit `Err`
+    /// arm (no manual accounts) and reaches no network, so it deterministically
+    /// yields a disconnected, `Stored`-sourced card carrying `not_logged_in`.
+    #[tokio::test]
+    async fn fetch_credential_cursor_is_disconnected_not_logged_in() {
+        let cred = crate::store::StoredCredential {
+            id: "cur-1".into(),
+            provider: Provider::Cursor,
+            label: "x".into(),
+            access_token: "tok".into(),
+            refresh_token: None,
+            expires_at: 0,
+            id_token: None,
+            account_id: None,
+        };
+        let u = fetch_credential(&cred).await;
+        assert_eq!(u.provider, Provider::Cursor);
+        assert!(!u.connected);
+        assert_eq!(u.source, ServiceSource::Stored);
+        assert_eq!(u.id, stored_service_id("cur-1"));
+        assert_eq!(u.account.as_deref(), Some("x"));
+        assert_eq!(
+            u.error.as_ref().map(|e| e.code.as_str()),
+            Some("not_logged_in")
         );
     }
 }

@@ -414,6 +414,14 @@ pub(crate) async fn refresh_stored(
     None
 }
 
+/// Fetch usage for a stored z.ai account (uniform stored-fetch adapter).
+pub(crate) async fn fetch_stored(
+    http: &reqwest::Client,
+    cred: &crate::store::StoredCredential,
+) -> Result<ServiceUsage, ProviderError> {
+    fetch_with(http, &cred.access_token, Some(&cred.label)).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

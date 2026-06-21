@@ -81,6 +81,10 @@ pub fn run() {
             }
             builder
                 .menu(&menu)
+                // Left-click opens the usage popover; the menu (Refresh / Show /
+                // Quit) is right-click only. Without this, macOS shows the menu
+                // on left-click and the popover never appears.
+                .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "show" => {
                         if let Some(w) = app.get_webview_window("main") {

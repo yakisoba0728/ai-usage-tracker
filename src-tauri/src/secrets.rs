@@ -37,10 +37,6 @@ pub fn codex_auth_path() -> PathBuf {
     codex_home().join("auth.json")
 }
 
-pub fn gemini_creds_path() -> PathBuf {
-    dirs_home().join(".gemini").join("oauth_creds.json")
-}
-
 /// Cursor's local state DB (SQLite). None if the platform path doesn't exist.
 pub fn cursor_state_db() -> Option<PathBuf> {
     #[cfg(target_os = "macos")]

@@ -553,13 +553,16 @@ pub(crate) async fn fetch_with(
     account_override: Option<String>,
 ) -> Result<ServiceUsage, ProviderError> {
     let h = [("anthropic-version", ANTHROPIC_VERSION)];
-    let usage: UsageResponse = http::get_json(
+    let usage_raw: serde_json::Value = http::get_json(
         http,
         access_token,
         &format!("{API_BASE}/api/oauth/usage"),
         &h,
     )
     .await?;
+    let raw_json = serde_json::to_string_pretty(&usage_raw).ok();
+    let usage: UsageResponse =
+        serde_json::from_value(usage_raw).map_err(|e| ProviderError::Parse(e.to_string()))?;
     let profile: Profile = http::get_json(
         http,
         access_token,
@@ -578,7 +581,7 @@ pub(crate) async fn fetch_with(
         error: None,
         windows,
         detail_windows,
-        raw_response: None,
+        raw_response: raw_json,
     })
 }
 
@@ -661,6 +664,7 @@ pub(crate) async fn fetch_with_session_key(
         .await
         .map_err(|e| ProviderError::Network(e.to_string()))?;
     let v: serde_json::Value = crate::http::send_for_json(resp, "claude.ai/usage").await?;
+    let raw_json = serde_json::to_string_pretty(&v).ok();
     let u: WebUsage =
         serde_json::from_value(v).map_err(|e| ProviderError::Parse(format!("usage: {e}")))?;
 
@@ -704,7 +708,7 @@ pub(crate) async fn fetch_with_session_key(
         error: None,
         windows,
         detail_windows: detail,
-        raw_response: None,
+        raw_response: raw_json,
     })
 }
 

@@ -191,6 +191,15 @@ function createBrowserSnapshot(): UsageSnapshot {
           windowUsage("7-day", 68, now + 2 * 24 * 60 * 60, 476, 700),
         ],
         detail_windows: [windowUsage("Extra usage", 12, null, 12.5, 100)],
+        raw_response: JSON.stringify(
+          {
+            five_hour: { utilization: 0.92, resets_at: now + 42 * 60 },
+            seven_day: { utilization: 0.68, resets_at: now + 2 * 24 * 60 * 60 },
+            extra_usage: { used_usd: 12.5, limit_usd: 100 },
+          },
+          null,
+          2,
+        ),
       },
       {
         id: "auto:codex",
@@ -205,6 +214,17 @@ function createBrowserSnapshot(): UsageSnapshot {
           windowUsage("Weekly", 41, now + 4 * 24 * 60 * 60, null, null),
         ],
         detail_windows: [windowUsage("Spark · 5-hour", 73, now + 91 * 60, null, null)],
+        raw_response: JSON.stringify(
+          {
+            rate_limits: {
+              "5h": { used_percent: 64, resets_at: now + 91 * 60 },
+              weekly: { used_percent: 41, resets_at: now + 4 * 24 * 60 * 60 },
+            },
+            spark: { used_percent: 73 },
+          },
+          null,
+          2,
+        ),
       },
       {
         id: "auto:gemini",
@@ -216,6 +236,14 @@ function createBrowserSnapshot(): UsageSnapshot {
         error: null,
         windows: [windowUsage("Daily", 23, now + 11 * 60 * 60, 23, 100)],
         detail_windows: [windowUsage("Model calls", 38, now + 11 * 60 * 60, 38, 100)],
+        raw_response: JSON.stringify(
+          {
+            daily: { used: 23, limit: 100, resets_at: now + 11 * 60 * 60 },
+            model_calls: { used: 38, limit: 100 },
+          },
+          null,
+          2,
+        ),
       },
       {
         id: "auto:copilot",
@@ -227,6 +255,19 @@ function createBrowserSnapshot(): UsageSnapshot {
         error: null,
         windows: [windowUsage("Monthly premium requests", 48, now + 9 * 24 * 60 * 60, 144, 300)],
         detail_windows: [],
+        raw_response: JSON.stringify(
+          {
+            quota_snapshots: {
+              premium_interactions: {
+                entitlement: 300,
+                remaining: 156,
+                percent_used: 48,
+              },
+            },
+          },
+          null,
+          2,
+        ),
       },
       {
         id: "auto:cursor",
@@ -249,6 +290,15 @@ function createBrowserSnapshot(): UsageSnapshot {
         error: null,
         windows: [windowUsage("Weekly", 77, now + 3 * 24 * 60 * 60, 77, 100)],
         detail_windows: [windowUsage("GLM-4.5", 58, now + 3 * 24 * 60 * 60, 58, 100)],
+        raw_response: JSON.stringify(
+          {
+            plan: "Pro",
+            weekly: { used: 77, limit: 100, resets_at: now + 3 * 24 * 60 * 60 },
+            models: { "GLM-4.5": { used: 58, limit: 100 } },
+          },
+          null,
+          2,
+        ),
       },
     ],
   };

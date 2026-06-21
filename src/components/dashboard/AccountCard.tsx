@@ -88,12 +88,12 @@ const AccountCardButton = memo(function AccountCardButton({
   const isAnchorSupported = anchorSupported(row.service.provider);
 
   return (
-    <div className="group relative">
+    <div className="group relative h-full">
       <button
         type="button"
         onClick={() => onSelect(row.id)}
         className={cn(
-          "relative flex min-h-[188px] w-full flex-col overflow-hidden rounded-lg border p-4 text-left",
+          "relative flex h-full min-h-[188px] w-full flex-col overflow-hidden rounded-lg border p-4 text-left",
           "transition-[background-color,border-color,box-shadow,transform,opacity] duration-150 hover:-translate-y-0.5 hover:border-border-strong hover:bg-surface",
           selected
             ? "border-border-strong bg-surface-2 shadow-lg shadow-black/10"

@@ -193,30 +193,10 @@ fn entry_to_window(e: &LimitEntry, slot: Slot) -> Option<LimitWindow> {
     })
 }
 
-/// Order the two token windows headline-first (higher burn leads). Both stay on
-/// the card — the caller pushes each into `windows`. `(headline, leftover)`.
-fn pick_primary(
-    a: Option<LimitWindow>,
-    b: Option<LimitWindow>,
-) -> (Option<LimitWindow>, Option<LimitWindow>) {
-    match (a, b) {
-        (None, None) => (None, None),
-        (only @ Some(_), None) | (None, only @ Some(_)) => (only, None),
-        (Some(x), Some(y)) => {
-            let bx = x.used_percent.unwrap_or(0.0);
-            let by = y.used_percent.unwrap_or(0.0);
-            if by > bx {
-                (Some(y), Some(x))
-            } else {
-                (Some(x), Some(y))
-            }
-        }
-    }
-}
-
-/// Pure: `data` → (card windows, detail windows). BOTH the 5-hour and weekly
-/// token windows go on the card (headline = highest burn, leads); every MCP/time
-/// window and per-model breakdown populates `detail_windows`.
+/// Pure: `data` → (card windows, detail windows). BOTH token windows go on the
+/// card with the **5-hour first** (so it's the headline, consistent with Claude/
+/// Codex where the short window leads), the weekly second. Every MCP/time window
+/// and per-model breakdown populates `detail_windows`.
 fn normalize(data: &ZaiData) -> (Vec<LimitWindow>, Vec<LimitWindow>) {
     let mut five_hour: Option<LimitWindow> = None;
     let mut weekly: Option<LimitWindow> = None;
@@ -247,15 +227,14 @@ fn normalize(data: &ZaiData) -> (Vec<LimitWindow>, Vec<LimitWindow>) {
         }
     }
 
-    let (headline, leftover) = pick_primary(five_hour, weekly);
+    // Both token windows go on the card, 5-hour first (headline), then weekly —
+    // consistent with Claude/Codex (short window leads), regardless of burn.
     let mut windows = Vec::new();
-    if let Some(h) = headline {
-        windows.push(h);
+    if let Some(w) = five_hour {
+        windows.push(w);
     }
-    // Both token windows belong on the card (5-hour + Weekly), so the leftover
-    // joins the card rather than being demoted to a detail window.
-    if let Some(l) = leftover {
-        windows.push(l);
+    if let Some(w) = weekly {
+        windows.push(w);
     }
     (windows, detail)
 }
@@ -429,25 +408,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn normalize_live_fixture_card_shows_weekly_and_5h() {
+    fn normalize_live_fixture_card_shows_5h_then_weekly() {
         // Real response captured 2026-06-18 from GET /api/monitor/usage/quota/limit.
         let v: ZaiResponse =
             serde_json::from_str(include_str!("../../tests/zai_quota_fixture.json")).unwrap();
         let data = v.data.expect("fixture has data");
         let (ws, _detail) = normalize(&data);
 
-        // BOTH token windows go on the card now; headline = higher burn
-        // (Weekly 60% > 5-hour 9%), the other follows.
+        // BOTH token windows on the card, 5-hour FIRST (headline) then weekly —
+        // regardless of burn (consistent with Claude/Codex short-window-leads).
         assert_eq!(ws.len(), 2);
-        assert_eq!(ws[0].label, "Weekly");
-        assert_eq!(ws[0].used_percent, Some(60.0));
+        assert_eq!(ws[0].label, "5-hour");
+        assert_eq!(ws[0].used_percent, Some(9.0));
+        assert_eq!(ws[0].resets_at, Some(1_781_897_705));
+        assert_eq!(ws[1].label, "Weekly");
+        assert_eq!(ws[1].used_percent, Some(60.0));
         // Live TOKENS_LIMIT entries carry percentage only — no usage/currentValue.
-        assert_eq!(ws[0].used, None);
-        assert_eq!(ws[0].limit, None);
-        assert_eq!(ws[0].resets_at, Some(1_782_210_628)); // 1782210628998 ms → s
-        assert_eq!(ws[1].label, "5-hour");
-        assert_eq!(ws[1].used_percent, Some(9.0));
-        assert_eq!(ws[1].resets_at, Some(1_781_897_705));
+        assert_eq!(ws[1].used, None);
+        assert_eq!(ws[1].limit, None);
+        assert_eq!(ws[1].resets_at, Some(1_782_210_628)); // 1782210628998 ms → s
     }
 
     #[test]

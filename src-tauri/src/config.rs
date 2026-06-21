@@ -2,6 +2,7 @@
 //! [Claude, Codex, Gemini, Copilot, Cursor, z.ai] canonical order used across
 //! the codebase.
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// Per-provider customizable settings. Lives inside `AppConfig.providers`.
@@ -46,6 +47,9 @@ pub struct AppConfig {
     /// Indexed by canonical provider order [Claude, Codex, Gemini, Copilot,
     /// Cursor, z.ai].
     pub providers: [ProviderConfig; 6],
+    /// Per-`service_id` opt-in for auto window-anchoring (default: empty = OFF).
+    #[serde(default)]
+    pub auto_anchor: HashMap<String, bool>,
 }
 
 impl Default for AppConfig {
@@ -53,6 +57,7 @@ impl Default for AppConfig {
         Self {
             poll_seconds: 300,
             providers: Default::default(),
+            auto_anchor: HashMap::new(),
         }
     }
 }
@@ -140,5 +145,19 @@ mod tests {
         c.providers[2].enabled = false;
         let arr = c.enabled_array();
         assert_eq!(arr, [true, true, false, true, true, true]);
+    }
+
+    #[test]
+    fn auto_anchor_defaults_empty_and_roundtrips() {
+        let mut c = AppConfig::default();
+        assert!(c.auto_anchor.is_empty());
+        c.auto_anchor.insert("stored:zai-1".into(), true);
+        let json = serde_json::to_string(&c).unwrap();
+        let back: AppConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.auto_anchor.get("stored:zai-1"), Some(&true));
+        // Old configs without the field still load.
+        let old: AppConfig =
+            serde_json::from_str(r#"{"poll_seconds":300,"providers":[]}"#).unwrap_or_default();
+        assert!(old.auto_anchor.is_empty());
     }
 }

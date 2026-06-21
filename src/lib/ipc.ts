@@ -160,6 +160,7 @@ function createDefaultConfig(): AppConfig {
       providerConfig(4),
       providerConfig(5),
     ],
+    auto_anchor: {},
   };
 }
 

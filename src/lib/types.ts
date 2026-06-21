@@ -100,6 +100,8 @@ export interface AppConfig {
     ProviderConfig,
     ProviderConfig,
   ];
+  /** Per-service_id opt-in for auto window-anchoring. */
+  auto_anchor: Record<string, boolean>;
 }
 
 /**

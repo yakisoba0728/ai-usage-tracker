@@ -27,7 +27,7 @@ function pc(sort_index: number, primary_window: string | null = null): ProviderC
 }
 
 function cfg(slots: ProviderConfig[]): AppConfig {
-  return { poll_seconds: 300, providers: slots as AppConfig["providers"] };
+  return { poll_seconds: 300, providers: slots as AppConfig["providers"], auto_anchor: {} };
 }
 
 function service(partial: Partial<ServiceUsage>): ServiceUsage {

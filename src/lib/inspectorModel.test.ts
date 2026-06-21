@@ -24,6 +24,7 @@ const config: AppConfig = {
     primary_window: null,
     sort_index: index,
   })) as AppConfig["providers"],
+  auto_anchor: {},
 };
 
 describe("inspector model", () => {

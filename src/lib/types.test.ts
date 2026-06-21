@@ -85,8 +85,9 @@ describe("IPC contract shape", () => {
         providerConfig(),
         providerConfig(),
       ],
+      auto_anchor: {},
     };
-    expect(Object.keys(config).sort()).toEqual(["poll_seconds", "providers"]);
+    expect(Object.keys(config).sort()).toEqual(["auto_anchor", "poll_seconds", "providers"]);
     expect(config.providers).toHaveLength(6);
   });
 });

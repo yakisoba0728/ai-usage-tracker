@@ -1,3 +1,4 @@
+pub mod anchor;
 pub mod commands;
 pub mod config;
 pub mod http;
@@ -129,6 +130,7 @@ pub fn run() {
             commands::login_oauth,
             commands::add_session_key,
             commands::cancel_login,
+            commands::send_anchor_now,
         ])
         .setup(|app| {
             // --- Tray with a native menu (usage rows + actions) ---

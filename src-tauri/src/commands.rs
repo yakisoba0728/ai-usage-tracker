@@ -192,6 +192,15 @@ pub fn cancel_login() {
     crate::oauth_login::cancel();
 }
 
+/// Send a minimal "anchor" message for one service to start its usage window.
+/// Tokens stay in Rust; the frontend only passes the masked service id.
+#[tauri::command]
+pub async fn send_anchor_now(service_id: String) -> Result<(), String> {
+    crate::anchor::send(&service_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

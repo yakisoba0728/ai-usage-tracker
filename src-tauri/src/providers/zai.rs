@@ -193,8 +193,8 @@ fn entry_to_window(e: &LimitEntry, slot: Slot) -> Option<LimitWindow> {
     })
 }
 
-/// Pick the higher-burn token window as the headline; the other becomes a
-/// detail window. `(headline, leftover)`.
+/// Order the two token windows headline-first (higher burn leads). Both stay on
+/// the card — the caller pushes each into `windows`. `(headline, leftover)`.
 fn pick_primary(
     a: Option<LimitWindow>,
     b: Option<LimitWindow>,
@@ -214,9 +214,9 @@ fn pick_primary(
     }
 }
 
-/// Pure: `data` → (headline windows, detail windows). The headline is the
-/// highest-burn of the 5-hour / weekly token windows; the other token window,
-/// every MCP/time window, and per-model breakdowns populate `detail_windows`.
+/// Pure: `data` → (card windows, detail windows). BOTH the 5-hour and weekly
+/// token windows go on the card (headline = highest burn, leads); every MCP/time
+/// window and per-model breakdown populates `detail_windows`.
 fn normalize(data: &ZaiData) -> (Vec<LimitWindow>, Vec<LimitWindow>) {
     let mut five_hour: Option<LimitWindow> = None;
     let mut weekly: Option<LimitWindow> = None;
@@ -252,8 +252,10 @@ fn normalize(data: &ZaiData) -> (Vec<LimitWindow>, Vec<LimitWindow>) {
     if let Some(h) = headline {
         windows.push(h);
     }
+    // Both token windows belong on the card (5-hour + Weekly), so the leftover
+    // joins the card rather than being demoted to a detail window.
     if let Some(l) = leftover {
-        detail.insert(0, l);
+        windows.push(l);
     }
     (windows, detail)
 }
@@ -427,36 +429,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn normalize_live_fixture_headline_is_weekly_60pct() {
+    fn normalize_live_fixture_card_shows_weekly_and_5h() {
         // Real response captured 2026-06-18 from GET /api/monitor/usage/quota/limit.
         let v: ZaiResponse =
             serde_json::from_str(include_str!("../../tests/zai_quota_fixture.json")).unwrap();
         let data = v.data.expect("fixture has data");
         let (ws, _detail) = normalize(&data);
 
-        // Higher-burn token window (60% > 9%) is the sole headline.
-        assert_eq!(ws.len(), 1);
-        let headline = &ws[0];
-        assert_eq!(headline.label, "Weekly");
-        assert_eq!(headline.used_percent, Some(60.0));
+        // BOTH token windows go on the card now; headline = higher burn
+        // (Weekly 60% > 5-hour 9%), the other follows.
+        assert_eq!(ws.len(), 2);
+        assert_eq!(ws[0].label, "Weekly");
+        assert_eq!(ws[0].used_percent, Some(60.0));
         // Live TOKENS_LIMIT entries carry percentage only — no usage/currentValue.
-        assert_eq!(headline.used, None);
-        assert_eq!(headline.limit, None);
-        assert_eq!(headline.resets_at, Some(1_782_210_628)); // 1782210628998 ms → s
+        assert_eq!(ws[0].used, None);
+        assert_eq!(ws[0].limit, None);
+        assert_eq!(ws[0].resets_at, Some(1_782_210_628)); // 1782210628998 ms → s
+        assert_eq!(ws[1].label, "5-hour");
+        assert_eq!(ws[1].used_percent, Some(9.0));
+        assert_eq!(ws[1].resets_at, Some(1_781_897_705));
     }
 
     #[test]
-    fn normalize_live_fixture_detail_has_5h_monthly_and_models() {
+    fn normalize_live_fixture_detail_has_monthly_and_models_not_5h() {
         let v: ZaiResponse =
             serde_json::from_str(include_str!("../../tests/zai_quota_fixture.json")).unwrap();
-        let (_, detail) = normalize(v.data.as_ref().unwrap());
+        let (ws, detail) = normalize(v.data.as_ref().unwrap());
 
-        // 5-hour window (TOKENS_LIMIT unit 3, percentage only).
-        let five = detail.iter().find(|w| w.label == "5-hour").unwrap();
-        assert_eq!(five.used_percent, Some(9.0));
-        assert_eq!(five.used, None);
-        assert_eq!(five.limit, None);
-        assert_eq!(five.resets_at, Some(1_781_897_705));
+        // 5-hour is now a CARD window, not a detail window.
+        assert!(ws.iter().any(|w| w.label == "5-hour"));
+        assert!(!detail.iter().any(|w| w.label == "5-hour"));
 
         // Monthly window (TIME_LIMIT unit 5) — full detail present.
         let monthly = detail.iter().find(|w| w.label == "Monthly").unwrap();

@@ -38,12 +38,14 @@ tokens stay on-device**.
 - **Per-provider isolation.** One failing provider never breaks the others or
   the scheduler (`panic = "abort"` is deliberately NOT set so a provider panic
   unwinds at the task boundary instead of killing the menu-bar process).
-- **Tokens stay in Rust, kept out of plaintext at rest.** Only non-secret usage
-  snapshots + a masked `{id, provider, label}` account list cross IPC to the UI;
+- **Tokens stay in Rust and never cross IPC.** Only non-secret usage snapshots +
+  a masked `{id, provider, label}` account list cross IPC to the UI;
   access/refresh tokens are never serialized to the frontend (P0 invariant).
-  User-added secrets live in the **OS keychain** (keyring v3) — `accounts.json`
-  holds only non-secret metadata. The webview CSP locks `connect-src` to IPC, so
-  all provider HTTP happens in Rust, never the webview.
+  User-added account credentials are persisted to a local `accounts.json` in the
+  app's private config dir (plaintext at rest — the OS-keychain backing was
+  dropped because the unsigned build re-prompted for the login password on every
+  poll). The webview CSP locks `connect-src` to IPC, so all provider HTTP happens
+  in Rust, never the webview.
 - **Reuse-only client_ids.** The app uses each CLI's *public* `client_id`
   (shipped inside every installed CLI) for any in-app OAuth / refresh. It does
   not register or ship its own OAuth client.
@@ -105,8 +107,7 @@ React + TS + Tailwind + shadcn/ui  ──IPC──▶  Rust (Tauri 2)
                                             ├─ providers   (ProviderApi trait + claude/codex/gemini/copilot/cursor/zai)
                                             ├─ login       (device-code OAuth: Codex / Copilot)
                                             ├─ oauth_login (browser + localhost-callback OAuth: Codex / Gemini)
-                                            ├─ store       (accounts.json — non-secret metadata for user-added accounts)
-                                            ├─ keychain    (OS keychain via keyring v3 — stored-account secrets)
+                                            ├─ store       (accounts.json — full credentials for user-added accounts)
                                             ├─ secrets     (read other CLIs' creds: Keychain via /usr/bin/security + JSON + SQLite)
                                             ├─ http        (shared reqwest client + sanitizing JSON helpers)
                                             ├─ jwt         (unverified JWT payload decode: plan / email / exp)
@@ -125,11 +126,10 @@ React + TS + Tailwind + shadcn/ui  ──IPC──▶  Rust (Tauri 2)
   dashboard, detail windows, and menu all display remaining (severity/colors stay
   keyed off used). Closing the window hides it to the tray (the app keeps running
   and polling every 5 minutes by default).
-- **Stored accounts** hold the user-added credentials. `fetch_credential`
-  checks `expires_at` before each poll and refreshes in-app when the access
-  token is expired, persisting the rotated tokens back (the on-disk metadata is
-  only advanced once the keychain write succeeds, so a failed write can't desync
-  the two).
+- **Stored accounts** hold the user-added credentials in `accounts.json`.
+  `fetch_credential` checks `expires_at` before each poll and refreshes in-app
+  when the access token is expired, persisting the rotated tokens back (the file
+  is rewritten atomically, so a rotated token and its metadata can't desync).
 - **`list_accounts`** masks to `{id, provider, label}` — secrets never cross IPC.
 
 ## Config

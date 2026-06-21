@@ -76,8 +76,43 @@ pub async fn refresh_once(
     };
     *snap.write().await = snapshot.clone();
     let _ = app.emit("usage-updated", &snapshot);
+    // Auto window-anchoring: for each opted-in, connected, supported service
+    // whose 5-hour window is empty (100% remaining), send one anchor message.
+    let now_sec = chrono::Utc::now().timestamp();
+    let auto = cfg.read().await.auto_anchor.clone();
+    for s in &snapshot.services {
+        if auto.get(&s.id).copied().unwrap_or(false)
+            && s.connected
+            && crate::anchor::supported(s.provider)
+            && five_hour_used(s) == Some(0.0)
+            && crate::anchor::try_begin(&s.id, now_sec)
+        {
+            let id = s.id.clone();
+            let app2 = app.clone();
+            tauri::async_runtime::spawn(async move {
+                match crate::anchor::send(&id).await {
+                    Ok(()) => {
+                        let _ = app2.emit("anchor-sent", &id);
+                    }
+                    Err(e) => {
+                        eprintln!("anchor send {id}: {e}");
+                        crate::anchor::clear(&id); // allow retry next poll
+                    }
+                }
+            });
+        }
+    }
     // Tray shows the app icon only — no title text (per user request).
     snapshot
+}
+
+/// The `used_percent` of the provider's 5-hour window (card or detail list).
+fn five_hour_used(s: &crate::model::ServiceUsage) -> Option<f32> {
+    s.windows
+        .iter()
+        .chain(s.detail_windows.iter())
+        .find(|w| w.label == "5-hour")
+        .and_then(|w| w.used_percent)
 }
 
 /// Drop disconnected entries for any provider that also has a connected entry.
@@ -350,6 +385,37 @@ mod tests {
             used: None,
             limit: None,
         };
+    }
+
+    #[test]
+    fn five_hour_used_reads_the_5h_window_from_either_list() {
+        let mk = |label: &str, p: f32| crate::model::LimitWindow {
+            label: label.into(),
+            used_percent: Some(p),
+            resets_at: None,
+            used: None,
+            limit: None,
+        };
+        let mut s = svc("auto:zai", Provider::Zai, ServiceSource::Auto, true, None);
+        s.windows = vec![mk("Weekly", 70.0), mk("5-hour", 0.0)];
+        assert_eq!(super::five_hour_used(&s), Some(0.0));
+        let mut s2 = svc(
+            "auto:claude",
+            Provider::Claude,
+            ServiceSource::Auto,
+            true,
+            None,
+        );
+        s2.detail_windows = vec![mk("5-hour", 12.0)];
+        assert_eq!(super::five_hour_used(&s2), Some(12.0));
+        let s3 = svc(
+            "auto:cursor",
+            Provider::Cursor,
+            ServiceSource::Auto,
+            true,
+            None,
+        );
+        assert_eq!(super::five_hour_used(&s3), None);
     }
 
     #[test]

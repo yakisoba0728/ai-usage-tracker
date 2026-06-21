@@ -17,6 +17,23 @@ use tauri::{
     Emitter, LogicalPosition, Manager, WindowEvent,
 };
 
+/// Toggle the macOS Dock presence: `Regular` shows the Dock icon (a normal
+/// app), `Accessory` hides it so the app lives only in the menu bar. No-op off
+/// macOS. We flip to Accessory whenever the main window is closed, and back to
+/// Regular when it's reopened from the tray menu.
+#[cfg(target_os = "macos")]
+fn set_dock_visible(app: &tauri::AppHandle, visible: bool) {
+    let policy = if visible {
+        tauri::ActivationPolicy::Regular
+    } else {
+        tauri::ActivationPolicy::Accessory
+    };
+    let _ = app.set_activation_policy(policy);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn set_dock_visible(_app: &tauri::AppHandle, _visible: bool) {}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -70,6 +87,8 @@ pub fn run() {
                             let _ = w.show();
                             let _ = w.set_focus();
                         }
+                        // A real window is on screen → show the Dock icon.
+                        set_dock_visible(app, true);
                     }
                     "refresh" => {
                         let _ = app.emit("trigger-refresh", ());
@@ -114,6 +133,10 @@ pub fn run() {
                 })
                 .build(app)?;
 
+            // Launch into the menu bar only — no Dock icon until the main
+            // window is opened from the tray menu.
+            set_dock_visible(app.handle(), false);
+
             // --- Background poller ---
             scheduler::start(app.handle().clone(), config::AppConfig::load().poll_seconds);
             Ok(())
@@ -127,6 +150,9 @@ pub fn run() {
                 if let WindowEvent::CloseRequested { api, .. } = event {
                     let _ = window.hide();
                     api.prevent_close();
+                    // Closing the window drops the app back to the menu bar:
+                    // remove the Dock icon, keep the tray icon.
+                    set_dock_visible(window.app_handle(), false);
                 }
             } else if label == "popover" {
                 if let WindowEvent::Focused(false) = event {

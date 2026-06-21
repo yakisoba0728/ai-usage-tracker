@@ -90,15 +90,22 @@ pub async fn refresh_once(
             let id = s.id.clone();
             let app2 = app.clone();
             tauri::async_runtime::spawn(async move {
-                match crate::anchor::send(&id).await {
-                    Ok(()) => {
-                        let _ = app2.emit("anchor-sent", &id);
-                    }
+                let res = crate::anchor::send(&id).await;
+                match &res {
+                    Ok(()) => eprintln!("anchor auto-fired {id}: ok"),
                     Err(e) => {
-                        eprintln!("anchor send {id}: {e}");
-                        crate::anchor::clear(&id); // allow retry next poll
+                        eprintln!("anchor auto-fired {id}: err: {e}");
+                        crate::anchor::clear(&id);
                     }
                 }
+                let _ = app2.emit(
+                    "anchor-result",
+                    serde_json::json!({
+                        "id": id,
+                        "ok": res.is_ok(),
+                        "detail": res.as_ref().err().map(|e| e.to_string()),
+                    }),
+                );
             });
         }
     }
@@ -229,11 +236,73 @@ pub fn cancel_login() {
 
 /// Send a minimal "anchor" message for one service to start its usage window.
 /// Tokens stay in Rust; the frontend only passes the masked service id.
+/// Emits `anchor-result` so the frontend can toast the outcome.
 #[tauri::command]
-pub async fn send_anchor_now(service_id: String) -> Result<(), String> {
-    crate::anchor::send(&service_id)
-        .await
-        .map_err(|e| e.to_string())
+pub async fn send_anchor_now(app: AppHandle, service_id: String) -> Result<(), String> {
+    let res = crate::anchor::send(&service_id).await;
+    let _ = app.emit(
+        "anchor-result",
+        serde_json::json!({
+            "id": service_id,
+            "ok": res.is_ok(),
+            "detail": res.as_ref().err().map(|e| e.to_string()),
+        }),
+    );
+    res.map_err(|e| e.to_string())
+}
+
+/// Re-fetch a single account (auto:<provider> or stored:<id>) and merge it into
+/// the snapshot. Emits provider-loading then usage-updated.
+#[tauri::command]
+pub async fn refresh_account(
+    app: AppHandle,
+    cfg: State<'_, ConfigStore>,
+    snap: State<'_, SnapshotStore>,
+    service_id: String,
+) -> Result<(), String> {
+    use crate::model::{auto_service_id, stored_service_id};
+    // Resolve the fresh ServiceUsage for this id.
+    let fresh: Option<crate::model::ServiceUsage> = if service_id.starts_with("stored:") {
+        let cred = crate::store::list()
+            .into_iter()
+            .find(|c| stored_service_id(&c.id) == service_id);
+        match cred {
+            Some(c) => {
+                let _ = app.emit("provider-loading", c.provider);
+                Some(crate::providers::fetch_credential(&c).await)
+            }
+            None => None,
+        }
+    } else {
+        // auto:<provider> — build that one provider from the enabled set and fetch it.
+        let providers = build_providers(&*cfg.read().await);
+        let mut found = None;
+        for p in providers {
+            if auto_service_id(p.key()) == service_id {
+                let _ = app.emit("provider-loading", p.key());
+                let mut batch = crate::providers::fetch_all(vec![p]).await;
+                found = batch.pop();
+                break;
+            }
+        }
+        found
+    };
+    let Some(fresh) = fresh else {
+        return Err(format!("unknown or disabled account: {service_id}"));
+    };
+    // Merge: replace the same-id entry (or push if absent), then emit.
+    {
+        let mut guard = snap.write().await;
+        if let Some(slot) = guard.services.iter_mut().find(|s| s.id == fresh.id) {
+            *slot = fresh;
+        } else {
+            guard.services.push(fresh);
+        }
+        guard.fetched_at = chrono::Utc::now().timestamp();
+    }
+    let snapshot = snap.read().await.clone();
+    let _ = app.emit("usage-updated", &snapshot);
+    Ok(())
 }
 
 #[cfg(test)]

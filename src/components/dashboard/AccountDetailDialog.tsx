@@ -10,8 +10,8 @@ import {
 import { useTranslation } from "react-i18next";
 
 import { ProviderIconTile } from "@/components/dashboard/ProviderIconTile";
+import { UsageBar } from "@/components/dashboard/UsageBar";
 import {
-  statusFillClass,
   statusTextClass,
   storedAccountId,
 } from "@/components/dashboard/helpers";
@@ -39,11 +39,7 @@ import {
   PROVIDER_ORDER,
   providerDisplayName,
 } from "@/lib/providers";
-import {
-  serviceStatus,
-  severityToStatus,
-  type ServiceStatus,
-} from "@/lib/status";
+import { serviceStatus, severityToStatus } from "@/lib/status";
 import type {
   AppConfig,
   LimitWindow,
@@ -324,7 +320,7 @@ function WindowRow({
           {formatPercent(percent)}
         </span>
       </div>
-      <MiniBar percent={percent} tone={tone} />
+      <UsageBar percent={percent} tone={tone} label={window.label} />
       <p className="num mt-3 text-xs text-text-faint">
         {window.resets_at
           ? t("detail.limits.resetsIn", {
@@ -546,23 +542,6 @@ function InspectorSettings({
           {t("detail.settings.reauthAccount")}
         </Button>
       </div>
-    </div>
-  );
-}
-
-function MiniBar({
-  percent,
-  tone,
-}: {
-  percent: number | null;
-  tone: ServiceStatus;
-}) {
-  const width = `${clamp(percent ?? 0, 0, 100)}%`;
-  return (
-    <div className="h-1.5 overflow-hidden rounded-full bg-white/[0.10]">
-      {percent != null && (
-        <div className={cn("h-full rounded-full transition-[width] duration-300", statusFillClass(tone))} style={{ width }} />
-      )}
     </div>
   );
 }

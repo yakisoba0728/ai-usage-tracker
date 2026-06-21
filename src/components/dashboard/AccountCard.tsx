@@ -2,7 +2,8 @@ import { memo } from "react";
 import { useTranslation } from "react-i18next";
 
 import { ProviderIconTile } from "@/components/dashboard/ProviderIconTile";
-import { statusFillClass, statusTextClass } from "@/components/dashboard/helpers";
+import { UsageBar } from "@/components/dashboard/UsageBar";
+import { statusTextClass } from "@/components/dashboard/helpers";
 import {
   formatPercent,
   formatResetShort,
@@ -12,7 +13,7 @@ import {
 import type { AccountRow, AccountSection } from "@/lib/inspectorModel";
 import { severityToStatus } from "@/lib/status";
 import type { LimitWindow, Provider } from "@/lib/types";
-import { cn, clamp } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 
 export function AccountSections({
   sections,
@@ -77,7 +78,6 @@ const AccountCardButton = memo(function AccountCardButton({
     ? formatResetShort(row.headline.resets_at, nowMs, t)
     : null;
   const percent = row.headlinePercent;
-  const width = `${clamp(percent ?? 0, 0, 100)}%`;
   const secondary = row.service.windows
     .filter((window) => window !== row.headline)
     .slice(0, 2);
@@ -147,14 +147,11 @@ const AccountCardButton = memo(function AccountCardButton({
                 {formatPercent(percent)}
               </div>
             </div>
-            <div className="h-1.5 overflow-hidden rounded-full bg-white/[0.10]">
-              {percent != null && (
-                <div
-                  className={cn("h-full rounded-full transition-[width] duration-300", statusFillClass(row.status))}
-                  style={{ width }}
-                />
-              )}
-            </div>
+            <UsageBar
+              percent={percent}
+              tone={row.status}
+              label={row.headline?.label ?? t("card.noUsageWindow")}
+            />
           </div>
 
           {secondary.length > 0 && (
@@ -221,14 +218,7 @@ function CompactWindowLine({
           {formatPercent(percent)}
         </span>
       </div>
-      <div className="h-1 overflow-hidden rounded-full bg-white/[0.09]">
-        {percent != null && (
-          <div
-            className={cn("h-full rounded-full", statusFillClass(tone))}
-            style={{ width: `${clamp(percent, 0, 100)}%` }}
-          />
-        )}
-      </div>
+      <UsageBar percent={percent} tone={tone} size="sm" label={window.label} />
     </div>
   );
 }

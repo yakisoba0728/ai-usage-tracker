@@ -4,7 +4,8 @@ import { useTranslation } from "react-i18next";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { ProviderMark } from "@/components/ProviderMark";
-import { statusFillClass, statusTextClass } from "@/components/dashboard/helpers";
+import { UsageBar } from "@/components/dashboard/UsageBar";
+import { statusTextClass } from "@/components/dashboard/helpers";
 import { useNow } from "@/hooks/useNow";
 import { useSnapshot } from "@/hooks/useSnapshot";
 import {
@@ -113,20 +114,12 @@ function PopoverRow({
           {formatPercent(pct)}
         </span>
       </div>
-      <div
-        className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/[0.10]"
-        role="progressbar"
-        aria-label={headline?.label ?? service.provider}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={pct != null ? Math.round(pct) : undefined}
-      >
-        {pct != null && (
-          <div
-            className={cn("h-full rounded-full transition-[width] duration-200", statusFillClass(status))}
-            style={{ width: `${Math.min(Math.max(pct, 0), 100)}%` }}
-          />
-        )}
+      <div className="mt-2">
+        <UsageBar
+          percent={pct}
+          tone={status}
+          label={headline?.label ?? service.provider}
+        />
       </div>
       {(headline?.label || reset) && (
         <div className="num mt-1.5 text-[11px] text-text-faint">

@@ -4,12 +4,17 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { PopoverShell } from "@/components/PopoverShell";
 
 /**
- * Both webviews render the full dashboard. The borderless tray popover is the
- * primary surface — clicking the menu-bar icon drops it down with usage right
- * there; the (tray-menu-opened) main window shows the same dashboard plain.
+ * The borderless tray popover shows a compact usage summary (PopoverDashboard) —
+ * clicking the menu-bar icon drops it down. The full dashboard (search, detail
+ * modal, settings) lives in the main window, opened from the tray menu.
  */
 const Dashboard = lazy(() =>
   import("@/components/Dashboard").then((m) => ({ default: m.Dashboard })),
+);
+const PopoverDashboard = lazy(() =>
+  import("@/components/PopoverDashboard").then((m) => ({
+    default: m.PopoverDashboard,
+  })),
 );
 
 /**
@@ -40,7 +45,7 @@ export default function App() {
     <Suspense fallback={null}>
       {isPopover ? (
         <PopoverShell>
-          <Dashboard />
+          <PopoverDashboard />
         </PopoverShell>
       ) : (
         <Dashboard />

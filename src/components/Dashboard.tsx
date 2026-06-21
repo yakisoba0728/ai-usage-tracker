@@ -199,7 +199,12 @@ export function Dashboard() {
     <div className="min-h-dvh overflow-hidden bg-canvas text-text">
       <div className="flex min-h-dvh">
         <div className="flex min-w-0 flex-1 flex-col">
-          <section className="flex min-h-dvh min-w-0 flex-col bg-canvas/95">
+          <section className="relative flex min-h-dvh min-w-0 flex-col bg-canvas/95">
+            {refreshing && (
+              <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-canvas/50 backdrop-blur-[1.5px]">
+                <RefreshCw className="size-8 animate-spin text-text-dim" />
+              </div>
+            )}
             <MobileHeader
               refreshing={refreshing}
               onRefresh={() => void refresh()}

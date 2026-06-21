@@ -1,95 +1,109 @@
-# AI Usage Tracker
+<div align="center">
 
-A Tauri 2 desktop app that shows **live, real** subscription usage for AI coding
-services in your menu bar. Clicking the menu-bar icon drops down a native macOS
-menu listing each provider's remaining headroom; the full dashboard opens from
-it. It reuses the credential each service's official CLI already stores locally
-and calls that provider's usage API directly — **no estimation, no proxy server,
-tokens stay on-device**.
+# 🛰️ AI Usage Tracker
 
-> The app supports two ways to connect a provider:
->
-> 1. **Auto-detect** the local CLI's stored credential (Claude Code, Codex CLI,
->    Gemini CLI, Copilot CLI, Cursor) and use it as-is.
-> 2. **Add account** in-app — paste an API key / session key, or complete an
->    OAuth device-code / browser-callback flow using the CLI's *public*
->    `client_id`.
+**Live, real subscription usage for your AI coding tools — right in the menu bar.**
 
-## Providers
+No estimation. No proxy server. Tokens never leave your machine.
 
-| Provider | Credential source | Usage endpoint | Refresh |
+[![CI](https://github.com/yakisoba0728/ai-usage-tracker/actions/workflows/ci.yml/badge.svg)](https://github.com/yakisoba0728/ai-usage-tracker/actions/workflows/ci.yml)
+![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-1f6feb)
+![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)
+![Rust](https://img.shields.io/badge/Rust-2021-CE412B?logo=rust&logoColor=white)
+![React](https://img.shields.io/badge/React-19-149ECA?logo=react&logoColor=white)
+
+<img src="docs/dashboard.png" alt="AI Usage Tracker dashboard — per-provider 5-hour / weekly usage with reset timers" width="840">
+
+</div>
+
+---
+
+## What it is
+
+A tiny [Tauri 2](https://tauri.app) desktop app that reads the credential each AI coding CLI **already stores on your machine**, calls that provider's *own* usage API, and shows your real remaining quota — 5-hour windows, weekly limits, reset timers — in your menu bar and a clean dashboard.
+
+It never estimates from token counts and never routes your traffic through a server. Every provider call happens in Rust on your device; the webview only ever sees non-secret usage numbers.
+
+## ✨ Highlights
+
+- **🔌 6 providers, one dashboard** — Claude, Codex (ChatGPT), Gemini, GitHub Copilot, Cursor, and z.ai, rendered uniformly.
+- **🎯 Real data only** — a window is omitted rather than guessed; a missing/expired token shows *why* and which CLI to run, never a fake number.
+- **🔐 Tokens stay in Rust** — only masked `{id, provider, label}` + usage snapshots cross the IPC boundary; access/refresh tokens are never serialized to the UI. The webview CSP pins `connect-src` to IPC, so all provider HTTP runs in Rust.
+- **🪟 Native menu-bar tray** — a real OS tray menu (macOS `NSMenu` / Windows system tray), rebuilt on every refresh, showing each provider's **remaining headroom** (a fresh plan reads 100%).
+- **🔁 Two ways to connect** — auto-detect a CLI's local credential, or **Add account** in-app (paste a key, or a browser/device-code OAuth flow using the CLI's *public* `client_id`).
+- **⏱️ Window anchoring (opt-in)** — send a minimal message to start a fresh 5-hour window at a predictable time, per account (Claude / Codex / z.ai).
+- **🌐 i18n** — English + 한국어, auto-detected and toggleable.
+- **🖥️ macOS + Windows** — Windows is CI-compile-verified (Linux is not a target).
+
+## 🧩 Supported providers
+
+| Provider | Connect | Refresh |
+|---|---|---|
+| **Claude** | Claude Code credential (auto) · session-key paste (manual) | OAuth self-refresh; rotated tokens written back |
+| **Codex** (ChatGPT) | Codex CLI `auth.json` (auto) · browser OAuth (manual) | OAuth self-refresh |
+| **Gemini** | **In-app OAuth only** (Add account) | OAuth self-refresh |
+| **GitHub Copilot** | Copilot CLI credential (auto) · device-code OAuth / pasted token (manual) | None — `gho_`/`ghu_`/`github_pat_` are non-expiring |
+| **Cursor** *(experimental)* | local `state.vscdb` (auto-only) | No public refresh path |
+| **z.ai** (GLM Coding Plan) | `ZAI_API_KEY` env / pasted key | None — long-lived key |
+
+<details>
+<summary><b>Exact endpoints & credential locations</b></summary>
+
+| Provider | Credential source | Usage endpoint | Refresh detail |
 |---|---|---|---|
-| **Claude** | Claude Code — macOS Keychain `Claude Code-credentials` / `~/.claude/.credentials.json` (auto); or in-app **session-key** paste (manual) | `api.anthropic.com/api/oauth/usage` + `/api/oauth/profile`; session-key accounts use `claude.ai/api/organizations[/{uuid}/usage]` | OAuth: self-refresh via `platform.claude.com/v1/oauth/token` (fallback `api.anthropic.com/v1/oauth/token`) reusing the public Claude Code client_id; rotated tokens are written back. The usage call is only re-refreshed on `401` — a `429` is a real quota signal and must not burn the rotating refresh token. |
-| **Codex** (ChatGPT) | Codex CLI — `~/.codex/auth.json` (`CODEX_HOME`) (auto); or in-app **browser OAuth** (manual) | `chatgpt.com/backend-api/wham/usage` with `ChatGPT-Account-Id` + a `codex_cli_rs/` User-Agent | OAuth: self-refresh via `auth.openai.com/oauth/token` reusing the public Codex CLI client_id; rotated tokens written back to `auth.json`. |
-| **Gemini** | **OAuth only** (Add account) via in-app **browser OAuth** | Google Code Assist `loadCodeAssist` / `retrieveUserQuota` | OAuth: self-refresh via `oauth2.googleapis.com/token` reusing the Gemini CLI's public client_id/secret. In-app login uses Authorization Code + loopback redirect (the same flow `gemini` uses); Google's installed-app client_id does NOT support the device-code grant. |
-| **GitHub Copilot** | Copilot CLI — macOS Keychain `copilot-cli` / `~/.copilot/config.json` (`COPILOT_HOME`) (auto); or **in-app GitHub device-code OAuth** (`gho_` token) **or** a pasted token (manual) | `api.github.com/copilot_internal/user` with `Editor-Version`, `Editor-Plugin-Version`, `Copilot-Integration-Id` headers | No refresh — GitHub OAuth/PAT tokens are non-expiring. Accepted token types: `gho_` (OAuth), `ghu_` (GitHub App user), `github_pat_` (fine-grained PAT with the **Copilot Requests** account permission). Classic `ghp_` PATs are **not** supported. |
-| **Cursor** (experimental) | `state.vscdb` → `ItemTable[cursorAuth/accessToken]` (auto-only — no add flow) | Connect-RPC `api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage` | No public refresh path. |
-| **z.ai** (GLM Coding Plan) | `ZAI_API_KEY` env (auto); or a pasted **API key** (manual) | `api.z.ai/api/monitor/usage/quota/limit` (community-documented; returns 5h + weekly limits) | No refresh — long-lived API key. |
+| **Claude** | macOS Keychain `Claude Code-credentials` / `~/.claude/.credentials.json` (auto); session-key paste (manual) | `api.anthropic.com/api/oauth/usage` + `/api/oauth/profile`; session-key accounts use `claude.ai/api/organizations[/{uuid}/usage]` | Self-refresh via `platform.claude.com/v1/oauth/token` (fallback `api.anthropic.com/v1/oauth/token`), reusing the public Claude Code client_id; tokens written back. Re-refreshed only on `401` — a `429` is a real quota signal and must not burn the rotating refresh token. |
+| **Codex** | `~/.codex/auth.json` (`CODEX_HOME`) (auto); browser OAuth (manual) | `chatgpt.com/backend-api/wham/usage` with `ChatGPT-Account-Id` + a `codex_cli_rs/` User-Agent | Self-refresh via `auth.openai.com/oauth/token`, reusing the public Codex CLI client_id; rotated tokens written back to `auth.json`. |
+| **Gemini** | **In-app browser OAuth only** (CLI auto-detect dropped — the CLI encrypts/migrates its token store) | Google Code Assist `loadCodeAssist` / `retrieveUserQuota` | Self-refresh via `oauth2.googleapis.com/token`. Login uses Authorization Code + loopback redirect (Google's installed-app client_id has no device-code grant). |
+| **GitHub Copilot** | macOS Keychain `copilot-cli` / `~/.copilot/config.json` (`COPILOT_HOME`) (auto); device-code OAuth or pasted token (manual) | `api.github.com/copilot_internal/user` with `Editor-Version` / `Editor-Plugin-Version` / `Copilot-Integration-Id` headers | None. Accepts `gho_`, `ghu_`, `github_pat_` (with the **Copilot Requests** permission). Classic `ghp_` PATs are **not** supported. |
+| **Cursor** | `state.vscdb` → `ItemTable[cursorAuth/accessToken]` (auto-only) | Connect-RPC `api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage` | None. |
+| **z.ai** | `ZAI_API_KEY` env (auto); pasted API key (manual) | `api.z.ai/api/monitor/usage/quota/limit` (5h + weekly) | None. |
+
+</details>
 
 ### Platform support (macOS + Windows)
 
-Linux is **not a supported target**. Credential auto-detection per OS:
+> **Linux is not a supported target.** Where each CLI's credential is read, per OS:
 
-| Provider | macOS | Windows | Notes |
-|---|---|---|---|
-| **Claude** | Keychain `Claude Code-credentials` → file | `%USERPROFILE%\.claude\.credentials.json` (+ `%CLAUDE_CONFIG_DIR%`) | no Credential Manager off-macOS |
-| **Codex** | `~/.codex/auth.json` (+ `CODEX_HOME`) | `%USERPROFILE%\.codex\auth.json` (+ `%CODEX_HOME%`) | |
-| **Gemini** | **OAuth only** (Add account) | **OAuth only** (Add account) | CLI auto-detect dropped — the CLI encrypts/migrates its token store |
-| **Copilot** | Keychain `copilot-cli` → file | Credential Manager `copilot-cli` → `%USERPROFILE%\.copilot\config.json` | Windows keyring account name `[NEEDS HARDWARE VERIFICATION]` — verify with `cmdkey /list` |
-| **Cursor** | `~/Library/.../Cursor/.../state.vscdb` | `%APPDATA%\Cursor\User\globalStorage\state.vscdb` | |
-| **z.ai** | `ZAI_API_KEY` env / pasted key | `ZAI_API_KEY` env / pasted key | |
+| Provider | macOS | Windows |
+|---|---|---|
+| **Claude** | Keychain `Claude Code-credentials` → file | `%USERPROFILE%\.claude\.credentials.json` (+ `%CLAUDE_CONFIG_DIR%`) |
+| **Codex** | `~/.codex/auth.json` (+ `CODEX_HOME`) | `%USERPROFILE%\.codex\auth.json` (+ `%CODEX_HOME%`) |
+| **Gemini** | OAuth only (Add account) | OAuth only (Add account) |
+| **Copilot** | Keychain `copilot-cli` → file | Credential Manager `copilot-cli` → `%USERPROFILE%\.copilot\config.json` ¹ |
+| **Cursor** | `~/Library/.../Cursor/.../state.vscdb` | `%APPDATA%\Cursor\User\globalStorage\state.vscdb` |
+| **z.ai** | `ZAI_API_KEY` / pasted key | `ZAI_API_KEY` / pasted key |
 
-Windows support is CI-compile-verified; live runtime (tray, real credential reads, anchor send) is not yet hardware-tested.
+¹ The Windows keyring account name is best-effort (`cmdkey /list` to verify). Windows is **CI-compile-verified**; live runtime (tray, real credential reads, anchor send) is not yet hardware-tested.
 
-### Design principles
-
-- **Real data only.** A window is omitted rather than guessed. Provider cards
-  are honest about state: a missing/expired token or an access-restricted
-  endpoint shows the cause + the CLI/key to run, never fabricated numbers.
-- **Faithful to the reference projects.** Each provider's URL, headers, and
-  response parsing mirror the actual reference implementation (claude-meter,
-  gemini-cli-usage, openai/codex `backend-client`, opencode-mystatus,
-  ClearMeasureLabs/cursor-usage-status, community `quotas` crate).
-- **Per-provider isolation.** One failing provider never breaks the others or
-  the scheduler (`panic = "abort"` is deliberately NOT set so a provider panic
-  unwinds at the task boundary instead of killing the menu-bar process).
-- **Tokens stay in Rust and never cross IPC.** Only non-secret usage snapshots +
-  a masked `{id, provider, label}` account list cross IPC to the UI;
-  access/refresh tokens are never serialized to the frontend (P0 invariant).
-  User-added account credentials are persisted to a local `accounts.json` in the
-  app's private config dir (plaintext at rest — the OS-keychain backing was
-  dropped because the unsigned build re-prompted for the login password on every
-  poll). The webview CSP locks `connect-src` to IPC, so all provider HTTP happens
-  in Rust, never the webview.
-- **Reuse-only client_ids.** The app uses each CLI's *public* `client_id`
-  (shipped inside every installed CLI) for any in-app OAuth / refresh. It does
-  not register or ship its own OAuth client.
-
-## Prerequisites
-
-Auto-detection requires the relevant CLI to be signed in (it owns the local
-credential). For providers you don't have a CLI for, use **Add account** in the
-dashboard:
-
-```bash
-# Auto-detected if installed:
-# Claude    — `claude` then /login
-# Codex     — `codex login`
-# Gemini    — `gemini` (Google login)
-# Copilot   — `copilot login`   (the Copilot CLI — NOT `gh`)
-# Cursor    — sign in to the Cursor app
-# z.ai      — export ZAI_API_KEY=...   (GLM Coding Plan or pay-as-you-go key)
-```
-
-## Develop
+## 🚀 Quick start
 
 ```bash
 pnpm install
-pnpm tauri dev      # launches the app + tray (Vite HMR)
+pnpm tauri dev        # launch the app + tray with Vite HMR
 ```
 
-Tests (parsing / normalize / isolation / refresh + frontend formatters /
-inspector model — the testable surface):
+Auto-detection just needs the relevant CLI signed in (it owns the local credential):
+
+```bash
+# Claude  — `claude` then /login
+# Codex   — `codex login`
+# Gemini  — Add account → browser OAuth (in-app)
+# Copilot — `copilot login`   (the Copilot CLI, NOT `gh`)
+# Cursor  — sign in to the Cursor app
+# z.ai    — export ZAI_API_KEY=...
+```
+
+For anything without a CLI, use **Add account** in the dashboard.
+
+### Build
+
+```bash
+pnpm tauri build      # → src-tauri/target/release/bundle/{macos/*.app, dmg/*.dmg, ... / Windows nsis·msi}
+```
+
+The `tauri` npm script strips the ambient `CI` env var. Release signing / notarization is a separate, not-yet-configured pipeline.
+
+### Test
 
 ```bash
 cd src-tauri && cargo test --lib    # Rust unit tests
@@ -97,94 +111,57 @@ pnpm test                           # frontend unit tests (vitest)
 pnpm exec tsc --noEmit              # type-check
 ```
 
-CI (`.github/workflows/`) runs the frontend type-check + vitest on Linux and
-`cargo test --lib` across a **macOS + Windows** matrix on every push and
-PR (with `cargo fmt --check` / `clippy` on macOS); `build-smoke.yml` does a debug
-`tauri build` on macOS and Windows. (Release bundling / signing / notarization is a separate, not-
-yet-configured pipeline.)
+CI (`.github/workflows/`) runs the frontend type-check + vitest, and `cargo test --lib` across a **macOS + Windows** matrix on every push/PR (`fmt`/`clippy` on macOS); `build-smoke.yml` does a debug `tauri build` on both.
 
-## Build
+## 🔒 Privacy & security
 
-```bash
-pnpm tauri build        # -> src-tauri/target/release/bundle/{macos/AI Usage Tracker.app, dmg/AI Usage Tracker_0.1.0_aarch64.dmg}
-```
+- **On-device only.** No proxy, no telemetry. Each provider's URL/headers mirror its reference implementation; the app calls the real usage API directly.
+- **Tokens stay in Rust.** Access/refresh tokens are never sent to the webview (P0 invariant). User-added credentials live in a local `accounts.json` in the app's private config dir (plaintext at rest — the OS-keychain backing was dropped because the unsigned build re-prompted for the login password on every poll).
+- **Reuse-only client_ids.** In-app OAuth/refresh reuses each CLI's *public* `client_id`; the app registers no OAuth client of its own.
+- **Per-provider isolation.** One failing provider never breaks the others or the scheduler (`panic = "abort"` is deliberately not set).
 
-The `tauri` npm script strips the ambient `CI` env var (which otherwise makes
-the Tauri CLI reject `--ci`). If `.dmg` creation fails in some sandboxes
-(`hdiutil`), distribute the `.app` directly.
-
-## Architecture
+## 🏗️ Architecture
 
 ```
 React + TS + Tailwind + shadcn/ui  ──IPC──▶  Rust (Tauri 2)
-                                            ├─ commands    (the #[tauri::command] surface + refresh_once)
-                                            ├─ scheduler   (tokio timer loop, generation-guarded; parallel fetch_all)
-                                            ├─ providers   (ProviderApi trait + claude/codex/gemini/copilot/cursor/zai)
-                                            ├─ login       (device-code OAuth: Codex / Copilot)
-                                            ├─ oauth_login (browser + localhost-callback OAuth: Codex / Gemini)
-                                            ├─ store       (accounts.json — full credentials for user-added accounts)
-                                            ├─ secrets     (read other CLIs' creds: Keychain via /usr/bin/security + JSON + SQLite)
+                                            ├─ commands    (#[tauri::command] surface + refresh_once)
+                                            ├─ scheduler   (generation-guarded poll loop; parallel fetch_all)
+                                            ├─ providers   (ProviderApi trait: claude/codex/gemini/copilot/cursor/zai)
+                                            ├─ anchor      (window-anchoring: minimal message send, Rust-only)
+                                            ├─ oauth_login (browser + localhost-callback OAuth)
+                                            ├─ store       (accounts.json — user-added credentials)
+                                            ├─ secrets     (read other CLIs' creds: Keychain/Cred-Manager + JSON + SQLite)
                                             ├─ http        (shared reqwest client + sanitizing JSON helpers)
-                                            ├─ jwt         (unverified JWT payload decode: plan / email / exp)
                                             └─ config      (AppConfig persistence)
 ```
 
-- **Frontend** is provider-agnostic: a single `ServiceUsage` shape renders
-  every provider uniformly, and the dashboard groups / filters / sorts multiple
-  accounts. Adding a provider is a TypeScript union entry plus one inline SVG
-  mark — no component changes.
-- **i18n** — English + Korean via react-i18next; the locale is auto-detected,
-  persisted to `localStorage` (`ait-lang`), and toggled from the header.
-- **Tray** is a native macOS `NSMenu` (built in Rust, rebuilt on each refresh):
-  a row per connected provider showing its **remaining headroom** (`100 − used`,
-  so a fresh plan reads 100%), then Refresh now / Show dashboard / Quit. The
-  dashboard, detail windows, and menu all display remaining (severity/colors stay
-  keyed off used). Closing the window hides it to the tray (the app keeps running
-  and polling every 5 minutes by default).
-- **Stored accounts** hold the user-added credentials in `accounts.json`.
-  `fetch_credential` checks `expires_at` before each poll and refreshes in-app
-  when the access token is expired, persisting the rotated tokens back (the file
-  is rewritten atomically, so a rotated token and its metadata can't desync).
-- **Window anchoring (opt-in, off by default).** For providers with a rolling
-  5-hour window, the app can start a fresh window so its reset time is
-  predictable. **Claude, z.ai, and Codex** all send a minimal message — via a
-  per-account auto toggle (fires when the 5-hour window is empty) or a confirmed
-  manual button. The action happens entirely in Rust (tokens never cross IPC).
-  Copilot/Gemini (calendar quotas) and Cursor (no send path) are shown as
-  **not supported**. These actions consume real quota/credits and may be subject
-  to each provider's terms.
-- **`list_accounts`** masks to `{id, provider, label}` — secrets never cross IPC.
+- **Frontend is provider-agnostic** — one `ServiceUsage` shape renders every provider; adding one is a TS union entry + an SVG mark.
+- **Remaining-headroom display** — cards, detail windows, and the tray all show `100 − used` (a fresh plan = 100%); severity colors stay keyed off *used*.
+- **Window anchoring (opt-in, off by default)** — for the rolling 5-hour window, **Claude / z.ai / Codex** send a minimal message (per-account auto toggle when the window is empty, or a confirmed manual button) so the reset time stays predictable; entirely in Rust. Copilot/Gemini (calendar quotas) and Cursor (no send path) are shown as **not supported**. These consume real quota and may be subject to each provider's terms.
+- **Closing the window** hides it to the tray; the app keeps polling (every 5 minutes by default).
 
-## Config
+## ⚙️ Configuration
 
-`get_config` / `set_config` expose `AppConfig { poll_seconds (≥ 30), providers:
-[ProviderConfig; 6] }` in the canonical order
-`[Claude, Codex, Gemini, Copilot, Cursor, z.ai]`. Each `ProviderConfig` carries:
+`AppConfig { poll_seconds (≥ 30), providers: [ProviderConfig; 6], auto_anchor }` in the canonical order `[Claude, Codex, Gemini, Copilot, Cursor, z.ai]`. Each `ProviderConfig`: `enabled`, `custom_name`, `notify_thresholds` (in-app toast levels), `primary_window` (pin the card headline), `sort_index`. `auto_anchor` is a per-account opt-in map for window anchoring.
 
-- `enabled` — whether the provider is fetched,
-- `custom_name` — a display-name override,
-- `notify_thresholds` — usage-% levels that fire an **in-app toast** when crossed
-  (in-app only; there is no OS notification),
-- `primary_window` — pin which window is the card headline,
-- `sort_index` — grid ordering.
+## 📚 References (API contracts ported to Rust)
 
-## References (API contracts ported to Rust)
+- **Claude** — [`m13v/claude-meter`](https://github.com/m13v/claude-meter) (MIT)
+- **Gemini** — [`wakamex/gemini-cli-usage`](https://github.com/wakamex/gemini-cli-usage) (MIT) + Gemini CLI `oauth2.ts`
+- **Codex** — [`openai/codex`](https://github.com/openai/codex) `codex-rs/{backend-client,login}` (Apache-2.0)
+- **Copilot** — [`vbgate/opencode-mystatus`](https://github.com/vbgate/opencode-mystatus) (MIT) + Copilot extension headers
+- **Cursor** — [`ClearMeasureLabs/cursor-usage-status`](https://github.com/ClearMeasureLabs/cursor-usage-status) (MIT)
+- **z.ai** — community `quotas` crate + `vscode-zai-usage` (endpoint is community-documented)
 
-- Claude — `m13v/claude-meter` (MIT, Rust)
-- Gemini — `wakamex/gemini-cli-usage` (MIT, Python) + Gemini CLI upstream `oauth2.ts`
-- Codex — `openai/codex` `codex-rs/{backend-client,login}` (Apache-2.0)
-- Copilot — `vbgate/opencode-mystatus` (MIT) + GitHub Copilot extension headers
-- Cursor — `ClearMeasureLabs/cursor-usage-status` (MIT)
-- z.ai — community `quotas` crate + `vscode-zai-usage` extension (endpoint is undocumented; `docs.z.ai/api-reference/api-code` for error codes 1308/1310)
+## 📋 Status & limitations
 
-## Status / limitations
-
-- v1 ships live current values only (no history/trends).
-- Each CLI still owns *initial* token issuance; the app's in-app OAuth flow
-  uses the same public `client_id` the CLI ships, so a manually-added account
-  is treated as "logged in via that CLI" for usage purposes.
-- Claude's primary refresh endpoint is `platform.claude.com/v1/oauth/token`,
-  with `api.anthropic.com/v1/oauth/token` as a fallback on network / non-2xx
-  errors (a 2xx parse error is not retried, to avoid burning a rotated token).
+- v1 ships live current values only — no history/trends.
+- Each CLI still owns *initial* token issuance; an in-app account reuses the CLI's public `client_id`, so it counts as "logged in via that CLI."
 - macOS is the primary dev/test platform; **Windows is CI-compile-verified but not yet hardware-tested**; **Linux is not supported.**
 - The z.ai usage endpoint is undocumented and may change without notice.
+
+---
+
+<div align="center">
+<sub>Built with Tauri 2 · React 19 · Rust. The dashboard above runs on demo data.</sub>
+</div>

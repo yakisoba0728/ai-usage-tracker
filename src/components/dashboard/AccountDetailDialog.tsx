@@ -152,7 +152,7 @@ function DetailPanelContent({
   onRemove: () => void;
 }) {
   const { t } = useTranslation();
-  const summary = buildInspectorSummary(service, config, nowMs, t);
+  const summary = buildInspectorSummary(service, config);
   const accountId = storedAccountId(service);
   const allWindows = [...(service.windows ?? []), ...(service.detail_windows ?? [])];
 

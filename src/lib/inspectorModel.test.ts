@@ -1,15 +1,10 @@
-import type { TFunction } from "i18next";
 import { describe, expect, it } from "vitest";
 
 import {
   buildAccountSections,
-  buildInspectorSummary,
   selectVisibleServiceId,
 } from "@/lib/inspectorModel";
 import type { AppConfig, Provider, ServiceUsage } from "@/lib/types";
-
-const t = ((key: string, opts?: Record<string, unknown>) =>
-  opts ? `${key}:${JSON.stringify(opts)}` : key) as unknown as TFunction;
 
 const providers: Provider[] = [
   "claude",
@@ -85,19 +80,6 @@ describe("inspector model", () => {
     expect(selectVisibleServiceId("auto:codex", sections)).toBe("auto:codex");
     expect(selectVisibleServiceId("auto:cursor", sections)).toBeNull();
     expect(selectVisibleServiceId(null, [])).toBeNull();
-  });
-
-  it("projects the selected service into inspector metrics", () => {
-    const summary = buildInspectorSummary(sampleServices()[0]!, config, 1_000_000, t);
-
-    expect(summary.overallPercent).toBe(98);
-    expect(summary.resetLabel).toBe('time.reset.minutes:{"m":15}');
-    expect(summary.primaryUsedLimit).toBe("4,900 / 5,000");
-    expect(summary.metricCards.map((metric) => metric.label)).toEqual([
-      "Messages",
-      "Tokens (Input)",
-      "Tokens (Output)",
-    ]);
   });
 });
 

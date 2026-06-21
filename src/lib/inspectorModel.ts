@@ -1,6 +1,4 @@
-import type { TFunction } from "i18next";
-
-import { formatResetShort, formatUsedLimit } from "@/lib/format";
+import { formatUsedLimit } from "@/lib/format";
 import {
   providerDisplayName,
   providerIndex,
@@ -32,20 +30,9 @@ export interface AccountSection {
   rows: AccountRow[];
 }
 
-export interface InspectorMetric {
-  label: string;
-  percent: number | null;
-  usedLimit: string | null;
-  resetLabel: string | null;
-}
-
 export interface InspectorSummary {
   title: string;
   accountId: string;
-  overallPercent: number | null;
-  resetLabel: string | null;
-  primaryUsedLimit: string | null;
-  metricCards: InspectorMetric[];
 }
 
 const SECTION_ORDER: Record<AccountSection["key"], number> = {
@@ -94,25 +81,10 @@ export function selectVisibleServiceId(
 export function buildInspectorSummary(
   service: ServiceUsage,
   config: AppConfig | null,
-  nowMs: number,
-  t: TFunction,
 ): InspectorSummary {
-  const headline = resolveHeadlineWindow(service, config);
-  const detail = service.detail_windows ?? [];
-  const metricSource = detail.length > 0 ? detail : service.windows;
-
   return {
     title: providerDisplayName(config, service.provider),
     accountId: service.account ?? service.id,
-    overallPercent: headline?.used_percent ?? null,
-    resetLabel: formatResetShort(headline?.resets_at ?? null, nowMs, t),
-    primaryUsedLimit: headline ? formatUsedLimit(headline) : null,
-    metricCards: metricSource.map((window) => ({
-      label: window.label,
-      percent: window.used_percent,
-      usedLimit: formatUsedLimit(window),
-      resetLabel: formatResetShort(window.resets_at, nowMs, t),
-    })),
   };
 }
 

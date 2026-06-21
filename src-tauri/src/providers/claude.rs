@@ -340,16 +340,13 @@ fn apply_refresh(
         .expires_in
         .map(|s| now_ms + (s as i64) * 1000)
         .unwrap_or(0);
-    crate::store::StoredCredential {
-        id: cred.id.clone(),
-        provider: cred.provider,
-        label: cred.label.clone(),
-        access_token: fresh.access_token,
-        refresh_token: Some(fresh.refresh_token),
+    crate::store::rotate_credential(
+        cred,
+        fresh.access_token,
+        Some(fresh.refresh_token),
+        None,
         expires_at,
-        id_token: cred.id_token.clone(),
-        account_id: cred.account_id.clone(),
-    }
+    )
 }
 
 /// Refresh a stored credential's access_token using its refresh_token.

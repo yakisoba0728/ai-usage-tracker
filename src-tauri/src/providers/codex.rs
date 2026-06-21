@@ -370,24 +370,19 @@ fn build_refreshed_cred(
     fresh: &Refreshed,
 ) -> crate::store::StoredCredential {
     let new_access = fresh.access_token.clone().unwrap_or_default();
+    // exp from the new access token, falling back to the new-or-existing id_token.
     let new_id_token = fresh.id_token.clone().or_else(|| cred.id_token.clone());
     let expires_at = crate::jwt::jwt_exp(&new_access)
         .or_else(|| new_id_token.as_deref().and_then(crate::jwt::jwt_exp))
         .map(|s| s * 1000)
         .unwrap_or(0);
-    crate::store::StoredCredential {
-        id: cred.id.clone(),
-        provider: cred.provider,
-        label: cred.label.clone(),
-        access_token: new_access,
-        refresh_token: fresh
-            .refresh_token
-            .clone()
-            .or_else(|| cred.refresh_token.clone()),
+    crate::store::rotate_credential(
+        cred,
+        new_access,
+        fresh.refresh_token.clone(),
+        fresh.id_token.clone(),
         expires_at,
-        id_token: new_id_token,
-        account_id: cred.account_id.clone(),
-    }
+    )
 }
 
 async fn refresh_oauth(

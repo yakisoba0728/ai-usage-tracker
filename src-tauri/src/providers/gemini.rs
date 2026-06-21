@@ -429,19 +429,13 @@ fn build_refreshed_cred(
     now_ms: i64,
 ) -> crate::store::StoredCredential {
     let expires_at = now_ms + (fresh.expires_in.unwrap_or(3600) as i64) * 1000;
-    crate::store::StoredCredential {
-        id: cred.id.clone(),
-        provider: cred.provider,
-        label: cred.label.clone(),
-        access_token: fresh.access_token.clone(),
-        refresh_token: fresh
-            .refresh_token
-            .clone()
-            .or_else(|| cred.refresh_token.clone()),
+    crate::store::rotate_credential(
+        cred,
+        fresh.access_token.clone(),
+        fresh.refresh_token.clone(),
+        None,
         expires_at,
-        id_token: cred.id_token.clone(),
-        account_id: cred.account_id.clone(),
-    }
+    )
 }
 
 /// Refresh a stored credential's access_token using its refresh_token via the

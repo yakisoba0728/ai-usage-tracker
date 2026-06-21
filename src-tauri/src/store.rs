@@ -184,6 +184,30 @@ pub fn update(cred: &StoredCredential) -> bool {
     true
 }
 
+/// Build a rotated credential, preserving `id`/`provider`/`label`/`account_id`.
+/// A `None` `refresh_token`/`id_token` keeps the existing one (providers rotate
+/// these inconsistently — Google/OpenAI may omit the refresh token, and only
+/// Codex returns a fresh id_token). The caller passes the already-computed
+/// `expires_at` (epoch ms; 0 = unknown).
+pub fn rotate_credential(
+    cred: &StoredCredential,
+    access_token: String,
+    refresh_token: Option<String>,
+    id_token: Option<String>,
+    expires_at: i64,
+) -> StoredCredential {
+    StoredCredential {
+        id: cred.id.clone(),
+        provider: cred.provider,
+        label: cred.label.clone(),
+        access_token,
+        refresh_token: refresh_token.or_else(|| cred.refresh_token.clone()),
+        expires_at,
+        id_token: id_token.or_else(|| cred.id_token.clone()),
+        account_id: cred.account_id.clone(),
+    }
+}
+
 pub fn list() -> Vec<StoredCredential> {
     load()
 }
@@ -378,5 +402,39 @@ mod tests {
         }
         std::env::remove_var("AIT_ACCOUNTS_PATH");
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn rotate_credential_preserves_identity_and_keeps_old_optionals_when_none() {
+        let cred = StoredCredential {
+            id: "rot-1".into(),
+            provider: Provider::Gemini,
+            label: "me@x.com".into(),
+            access_token: "old-at".into(),
+            refresh_token: Some("old-rt".into()),
+            expires_at: 1,
+            id_token: Some("old-id".into()),
+            account_id: Some("acct".into()),
+        };
+        // None keeps the existing refresh/id tokens.
+        let kept = rotate_credential(&cred, "new-at".into(), None, None, 999);
+        assert_eq!(kept.id, "rot-1");
+        assert_eq!(kept.provider, Provider::Gemini);
+        assert_eq!(kept.label, "me@x.com");
+        assert_eq!(kept.account_id.as_deref(), Some("acct"));
+        assert_eq!(kept.access_token, "new-at");
+        assert_eq!(kept.refresh_token.as_deref(), Some("old-rt"));
+        assert_eq!(kept.id_token.as_deref(), Some("old-id"));
+        assert_eq!(kept.expires_at, 999);
+        // Some rotates them.
+        let rotated = rotate_credential(
+            &cred,
+            "n2".into(),
+            Some("new-rt".into()),
+            Some("new-id".into()),
+            5,
+        );
+        assert_eq!(rotated.refresh_token.as_deref(), Some("new-rt"));
+        assert_eq!(rotated.id_token.as_deref(), Some("new-id"));
     }
 }

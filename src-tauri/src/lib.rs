@@ -5,6 +5,7 @@ pub mod http;
 pub mod jwt;
 pub mod login;
 pub mod model;
+pub mod notify;
 pub mod oauth_login;
 pub mod providers;
 pub mod scheduler;
@@ -18,7 +19,7 @@ use tauri::{
     Emitter, Listener, Manager, WindowEvent, Wry,
 };
 
-use crate::model::{Provider, UsageSnapshot};
+use crate::model::{UsageSnapshot, EVENT_TRIGGER_REFRESH, EVENT_USAGE_UPDATED};
 
 /// Toggle the macOS Dock presence: `Regular` shows the Dock icon (a normal
 /// app), `Accessory` hides it so the app lives only in the menu bar. No-op off
@@ -46,17 +47,7 @@ fn open_dashboard(app: &tauri::AppHandle) {
     set_dock_visible(app, true);
 }
 
-/// Canonical display name for a provider (matches the frontend `PROVIDER_LABEL`).
-fn provider_label(p: Provider) -> &'static str {
-    match p {
-        Provider::Claude => "Claude",
-        Provider::Codex => "Codex",
-        Provider::Gemini => "Gemini",
-        Provider::Copilot => "GitHub Copilot",
-        Provider::Cursor => "Cursor",
-        Provider::Zai => "z.ai",
-    }
-}
+use crate::notify::provider_label;
 
 /// Build the native tray menu: one (disabled, info-only) row per connected
 /// provider showing its headline usage, then the actions. Rebuilt on every
@@ -117,6 +108,7 @@ fn build_tray_menu(
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(commands::empty_snapshot_store())
         .manage(commands::default_config_store())
         .invoke_handler(tauri::generate_handler![
@@ -151,7 +143,7 @@ pub fn run() {
                     match id {
                         "show" => open_dashboard(app),
                         "refresh" => {
-                            let _ = app.emit("trigger-refresh", ());
+                            let _ = app.emit(EVENT_TRIGGER_REFRESH, ());
                         }
                         "quit" => app.exit(0),
                         // Clicking a provider usage row opens the dashboard.
@@ -163,7 +155,7 @@ pub fn run() {
 
             // Rebuild the tray menu with live numbers on every usage refresh.
             let handle = app.handle().clone();
-            app.handle().listen("usage-updated", move |event| {
+            app.handle().listen(EVENT_USAGE_UPDATED, move |event| {
                 let Ok(snap) = serde_json::from_str::<UsageSnapshot>(event.payload()) else {
                     return;
                 };

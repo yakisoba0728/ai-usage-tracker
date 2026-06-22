@@ -211,8 +211,10 @@
     "reached": "{{provider}}이(가) {{percent}}%에 도달했습니다.",
     "scanning": "로컬 세션을 다시 검색하는 중입니다.",
     "dismiss": "알림 닫기",
-    "anchorSent": "앵커 메시지를 보냈습니다.",
-    "anchorFailed": "앵커 메시지 전송 실패: {{error}}"
+    "anchorSentFor": "{{name}}에 앵커 메시지를 보냈습니다.",
+    "anchorFailedFor": "{{name}} 앵커 실패: {{error}}",
+    "anchorAutoSentFor": "{{name}} 자동 앵커링 완료.",
+    "anchorAutoFailedFor": "{{name}} 자동 앵커링 실패: {{error}}"
   },
   "time": {
     "justNow": "방금 업데이트됨",

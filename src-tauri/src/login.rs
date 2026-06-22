@@ -14,7 +14,7 @@ use std::sync::{Arc, LazyLock, Mutex};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 
-use crate::model::Provider;
+use crate::model::{Provider, EVENT_LOGIN_COMPLETE};
 use crate::store::{self, StoredCredential};
 
 const CODEX_ISSUER: &str = "https://auth.openai.com";
@@ -178,7 +178,7 @@ fn finish(app: &AppHandle, provider: Provider, res: Result<StoredCredential, Str
             error: Some(e),
         },
     };
-    let _ = app.emit("login-complete", &result);
+    let _ = app.emit(EVENT_LOGIN_COMPLETE, &result);
 }
 
 // ---- Codex (OpenAI) ----

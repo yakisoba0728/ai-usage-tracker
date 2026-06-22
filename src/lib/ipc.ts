@@ -125,14 +125,28 @@ export function refreshAccount(serviceId: string): Promise<void> {
   return invoke<void>("refresh_account", { serviceId });
 }
 
+/**
+ * The `anchor-result` event payload. Keeps `{id, ok, detail}` and — per the
+ * Chunk-2 allowed delta (spec §3) — ADDS `provider` + `label` so the toast can
+ * name which account the anchor targeted. `provider`/`label` are nullable: the
+ * id may not resolve to a provider, and an account may have no display label.
+ */
+export interface AnchorResultPayload {
+  id: string;
+  ok: boolean;
+  detail: string | null;
+  provider: Provider | null;
+  label: string | null;
+}
+
 export function onAnchorResult(
-  handler: (payload: { id: string; ok: boolean; detail: string | null }) => void,
+  handler: (payload: AnchorResultPayload) => void,
 ): Promise<UnlistenFn> {
   if (!hasTauriRuntime()) {
     void handler;
     return Promise.resolve(() => undefined);
   }
-  return listen<{ id: string; ok: boolean; detail: string | null }>("anchor-result", (event) => {
+  return listen<AnchorResultPayload>("anchor-result", (event) => {
     handler(event.payload);
   });
 }

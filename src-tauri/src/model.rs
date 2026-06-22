@@ -55,6 +55,27 @@ pub fn stored_service_id(account_id: &str) -> String {
     format!("stored:{account_id}")
 }
 
+// ── Frozen IPC event catalog (spec §3.2) ────────────────────────────────────
+// The six event names are shared `const`s so every `emit`/`listen` call site
+// references one symbol instead of a raw string literal. Renaming/removing one
+// is now a COMPILE error at the call site AND in the catalog freeze test
+// (`ipc_command_and_event_catalog_is_frozen`), closing the Chunk-0 event-name
+// tripwire gap. The string VALUES are frozen invariants — do NOT rename any of
+// them (the frontend `src/lib/ipc.ts` listens on the exact same bytes).
+
+/// Snapshot refreshed — carries the full `UsageSnapshot`.
+pub const EVENT_USAGE_UPDATED: &str = "usage-updated";
+/// One provider's fetch is starting — carries `{id, provider}`.
+pub const EVENT_PROVIDER_LOADING: &str = "provider-loading";
+/// An anchor send finished — carries `{id, ok, detail, provider, label}`.
+pub const EVENT_ANCHOR_RESULT: &str = "anchor-result";
+/// A single-account refresh finished — carries `{id, ok, detail}`.
+pub const EVENT_REFRESH_RESULT: &str = "refresh-result";
+/// An OAuth/device login captured tokens — carries `LoginResult`.
+pub const EVENT_LOGIN_COMPLETE: &str = "login-complete";
+/// The tray "Refresh now" item was clicked — no payload.
+pub const EVENT_TRIGGER_REFRESH: &str = "trigger-refresh";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LimitWindow {
     pub label: String,
@@ -418,21 +439,18 @@ mod tests {
     ///    so adding/removing one is a deliberate, test-visible diff (and keeps the
     ///    Rust side ↔ `src/lib/ipc.ts` in lockstep).
     ///
-    /// ASYMMETRY (known limitation): the 12 commands are COMPILE-ANCHORED to their
-    /// fn items (the `use` block), so dropping one is a hard build break. The 6
-    /// EVENTS are pinned only as a NAME tripwire — the event strings are raw
-    /// literals at the `emit("…")` call sites (lib.rs/login.rs/commands.rs), NOT
-    /// shared consts, so this test cannot detect a DROPPED emit. Promoting the
-    /// event names to shared `const`s would touch three production files and
-    /// exceeds Chunk 0's sanctioned env-hook seam, so it is deferred.
-    /// CHUNK-2 TODO: when Chunk 2 reworks `anchor-result`'s payload, introduce
-    /// `pub const EVENT_*` names emitted at the call sites and reference them here
-    /// so a dropped/renamed emit becomes a compile error too (closing the gap).
+    /// SYMMETRY (Chunk-2, gap closed): BOTH halves are now COMPILE-ANCHORED. The
+    /// 13 commands are anchored to their fn items (the `use` block). The 6 EVENTS
+    /// are anchored to the shared `EVENT_*` consts (this module), which every
+    /// `emit`/`listen` call site references instead of a raw string literal — so
+    /// renaming/removing one is a hard build break at the call site AND here. (The
+    /// const VALUES are still asserted below to pin the on-the-wire byte strings
+    /// the frontend `src/lib/ipc.ts` listens on.)
     ///
     /// CHUNK-2/3/4 ALLOWED DELTAS (the only intended changes — apply in their
     /// owning chunk, with this test updated as the deliberate signal, NOT here):
     ///   - Chunk 2: `anchor-result` payload gains `provider` + `label` (the EVENT
-    ///     NAME stays; only its payload shape grows).
+    ///     NAME stays; only its payload shape grows). ← APPLIED (notification).
     ///   - Chunk 3: new command `rename_account`. ← APPLIED (per-account rename).
     ///   - Chunk 4: new commands `set_launch_at_login`, `check_update_now`.
     #[test]
@@ -465,14 +483,24 @@ mod tests {
             "set_config",
             "start_login",
         ];
+        // Compile-anchored to the shared consts: removing/renaming one is a build
+        // break here, not just a string-tripwire miss. Sorted by VALUE.
         const EVENTS: [&str; 6] = [
-            "anchor-result",
-            "login-complete",
-            "provider-loading",
-            "refresh-result",
-            "trigger-refresh",
-            "usage-updated",
+            EVENT_ANCHOR_RESULT,
+            EVENT_LOGIN_COMPLETE,
+            EVENT_PROVIDER_LOADING,
+            EVENT_REFRESH_RESULT,
+            EVENT_TRIGGER_REFRESH,
+            EVENT_USAGE_UPDATED,
         ];
+        // Pin the on-the-wire byte strings the frontend listens on — a const VALUE
+        // rename (vs a symbol rename) is caught here even though it still compiles.
+        assert_eq!(EVENT_ANCHOR_RESULT, "anchor-result");
+        assert_eq!(EVENT_LOGIN_COMPLETE, "login-complete");
+        assert_eq!(EVENT_PROVIDER_LOADING, "provider-loading");
+        assert_eq!(EVENT_REFRESH_RESULT, "refresh-result");
+        assert_eq!(EVENT_TRIGGER_REFRESH, "trigger-refresh");
+        assert_eq!(EVENT_USAGE_UPDATED, "usage-updated");
 
         // Sorted + unique: the constant is the canonical, stable catalog. A
         // duplicate or out-of-order entry means an accidental edit slipped in.

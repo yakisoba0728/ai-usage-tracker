@@ -39,6 +39,7 @@ import {
   type AccountActionKind,
   type AccountActionState,
 } from "@/lib/accountActionState";
+import { buildAnchorToast } from "@/lib/anchorToast";
 import {
   shouldProcessThresholdSnapshot,
   shouldShowNoResultsOfflineCta,
@@ -303,25 +304,36 @@ export function Dashboard() {
     (serviceId: string) => {
       if (!beginAccountAction(serviceId, "anchor")) return;
 
+      // Resolve provider + account label from the current snapshot so the
+      // MANUAL toast names the account too (matches the enriched anchor-result
+      // payload the auto path uses). isAuto = false here.
+      const svc = allServices.find((s) => s.id === serviceId) ?? null;
+      const provider = svc?.provider ?? null;
+      const label = svc?.account ?? null;
+
       void sendAnchorNow(serviceId)
         .then(() => {
           if (isAccountActionPending(accountActionsRef.current, serviceId, "anchor")) {
             finishVisibleAccountAction(serviceId, "anchor", "success");
-            pushToast(t("toast.anchorSent"));
+            const toast = buildAnchorToast(provider, label, true, false);
+            pushToast(t(toast.key, toast.params));
           }
         })
         .catch((e) => {
           if (isAccountActionPending(accountActionsRef.current, serviceId, "anchor")) {
             finishVisibleAccountAction(serviceId, "anchor", "error");
-            pushToast(
-              t("toast.anchorFailed", {
-                error: scrubErrorText(String(e)),
-              }),
+            const toast = buildAnchorToast(
+              provider,
+              label,
+              false,
+              false,
+              scrubErrorText(String(e)),
             );
+            pushToast(t(toast.key, toast.params));
           }
         });
     },
-    [beginAccountAction, finishVisibleAccountAction, pushToast, t],
+    [allServices, beginAccountAction, finishVisibleAccountAction, pushToast, t],
   );
 
   useEffect(() => {
@@ -343,13 +355,17 @@ export function Dashboard() {
       if (current === "success" || current === "error") {
         return;
       }
-      pushToast(
-        p.ok
-          ? t("toast.anchorSent")
-          : t("toast.anchorFailed", {
-              error: scrubErrorText(p.detail ?? t("error.unknown")),
-            }),
+      // No tracked manual action for this id → the background auto-anchor fired
+      // it; that reads differently from a button the user just pressed.
+      const isAuto = current == null;
+      const toast = buildAnchorToast(
+        p.provider,
+        p.label,
+        p.ok,
+        isAuto,
+        p.ok ? undefined : scrubErrorText(p.detail ?? t("error.unknown")),
       );
+      pushToast(t(toast.key, toast.params));
     }).catch((e) => {
       console.error("subscribe anchor-result failed:", e);
       return undefined;

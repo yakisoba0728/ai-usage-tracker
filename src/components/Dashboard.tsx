@@ -31,6 +31,7 @@ import { Button } from "@/components/ui/button";
 import { useNow } from "@/hooks/useNow";
 import { useSnapshot } from "@/hooks/useSnapshot";
 import { useAccountActions } from "@/hooks/useAccountActions";
+import { useActionResultEvents } from "@/hooks/useActionResultEvents";
 import { useToasts } from "@/hooks/useToasts";
 import { getAccountAction } from "@/lib/accountActionState";
 import { buildAnchorToast } from "@/lib/anchorToast";
@@ -48,9 +49,6 @@ import {
 import {
   checkUpdateNow,
   getConfig,
-  onAnchorResult,
-  onRefreshResult,
-  onTriggerRefresh,
   refreshAccount,
   removeAccount,
   renameAccount,
@@ -211,6 +209,12 @@ export function Dashboard() {
     }
   }, [pushToast, refresh, t]);
 
+  // Fire-and-forget wrapper for the tray `trigger-refresh` subscription, kept
+  // stable on `handleRefreshAll` so that effect's subscribe lifecycle is unchanged.
+  const handleTriggerRefreshAll = useCallback(() => {
+    void handleRefreshAll();
+  }, [handleRefreshAll]);
+
   const handleRefreshAccount = useCallback(
     (serviceId: string) => {
       if (loadingProviders.has(serviceId)) return;
@@ -283,71 +287,13 @@ export function Dashboard() {
     ],
   );
 
-  useEffect(() => {
-    const un = onTriggerRefresh(() => void handleRefreshAll()).catch((e) => {
-      console.error("subscribe trigger-refresh failed:", e);
-      return undefined;
-    });
-    return () => {
-      void un.then((u) => u?.());
-    };
-  }, [handleRefreshAll]);
-
-  useEffect(() => {
-    const un = onAnchorResult((p) => {
-      const current = getCurrentAction(p.id, "anchor");
-      if (current === "pending") {
-        finishVisibleAccountAction(p.id, "anchor", p.ok ? "success" : "error");
-      }
-      if (current === "success" || current === "error") {
-        return;
-      }
-      // No tracked manual action for this id → the background auto-anchor fired
-      // it; that reads differently from a button the user just pressed.
-      const isAuto = current == null;
-      const toast = buildAnchorToast(
-        p.provider,
-        p.label,
-        p.ok,
-        isAuto,
-        p.ok ? undefined : scrubErrorText(p.detail ?? t("error.unknown")),
-      );
-      pushToast(t(toast.key, toast.params));
-    }).catch((e) => {
-      console.error("subscribe anchor-result failed:", e);
-      return undefined;
-    });
-    return () => {
-      void un.then((u) => u?.());
-    };
-  }, [finishVisibleAccountAction, getCurrentAction, pushToast, t]);
-
-  // A per-card refresh emits `refresh-result` on every path; only surface a
-  // failure (success already updates the card via usage-updated) — F-7.
-  useEffect(() => {
-    const un = onRefreshResult((p) => {
-      const current = getCurrentAction(p.id, "refresh");
-      if (current === "pending") {
-        finishVisibleAccountAction(p.id, "refresh", p.ok ? "success" : "error");
-      }
-      if (current === "success" || current === "error") {
-        return;
-      }
-      if (!p.ok) {
-        pushToast(
-          t("toast.refreshFailed", {
-            error: scrubErrorText(p.detail ?? t("error.unknown")),
-          }),
-        );
-      }
-    }).catch((e) => {
-      console.error("subscribe refresh-result failed:", e);
-      return undefined;
-    });
-    return () => {
-      void un.then((u) => u?.());
-    };
-  }, [finishVisibleAccountAction, getCurrentAction, pushToast, t]);
+  useActionResultEvents({
+    onTriggerRefreshAll: handleTriggerRefreshAll,
+    getCurrentAction,
+    finishVisibleAccountAction,
+    pushToast,
+    t,
+  });
 
   useEffect(() => {
     if (!snapshot || !config) return;

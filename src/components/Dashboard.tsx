@@ -148,7 +148,6 @@ export function Dashboard() {
     }
   }, [openServiceId, visibleServiceId]);
 
-
   const { toasts, pushToast, dismissToast } = useToasts();
 
   // Launch-at-login (FEAT-4): optimistic flag update, then the dedicated command

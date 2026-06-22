@@ -6,14 +6,16 @@ import { allServiceWindows } from "@/components/dashboard/helpers";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
+  accountConfigFor,
   anchorSupported,
+  patchAccountConfig,
   patchProviderConfig,
   PROVIDER_ORDER,
   providerDisplayName,
   setAutoAnchor,
 } from "@/lib/providers";
 import type { AccountActionStatus } from "@/lib/accountActionState";
-import type { AppConfig, ProviderConfig, ServiceUsage } from "@/lib/types";
+import type { AccountConfig, AppConfig, ProviderConfig, ServiceUsage } from "@/lib/types";
 import { clamp } from "@/lib/utils";
 
 export function InspectorSettings({
@@ -22,6 +24,7 @@ export function InspectorSettings({
   anchorAction,
   onSendAnchor,
   onConfigChange,
+  onRenameAccount,
   onOpenAdd,
 }: {
   service: ServiceUsage;
@@ -29,14 +32,17 @@ export function InspectorSettings({
   anchorAction: AccountActionStatus | null;
   onSendAnchor: (id: string) => void;
   onConfigChange: (next: AppConfig) => void;
+  onRenameAccount: (serviceId: string, name: string | null) => void;
   onOpenAdd: () => void;
 }) {
   const idx = PROVIDER_ORDER.indexOf(service.provider);
   const providerConfig: ProviderConfig | null = config?.providers[idx] ?? null;
+  // Display name + pinned window are PER-ACCOUNT, keyed by service id (BUG-2).
+  const accountConfig: AccountConfig | null = accountConfigFor(config, service.id);
   const allWindows = allServiceWindows(service);
   const labels = Array.from(new Set(allWindows.map((window) => window.label)));
   const { t } = useTranslation();
-  const [nameDraft, setNameDraft] = useState(providerConfig?.custom_name ?? "");
+  const [nameDraft, setNameDraft] = useState(accountConfig?.custom_name ?? "");
   const [thresholdDraft, setThresholdDraft] = useState("");
 
   // Message-anchor providers (auto toggle + manual 1-token send).
@@ -59,17 +65,25 @@ export function InspectorSettings({
   }
 
   useEffect(() => {
-    setNameDraft(providerConfig?.custom_name ?? "");
-  }, [providerConfig?.custom_name, service.provider]);
+    setNameDraft(accountConfig?.custom_name ?? "");
+  }, [accountConfig?.custom_name, service.id]);
 
+  // Provider-level edits (thresholds). enabled/sort_index live here too.
   function patch(patchValue: Partial<ProviderConfig>) {
     if (!config) return;
     onConfigChange(patchProviderConfig(config, service.provider, patchValue));
   }
 
+  // Per-account edits (pinned window), keyed by service id.
+  function patchAccount(patchValue: Partial<AccountConfig>) {
+    if (!config) return;
+    onConfigChange(patchAccountConfig(config, service.id, patchValue));
+  }
+
   function commitName() {
     const trimmed = nameDraft.trim();
-    patch({ custom_name: trimmed.length > 0 ? trimmed : null });
+    // Per-account rename via the dedicated command (no scheduler restart).
+    onRenameAccount(service.id, trimmed.length > 0 ? trimmed : null);
   }
 
   function addThreshold() {
@@ -102,7 +116,7 @@ export function InspectorSettings({
                 event.currentTarget.blur();
               }
             }}
-            placeholder={providerDisplayName(config, service.provider)}
+            placeholder={providerDisplayName(config, service.id, service.provider)}
             className="w-full rounded-md border border-border bg-canvas px-3 py-2 text-sm text-text outline-none focus:border-border-strong"
           />
         </label>
@@ -113,9 +127,9 @@ export function InspectorSettings({
           {t("detail.settings.primaryWindow")}
         </h2>
         <select
-          value={providerConfig?.primary_window ?? ""}
+          value={accountConfig?.primary_window ?? ""}
           disabled={config == null || labels.length === 0}
-          onChange={(event) => patch({ primary_window: event.target.value || null })}
+          onChange={(event) => patchAccount({ primary_window: event.target.value || null })}
           aria-label={t("detail.settings.primaryWindow")}
           className="w-full rounded-md border border-border bg-canvas px-3 py-2 text-sm text-text outline-none focus:border-border-strong"
         >

@@ -61,6 +61,7 @@ export function AccountDetailDialog({
   onOpenAdd,
   onOpenSettings,
   onConfigChange,
+  onRenameAccount,
   onRemove,
 }: {
   service: ServiceUsage | null;
@@ -80,6 +81,7 @@ export function AccountDetailDialog({
   onOpenAdd: () => void;
   onOpenSettings: () => void;
   onConfigChange: (next: AppConfig) => void;
+  onRenameAccount: (serviceId: string, name: string | null) => void;
   onRemove: () => void;
 }) {
   const { t } = useTranslation();
@@ -90,7 +92,7 @@ export function AccountDetailDialog({
           <>
             <DialogTitle className="sr-only">
               {t("detail.srTitle", {
-                provider: providerDisplayName(config, service.provider),
+                provider: providerDisplayName(config, service.id, service.provider),
               })}
             </DialogTitle>
             <DialogDescription className="sr-only">
@@ -113,6 +115,7 @@ export function AccountDetailDialog({
               onOpenAdd={onOpenAdd}
               onOpenSettings={onOpenSettings}
               onConfigChange={onConfigChange}
+              onRenameAccount={onRenameAccount}
               onRemove={onRemove}
             />
           </>
@@ -139,6 +142,7 @@ function DetailPanelContent({
   onOpenAdd,
   onOpenSettings,
   onConfigChange,
+  onRenameAccount,
   onRemove,
 }: {
   service: ServiceUsage;
@@ -157,6 +161,7 @@ function DetailPanelContent({
   onOpenAdd: () => void;
   onOpenSettings: () => void;
   onConfigChange: (next: AppConfig) => void;
+  onRenameAccount: (serviceId: string, name: string | null) => void;
   onRemove: () => void;
 }) {
   const { t } = useTranslation();
@@ -402,6 +407,7 @@ function DetailPanelContent({
             anchorAction={anchorAction}
             onSendAnchor={onSendAnchor}
             onConfigChange={onConfigChange}
+            onRenameAccount={onRenameAccount}
             onOpenAdd={onOpenAdd}
           />
         )}

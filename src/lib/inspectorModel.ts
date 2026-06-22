@@ -85,7 +85,7 @@ export function buildInspectorSummary(
   config: AppConfig | null,
 ): InspectorSummary {
   return {
-    title: providerDisplayName(config, service.provider),
+    title: providerDisplayName(config, service.id, service.provider),
     accountId: service.account ?? service.id,
   };
 }
@@ -98,7 +98,7 @@ function toAccountRow(
   return {
     id: service.id,
     service,
-    title: providerDisplayName(config, service.provider),
+    title: providerDisplayName(config, service.id, service.provider),
     subtitle: service.account,
     status: serviceStatus(service, config),
     headline,

@@ -13,14 +13,14 @@ const providers: Provider[] = [
 ];
 
 const config: AppConfig = {
+  schema_version: 1,
   poll_seconds: 300,
   providers: providers.map((_, index) => ({
     enabled: true,
-    custom_name: null,
     notify_thresholds: [50, 75, 90],
-    primary_window: null,
     sort_index: index,
   })) as AppConfig["providers"],
+  accounts: {},
   auto_anchor: {},
 };
 

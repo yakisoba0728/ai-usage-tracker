@@ -1,5 +1,6 @@
 import { PROVIDER_LABEL, PROVIDER_ORDER } from "@/lib/providerMetadata";
 import type {
+  AccountConfig,
   AppConfig,
   LimitWindow,
   Provider,
@@ -52,34 +53,61 @@ export function setAutoAnchor(
   return { ...config, auto_anchor: { ...config.auto_anchor, [serviceId]: enabled } };
 }
 
+/** The per-account config for a service id (`auto:<provider>` / `stored:<id>`),
+ * or null before config has loaded / when the account has no overrides yet. */
+export function accountConfigFor(
+  config: AppConfig | null,
+  serviceId: string,
+): AccountConfig | null {
+  return config?.accounts?.[serviceId] ?? null;
+}
+
 /**
- * Display name for a provider — honors a user `custom_name`, else the canonical
- * label. Mirrors `AppConfig::display_name` in config.rs.
+ * Immutably patch one account's per-service config (display name / pinned
+ * window), keyed by service id. This is the PER-ACCOUNT write path (BUG-2 fix):
+ * it only touches `accounts[serviceId]`, never a sibling account.
+ */
+export function patchAccountConfig(
+  config: AppConfig,
+  serviceId: string,
+  patch: Partial<AccountConfig>,
+): AppConfig {
+  const prev = config.accounts?.[serviceId] ?? {};
+  return {
+    ...config,
+    accounts: { ...config.accounts, [serviceId]: { ...prev, ...patch } },
+  };
+}
+
+/**
+ * Display name for ONE account — honors that account's `custom_name` (keyed by
+ * service id), else the canonical provider label. Per-account (BUG-2 fix): two
+ * accounts of one provider resolve independently.
  */
 export function providerDisplayName(
   config: AppConfig | null,
+  serviceId: string,
   provider: Provider,
 ): string {
-  const pc = providerConfigFor(config, provider);
-  const custom = pc?.custom_name?.trim();
+  const custom = accountConfigFor(config, serviceId)?.custom_name?.trim();
   return custom && custom.length > 0 ? custom : PROVIDER_LABEL[provider];
 }
 
 /**
- * Resolve the headline window for a card / toast — the user's pinned
- * `primary_window` if set and present, else the first primary window, else the
- * highest-burn window across primary + detail. Returns null when there is no
- * usable window at all.
+ * Resolve the headline window for a card / toast — the account's pinned
+ * `primary_window` (keyed by service id) if set and present, else the first
+ * primary window, else the highest-burn window across primary + detail. Returns
+ * null when there is no usable window at all.
  */
 export function resolveHeadlineWindow(
   service: ServiceUsage,
   config: AppConfig | null,
 ): LimitWindow | null {
-  const pc = providerConfigFor(config, service.provider);
+  const ac = accountConfigFor(config, service.id);
   const primary = service.windows ?? [];
-  if (pc?.primary_window) {
+  if (ac?.primary_window) {
     const all = [...primary, ...(service.detail_windows ?? [])];
-    const pinned = all.find((w) => w.label === pc.primary_window);
+    const pinned = all.find((w) => w.label === ac.primary_window);
     if (pinned) return pinned;
   }
   if (primary.length > 0) return primary[0];

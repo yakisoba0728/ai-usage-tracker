@@ -1,4 +1,5 @@
 pub mod anchor;
+pub mod auth;
 pub mod commands;
 pub mod config;
 pub mod http;
@@ -6,7 +7,7 @@ pub mod jwt;
 pub mod login;
 pub mod model;
 pub mod notify;
-pub mod oauth_login;
+pub mod oauth;
 pub mod providers;
 pub mod scheduler;
 pub mod secrets;

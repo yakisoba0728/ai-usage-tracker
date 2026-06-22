@@ -231,13 +231,13 @@ pub async fn login_oauth(
     app: AppHandle,
     provider: crate::model::Provider,
 ) -> Result<String, String> {
-    crate::oauth_login::start(app, provider)
+    crate::oauth::start(app, provider)
 }
 
 /// Cancel the in-progress OAuth login (closes the local callback server).
 #[tauri::command]
 pub fn cancel_login() {
-    crate::oauth_login::cancel();
+    crate::oauth::cancel();
     crate::login::cancel();
 }
 

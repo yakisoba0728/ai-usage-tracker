@@ -128,25 +128,41 @@ async fn fetch_available_update() -> Result<Option<AvailableUpdate>, String> {
     }
 }
 
-/// Fire the "update available" OS notification. Clicking it (or the in-app
-/// follow-up) opens the release page via `tauri-plugin-opener`. The notification
-/// text is intentionally simple English (it fires from Rust, possibly while the
-/// webview is closed). Errors are swallowed — a failed toast must not abort the
-/// check loop.
-fn notify_update_available(app: &AppHandle, update: &AvailableUpdate) {
+/// Decide whether a new release should ALSO open the release page (vs. just
+/// notify). Pure so it is unit-tested without an `AppHandle` (D2 — test the
+/// logic, keep the I/O shell thin): a manual "Check for updates" (`force`)
+/// always opens; the automatic path opens only when the user opted into
+/// `update_auto_open`.
+pub fn should_open_release(force: bool, update_auto_open: bool) -> bool {
+    force || update_auto_open
+}
+
+/// Fire the "update available" OS notification. When `open` is true also open
+/// the release page via `tauri-plugin-opener` (notify-only otherwise). The
+/// notification text is intentionally simple English (it fires from Rust,
+/// possibly while the webview is closed). Errors are swallowed — a failed toast
+/// must not abort the check loop.
+fn notify_update_available(app: &AppHandle, update: &AvailableUpdate, open: bool) {
     use tauri_plugin_notification::NotificationExt;
+    let body = if open {
+        format!(
+            "AI Usage Tracker {} is available. Click to open the release page.",
+            update.version
+        )
+    } else {
+        format!("AI Usage Tracker {} is available.", update.version)
+    };
     let _ = app
         .notification()
         .builder()
         .title("Update available")
-        .body(format!(
-            "AI Usage Tracker {} is available. Click to open the release page.",
-            update.version
-        ))
+        .body(body)
         .show();
-    // Best-effort: open the release page so the click has somewhere to land even
-    // on platforms where notification-click routing isn't wired. Swallow errors.
-    open_release_page(app, &update.html_url);
+    // Only open the release page when asked (manual check, or auto-open opted
+    // in). Best-effort; swallow errors so a failed open never aborts the check.
+    if open {
+        open_release_page(app, &update.html_url);
+    }
 }
 
 /// Open the release page in the default browser via the opener plugin.
@@ -183,10 +199,17 @@ pub async fn run_update_check(
     // Suppress a repeat notification for a release we've already flagged (only on
     // the automatic path; a manual check always re-notifies so the user gets
     // feedback from the button press).
-    let already_notified =
-        cfg.read().await.last_notified_version.as_deref() == Some(&update.version);
+    let (already_notified, auto_open) = {
+        let guard = cfg.read().await;
+        (
+            guard.last_notified_version.as_deref() == Some(&update.version),
+            guard.update_auto_open,
+        )
+    };
     if force || !already_notified {
-        notify_update_available(app, &update);
+        // Manual checks always open the page; the automatic path honors the
+        // user's notify-only vs. notify+open preference.
+        notify_update_available(app, &update, should_open_release(force, auto_open));
     }
 
     // Remember this version so the scheduled loop doesn't re-fire for it. Persist
@@ -296,5 +319,24 @@ mod tests {
         assert_eq!(normalize_version("  v1.2.3 "), "1.2.3");
         assert_eq!(normalize_version("V0.0.1"), "0.0.1");
         assert_eq!(normalize_version("2.0.0"), "2.0.0");
+    }
+
+    #[test]
+    fn should_open_release_manual_always_opens_auto_honors_pref() {
+        // Manual "Check for updates" (force) always opens, regardless of the pref.
+        assert!(
+            should_open_release(true, false),
+            "manual opens even if pref off"
+        );
+        assert!(should_open_release(true, true), "manual opens when pref on");
+        // Automatic path opens only when the user opted into notify+open.
+        assert!(
+            !should_open_release(false, false),
+            "auto path stays notify-only by default"
+        );
+        assert!(
+            should_open_release(false, true),
+            "auto path opens when update_auto_open is set"
+        );
     }
 }

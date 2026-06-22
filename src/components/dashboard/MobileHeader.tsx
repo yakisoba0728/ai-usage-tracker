@@ -1,4 +1,4 @@
-import { Command, Languages, RefreshCw, Settings } from "lucide-react";
+import { Command, RefreshCw, Settings } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
@@ -12,8 +12,9 @@ export function MobileHeader({
   onRefresh: () => void;
   onOpenSettings: () => void;
 }) {
-  const { t, i18n } = useTranslation();
-  const nextLang = i18n.resolvedLanguage === "ko" ? "en" : "ko";
+  // The language picker moved into Settings → General → Display; the header now
+  // only carries Refresh + Settings. i18n stays wired app-wide via `t`.
+  const { t } = useTranslation();
   return (
     <header className="flex h-12 items-center justify-between border-b border-border px-4">
       <div className="flex items-center gap-2 font-semibold">
@@ -21,15 +22,6 @@ export function MobileHeader({
         AI Usage Tracker
       </div>
       <div className="flex items-center gap-1">
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => void i18n.changeLanguage(nextLang)}
-          aria-label={t("language.label")}
-          title={t(nextLang === "ko" ? "language.korean" : "language.english")}
-        >
-          <Languages className="size-4" />
-        </Button>
         <Button
           variant="ghost"
           size="icon"

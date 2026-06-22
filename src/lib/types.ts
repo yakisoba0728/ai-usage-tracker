@@ -128,6 +128,9 @@ export interface AppConfig {
   /** Whether the background GitHub-release update notifier runs (FEAT-5).
    * Defaults true. */
   auto_update_check: boolean;
+  /** On a new release, also open the release page (not just notify). Defaults
+   * false (notify-only). The manual "Check for updates" always opens. */
+  update_auto_open?: boolean;
   /**
    * Last release version we notified about, so the daily check doesn't repeat
    * (FEAT-5). Rust serializes with `skip_serializing_if = Option::is_none`, so

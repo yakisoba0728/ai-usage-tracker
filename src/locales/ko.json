@@ -185,6 +185,20 @@
     "nav": { "general": "일반", "providers": "제공자" },
     "generalTitle": "일반",
     "generalDesc": "표시, 새로고침, 계정 표시 설정.",
+    "group": {
+      "display": "표시",
+      "system": "시스템",
+      "updates": "업데이트"
+    },
+    "language": "언어",
+    "languageDesc": "인터페이스 언어.",
+    "updateMode": "새 버전이 있을 때",
+    "updateModeDesc": "알림만 받을지, 릴리스 페이지도 열지 선택합니다.",
+    "updateModeOption": { "notify": "알림만", "notifyOpen": "알림 + 페이지 열기" },
+    "thresholds": "알림 임계값",
+    "thresholdsDesc": "사용량이 이 백분율을 넘으면 알립니다.",
+    "expandThresholds": "알림 임계값 보기",
+    "collapseThresholds": "알림 임계값 숨기기",
     "refreshInterval": "기본 새로고침 주기",
     "refreshIntervalDesc": "계정을 얼마나 자주 새로고침할지.",
     "poll": {

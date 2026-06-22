@@ -185,6 +185,20 @@
     "nav": { "general": "General", "providers": "Providers" },
     "generalTitle": "General",
     "generalDesc": "Display, refresh, and account visibility.",
+    "group": {
+      "display": "Display",
+      "system": "System",
+      "updates": "Updates"
+    },
+    "language": "Language",
+    "languageDesc": "Interface language.",
+    "updateMode": "On a new version",
+    "updateModeDesc": "Notify only, or also open the release page.",
+    "updateModeOption": { "notify": "Notify only", "notifyOpen": "Notify + open page" },
+    "thresholds": "Notification thresholds",
+    "thresholdsDesc": "Notify when usage crosses these percentages.",
+    "expandThresholds": "Show notification thresholds",
+    "collapseThresholds": "Hide notification thresholds",
     "refreshInterval": "Default refresh interval",
     "refreshIntervalDesc": "How often accounts are refreshed.",
     "poll": {

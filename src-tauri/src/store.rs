@@ -59,6 +59,10 @@ fn store_path() -> std::path::PathBuf {
         })
         .join("ai-usage-tracker");
     let _ = std::fs::create_dir_all(&base);
+    // The store holds plaintext tokens — keep the dir owner-only so the
+    // ~/.config fallback (whose parent is often not 0700) can't be read by
+    // other local accounts (X-1).
+    crate::util::set_dir_private(&base);
     base.join("accounts.json")
 }
 
@@ -79,12 +83,9 @@ fn persist_accounts(accounts: &[StoredCredential]) {
     let Ok(json) = serde_json::to_string_pretty(&file) else {
         return;
     };
-    // Write to a sibling temp file then atomically rename over the target, so a
-    // concurrent reader never observes a half-written accounts.json.
-    let tmp = path.with_extension("json.tmp");
-    if std::fs::write(&tmp, json).is_ok() {
-        let _ = std::fs::rename(&tmp, &path);
-    }
+    // Atomic (temp + rename, no torn file for a concurrent reader) AND owner-only
+    // (0o600): the file holds plaintext access/refresh tokens (X-1).
+    let _ = crate::util::write_atomic(&path, json.as_bytes(), Some(0o600));
 }
 
 fn gen_id(provider: &Provider) -> String {
@@ -340,6 +341,37 @@ mod tests {
         for i in 0..16 {
             remove(&format!("conc-{i}"));
         }
+        std::env::remove_var("AIT_ACCOUNTS_PATH");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn persisted_accounts_file_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let _g = ENV_LOCK.lock().unwrap();
+        let path = temp_path("perms");
+        let _ = std::fs::remove_file(&path);
+        std::env::set_var("AIT_ACCOUNTS_PATH", &path);
+
+        add(StoredCredential {
+            id: "perm-1".into(),
+            provider: Provider::Zai,
+            label: "x".into(),
+            access_token: "secret-token".into(),
+            refresh_token: None,
+            expires_at: 0,
+            id_token: None,
+            account_id: None,
+        })
+        .unwrap();
+
+        // accounts.json holds plaintext access/refresh tokens; it must not be
+        // world-readable (X-1) — especially on the ~/.config fallback path.
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "accounts.json must be owner-only");
+
+        let _ = remove("perm-1");
         std::env::remove_var("AIT_ACCOUNTS_PATH");
         let _ = std::fs::remove_file(&path);
     }

@@ -17,26 +17,7 @@ pub(super) fn write_creds(s: &str) -> Result<(), ProviderError> {
         // first write when no entry exists yet.
         let acct = existing_keychain_account()
             .unwrap_or_else(|| std::env::var("USER").unwrap_or_default());
-        let out = std::process::Command::new("/usr/bin/security")
-            .args([
-                "add-generic-password",
-                "-s",
-                "Claude Code-credentials",
-                "-a",
-                &acct,
-                "-w",
-                s,
-                "-U",
-            ])
-            .output()
-            .map_err(|e| ProviderError::Network(format!("security write: {e}")))?;
-        if !out.status.success() {
-            return Err(ProviderError::Network(format!(
-                "security write: {}",
-                String::from_utf8_lossy(&out.stderr).trim()
-            )));
-        }
-        Ok(())
+        keychain_add("Claude Code-credentials", &acct, s)
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -70,4 +51,122 @@ fn existing_keychain_account() -> Option<String> {
             .map(str::to_string)
             .filter(|s| !s.is_empty())
     })
+}
+
+/// Add/update a generic-password keychain item, feeding the secret on stdin so
+/// it never appears on the argv / process table (X-2). `security ... -w` (no
+/// value) prompts for the password and then asks to retype it, so the secret is
+/// written to stdin twice; the pipe is closed before we wait, so `security`
+/// sees EOF and the call cannot deadlock.
+#[cfg(target_os = "macos")]
+fn keychain_add(service: &str, account: &str, secret: &str) -> Result<(), ProviderError> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new("/usr/bin/security")
+        .args(add_password_args(service, account))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| ProviderError::Network(format!("security write: {e}")))?;
+    {
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| ProviderError::Network("security: no stdin".into()))?;
+        let mut write_twice = || -> std::io::Result<()> {
+            stdin.write_all(secret.as_bytes())?;
+            stdin.write_all(b"\n")?;
+            stdin.write_all(secret.as_bytes())?;
+            stdin.write_all(b"\n")
+        };
+        let res = write_twice();
+        drop(stdin); // close the pipe so `security` sees EOF before we wait
+        res.map_err(|e| ProviderError::Network(format!("security stdin: {e}")))?;
+    }
+    let out = child
+        .wait_with_output()
+        .map_err(|e| ProviderError::Network(format!("security wait: {e}")))?;
+    if !out.status.success() {
+        return Err(ProviderError::Network(format!(
+            "security write: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    Ok(())
+}
+
+/// Build the `security add-generic-password` argv. The secret is deliberately
+/// NOT an argument (X-2): a trailing `-w` with no value makes `security` read
+/// the password from stdin (prompted twice), so the token never appears in the
+/// process table where any local `ps -ww` could capture it. `-U` updates the
+/// existing item in place.
+#[cfg(target_os = "macos")]
+fn add_password_args(service: &str, account: &str) -> Vec<String> {
+    vec![
+        "add-generic-password".to_string(),
+        "-s".to_string(),
+        service.to_string(),
+        "-a".to_string(),
+        account.to_string(),
+        "-U".to_string(),
+        // No value after `-w`: security reads the secret from stdin (twice).
+        "-w".to_string(),
+    ]
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn add_password_args_omit_the_secret_and_read_stdin() {
+        let args = add_password_args("Claude Code-credentials", "alice");
+        // The secret must never be on the argv (the whole point of X-2).
+        let secret = "sk-ant-oat01-supersecret";
+        assert!(
+            !args
+                .iter()
+                .any(|a| a.contains(secret) || a.contains("sk-ant")),
+            "no secret-shaped argument may be present: {args:?}"
+        );
+        // `-w` is the LAST arg with no value → security reads the secret on stdin.
+        assert_eq!(args.last().map(String::as_str), Some("-w"));
+        assert!(
+            args.iter().any(|a| a == "-U"),
+            "update-in-place flag present"
+        );
+        assert!(args.iter().any(|a| a == "add-generic-password"));
+        assert!(args.iter().any(|a| a == "Claude Code-credentials"));
+        assert!(args.iter().any(|a| a == "alice"));
+    }
+
+    /// Exercises the REAL production `keychain_add` (stdin-fed secret) against a
+    /// throwaway keychain item and reads it back, proving the stdin-twice piping
+    /// actually stores the secret. Ignored by default — it touches the login
+    /// keychain — run with `cargo test -- --ignored keychain_add_round_trips`.
+    #[test]
+    #[ignore = "touches the login keychain; run explicitly with --ignored"]
+    fn keychain_add_round_trips_a_secret_via_stdin() {
+        let svc = format!("ait-x2-probe-{}", std::process::id());
+        let secret = r#"{"claudeAiOauth":{"accessToken":"sk-ant-probe123","refreshToken":"rt"}}"#;
+
+        keychain_add(&svc, "ait-test-acct", secret).expect("keychain_add should succeed");
+
+        let out = std::process::Command::new("/usr/bin/security")
+            .args(["find-generic-password", "-s", &svc, "-w"])
+            .output()
+            .unwrap();
+        let got = String::from_utf8_lossy(&out.stdout);
+        // cleanup before asserting so a failure still removes the probe item.
+        let _ = std::process::Command::new("/usr/bin/security")
+            .args(["delete-generic-password", "-s", &svc])
+            .output();
+        assert_eq!(
+            got.trim_end_matches('\n'),
+            secret,
+            "stdin-fed secret must round-trip exactly"
+        );
+    }
 }

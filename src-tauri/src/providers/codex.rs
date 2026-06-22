@@ -7,6 +7,8 @@
 //! (POST `auth.openai.com/oauth/token`, public CLI client_id from codex-rs/login).
 //! Token-parsing only.
 
+use std::path::Path;
+
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::Value;
@@ -127,10 +129,16 @@ fn read_auth() -> Result<(Value, Tokens), ProviderError> {
 }
 
 fn write_auth(v: &Value) -> Result<(), ProviderError> {
-    let path = secrets::codex_auth_path();
+    write_auth_to(&secrets::codex_auth_path(), v)
+}
+
+fn write_auth_to(path: &Path, v: &Value) -> Result<(), ProviderError> {
     let text = serde_json::to_string_pretty(v)
         .map_err(|e| ProviderError::Parse(format!("codex auth write: {e}")))?;
-    std::fs::write(&path, text)
+    // Atomic + owner-only: a crash/ENOSPC mid-write must not corrupt the CLI's
+    // auth.json — by the time we get here the old refresh token is already
+    // rotated away server-side, so a torn file would strand both tools (B-5).
+    crate::util::write_atomic(path, text.as_bytes(), Some(0o600))
         .map_err(|e| ProviderError::Network(format!("write {}: {e}", path.display())))
 }
 
@@ -408,6 +416,30 @@ pub(crate) async fn fetch_stored(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn write_auth_persists_atomically_and_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("ait_codex_auth_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("auth.json");
+        let v = serde_json::json!({"tokens":{"access_token":"a","refresh_token":"r"}});
+
+        write_auth_to(&path, &v).unwrap();
+
+        // Round-trips as valid JSON (not torn).
+        let back: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(back["tokens"]["access_token"], "a");
+        // Credential file → owner-only (B-5 / consistency with X-1).
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        // The temp file is consumed by the rename.
+        assert!(!dir.join("auth.json.tmp").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn normalize_wham_fixture_includes_spark_and_credits() {

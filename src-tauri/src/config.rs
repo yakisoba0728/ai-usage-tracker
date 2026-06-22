@@ -3,7 +3,7 @@
 //! the codebase.
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Per-provider customizable settings. Lives inside `AppConfig.providers`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -88,6 +88,9 @@ impl AppConfig {
         if let Some(dir) = dirs::config_dir() {
             let app_dir = dir.join("ai-usage-tracker");
             let _ = std::fs::create_dir_all(&app_dir);
+            // Keep the app config dir owner-only (shared with the plaintext token
+            // store under the same dir; see store.rs / X-1).
+            crate::util::set_dir_private(&app_dir);
             app_dir.join("config.json")
         } else {
             PathBuf::from("config.json")
@@ -105,19 +108,44 @@ impl AppConfig {
 
     /// Persist to disk atomically.
     pub fn save(&self) {
-        let path = Self::config_path();
-        if let Ok(text) = serde_json::to_string_pretty(self) {
-            let tmp = path.with_extension("json.tmp");
-            if std::fs::write(&tmp, text).is_ok() {
-                let _ = std::fs::rename(&tmp, &path);
-            }
-        }
+        let _ = self.save_to(&Self::config_path());
+    }
+
+    fn save_to(&self, path: &Path) -> std::io::Result<()> {
+        let text = serde_json::to_string_pretty(self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        // Atomic + owner-only, via the shared helper (X-1 consistency).
+        crate::util::write_atomic(path, text.as_bytes(), Some(0o600))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn save_to_writes_owner_only_parseable_config() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = std::env::temp_dir().join(format!("ait_cfg_{}.json", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let cfg = AppConfig {
+            poll_seconds: 123,
+            ..Default::default()
+        };
+
+        cfg.save_to(&path).unwrap();
+
+        // Round-trips (atomic, not torn).
+        let back: AppConfig =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(back.poll_seconds, 123);
+        // Owner-only (shares the dir with the plaintext token store; X-1).
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+
+        let _ = std::fs::remove_file(&path);
+    }
 
     #[test]
     fn default_all_enabled_with_thresholds() {

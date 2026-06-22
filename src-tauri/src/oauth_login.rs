@@ -176,6 +176,41 @@ struct RunCtx {
     cancelled: std::sync::Arc<AtomicBool>,
 }
 
+/// What to do with one inbound callback request, decided purely from its query
+/// params. `state` is validated FIRST (X-3): any request whose state does not
+/// match ours is `Ignore`d — NOT treated as an error — so an attacker-supplied
+/// `?error=...` to the fixed callback port cannot abort the user's in-flight
+/// login. Only a state-matched request can finish the login (success or error).
+#[derive(Debug, PartialEq, Eq)]
+enum CallbackAction {
+    /// Wrong/missing state — not our callback. Reject and keep waiting.
+    Ignore,
+    /// State-matched genuine provider error → fail the login.
+    Error(String),
+    /// State-matched success → use this authorization code.
+    Code(String),
+    /// State-matched but no usable code → keep waiting.
+    MissingCode,
+}
+
+fn classify_callback(
+    params: &std::collections::HashMap<String, String>,
+    expected_state: &str,
+) -> CallbackAction {
+    // X-3: validate `state` before acting on anything else. A non-matching
+    // (or absent) state means the request is not the user's real callback.
+    if params.get("state").map(|s| s.as_str()) != Some(expected_state) {
+        return CallbackAction::Ignore;
+    }
+    if let Some(err) = params.get("error") {
+        return CallbackAction::Error(err.clone());
+    }
+    match params.get("code") {
+        Some(c) if !c.is_empty() => CallbackAction::Code(c.clone()),
+        _ => CallbackAction::MissingCode,
+    }
+}
+
 fn run_server(server: Server, ctx: RunCtx) {
     let RunCtx {
         app,
@@ -217,35 +252,40 @@ fn run_server(server: Server, ctx: RunCtx) {
                 }
                 let params: std::collections::HashMap<String, String> =
                     parsed.query_pairs().into_owned().collect();
-                if let Some(err) = params.get("error") {
-                    let _ = req.respond(
-                        Response::from_string(format!("OAuth error: {err}")).with_status_code(400),
-                    );
-                    return emit_err(&app, provider, format!("provider error: {err}"));
-                }
-                if params.get("state").map(|s| s.as_str()) != Some(&expected_state) {
-                    let _ =
-                        req.respond(Response::from_string("State mismatch").with_status_code(400));
-                    return emit_err(&app, provider, "state mismatch".into());
-                }
-                let code = match params.get("code") {
-                    Some(c) if !c.is_empty() => c.clone(),
-                    _ => {
+                match classify_callback(&params, &expected_state) {
+                    // Not our callback (stale / cross-site / an attacker on the
+                    // fixed, guessable port). Reject it but DO NOT end the in-flight
+                    // login — keep waiting for the state-matched callback (X-3).
+                    CallbackAction::Ignore => {
+                        let _ = req
+                            .respond(Response::from_string("State mismatch").with_status_code(400));
+                        continue;
+                    }
+                    CallbackAction::Error(err) => {
+                        let _ = req.respond(
+                            Response::from_string(format!("OAuth error: {err}"))
+                                .with_status_code(400),
+                        );
+                        return emit_err(&app, provider, format!("provider error: {err}"));
+                    }
+                    CallbackAction::MissingCode => {
                         let _ = req
                             .respond(Response::from_string("Missing code").with_status_code(400));
                         continue;
                     }
-                };
-                let _ = req.respond(
-                    Response::from_string(SUCCESS_HTML).with_header(
-                        tiny_http::Header::from_bytes(
-                            b"Content-Type".as_ref(),
-                            b"text/html; charset=utf-8".as_ref(),
-                        )
-                        .unwrap(),
-                    ),
-                );
-                got_code = Some(code);
+                    CallbackAction::Code(code) => {
+                        let _ = req.respond(
+                            Response::from_string(SUCCESS_HTML).with_header(
+                                tiny_http::Header::from_bytes(
+                                    b"Content-Type".as_ref(),
+                                    b"text/html; charset=utf-8".as_ref(),
+                                )
+                                .unwrap(),
+                            ),
+                        );
+                        got_code = Some(code);
+                    }
+                }
             }
             _ => continue,
         }
@@ -436,6 +476,54 @@ const SUCCESS_HTML: &str = r#"<!DOCTYPE html><html><head><meta charset="utf-8"><
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn params(pairs: &[(&str, &str)]) -> std::collections::HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn callback_with_wrong_or_missing_state_is_ignored_not_errored() {
+        // The security property (X-3): an attacker hitting the fixed callback
+        // port with ?error=... and a wrong/absent state must NOT abort the login.
+        assert_eq!(
+            classify_callback(&params(&[("error", "access_denied")]), "S"),
+            CallbackAction::Ignore,
+            "error with NO state must be ignored, not treated as a provider error"
+        );
+        assert_eq!(
+            classify_callback(&params(&[("error", "x"), ("state", "WRONG")]), "S"),
+            CallbackAction::Ignore
+        );
+        assert_eq!(
+            classify_callback(&params(&[("code", "c"), ("state", "WRONG")]), "S"),
+            CallbackAction::Ignore,
+            "even a code with the wrong state is ignored"
+        );
+    }
+
+    #[test]
+    fn state_matched_callback_resolves_error_or_code() {
+        assert_eq!(
+            classify_callback(&params(&[("error", "denied"), ("state", "S")]), "S"),
+            CallbackAction::Error("denied".into())
+        );
+        assert_eq!(
+            classify_callback(&params(&[("code", "abc"), ("state", "S")]), "S"),
+            CallbackAction::Code("abc".into())
+        );
+        // State-matched but empty/absent code → keep waiting, don't fail.
+        assert_eq!(
+            classify_callback(&params(&[("code", ""), ("state", "S")]), "S"),
+            CallbackAction::MissingCode
+        );
+        assert_eq!(
+            classify_callback(&params(&[("state", "S")]), "S"),
+            CallbackAction::MissingCode
+        );
+    }
 
     #[test]
     fn pkce_roundtrip() {

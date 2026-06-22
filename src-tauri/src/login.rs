@@ -222,22 +222,43 @@ async fn poll_codex(
     let tokens: CodexTokens = read(resp, &token_url).await?;
 
     let access_token = tokens.access_token.ok_or("no access_token")?;
-    let (label, account_id) = tokens
-        .id_token
+    Ok(codex_credential(
+        access_token,
+        tokens.refresh_token,
+        tokens.id_token,
+    ))
+}
+
+/// Build a fresh device-code Codex credential, deriving `expires_at` (epoch ms)
+/// from the access token's JWT `exp`, falling back to the id_token's `exp`, then
+/// 0 (unknown). Critical: without a real expiry the proactive-refresh gate in
+/// `fetch_credential` (`expires_at > 0 && < now`) never fires, so the stored
+/// refresh token is never used and the account silently dies once the access JWT
+/// expires (B-4). Mirrors `codex::build_refreshed_cred`'s exp logic; consistent
+/// with the loopback-OAuth path, which already sets `expires_at`.
+fn codex_credential(
+    access_token: String,
+    refresh_token: Option<String>,
+    id_token: Option<String>,
+) -> StoredCredential {
+    let (label, account_id) = id_token
         .as_deref()
         .map(crate::jwt::codex_identity)
         .unwrap_or((None, None));
-
-    Ok(StoredCredential {
+    let expires_at = crate::jwt::jwt_exp(&access_token)
+        .or_else(|| id_token.as_deref().and_then(crate::jwt::jwt_exp))
+        .map(|s| s * 1000)
+        .unwrap_or(0);
+    StoredCredential {
         id: String::new(),
         provider: Provider::Codex,
         label: label.unwrap_or_else(|| "Codex account".into()),
         access_token,
-        refresh_token: tokens.refresh_token,
-        expires_at: 0,
-        id_token: tokens.id_token,
+        refresh_token,
+        expires_at,
+        id_token,
         account_id,
-    })
+    }
 }
 
 fn codex_token_exchange_body(code: &str, code_verifier: &str) -> String {
@@ -379,6 +400,41 @@ fn interval_secs(v: &serde_json::Value, default: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fake_jwt(claims: serde_json::Value) -> String {
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use base64::Engine;
+        let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).unwrap());
+        format!("hdr.{payload}.sig")
+    }
+
+    #[test]
+    fn codex_credential_sets_expiry_from_access_jwt_and_extracts_identity() {
+        let access = fake_jwt(serde_json::json!({ "exp": 1_700_000_000_i64 }));
+        let id_token = fake_jwt(serde_json::json!({
+            "email": "u@x.com",
+            "https://api.openai.com/auth": { "chatgpt_account_id": "acct-9" },
+        }));
+        let cred = codex_credential(access, Some("rt".into()), Some(id_token));
+        // exp seconds → epoch ms (re-enables the proactive-refresh gate — B-4).
+        assert_eq!(cred.expires_at, 1_700_000_000_000);
+        assert_eq!(cred.label, "u@x.com");
+        assert_eq!(cred.account_id.as_deref(), Some("acct-9"));
+        assert_eq!(cred.refresh_token.as_deref(), Some("rt"));
+        assert_eq!(cred.provider, Provider::Codex);
+    }
+
+    #[test]
+    fn codex_credential_falls_back_to_id_token_exp_then_zero() {
+        // Opaque access token, but the id_token carries exp → use it.
+        let id_token = fake_jwt(serde_json::json!({ "exp": 2_000_000_000_i64 }));
+        let cred = codex_credential("opaque".into(), None, Some(id_token));
+        assert_eq!(cred.expires_at, 2_000_000_000_000);
+        // Opaque access + no id_token → unknown (0), with the generic label.
+        let cred2 = codex_credential("opaque".into(), None, None);
+        assert_eq!(cred2.expires_at, 0);
+        assert_eq!(cred2.label, "Codex account");
+    }
 
     #[test]
     fn codex_token_exchange_body_is_form_urlencoded() {

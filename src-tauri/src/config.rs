@@ -549,6 +549,79 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A config already at schema_version 1 is NEVER re-migrated, even if a stray
+    /// legacy provider-level field is still present in the JSON: the user's
+    /// current `accounts` map wins and the legacy field is simply ignored (it has
+    /// no field on the typed struct). Guards against a double-migration clobber.
+    #[test]
+    fn already_migrated_config_is_not_re_migrated() {
+        let raw = serde_json::json!({
+            "schema_version": 1,
+            "poll_seconds": 300,
+            "providers": [
+                // Stray legacy field on the Claude slot — must be ignored because
+                // schema_version is already current.
+                { "enabled": true, "custom_name": "STALE", "notify_thresholds": [50], "sort_index": 0 },
+                { "enabled": true, "notify_thresholds": [50], "sort_index": 1 },
+                { "enabled": true, "notify_thresholds": [50], "sort_index": 2 },
+                { "enabled": true, "notify_thresholds": [50], "sort_index": 3 },
+                { "enabled": true, "notify_thresholds": [50], "sort_index": 4 },
+                { "enabled": true, "notify_thresholds": [50], "sort_index": 5 }
+            ],
+            "accounts": { "auto:claude": { "custom_name": "Current" } },
+            "auto_anchor": {}
+        });
+        let lifted = AppConfig::lift_legacy_provider_fields(&raw);
+        let mut cfg: AppConfig = serde_json::from_value(raw).unwrap();
+        cfg.migrate(lifted);
+
+        // The legacy "STALE" name must NOT overwrite the user's current entry.
+        assert_eq!(
+            cfg.accounts.get("auto:claude").unwrap().custom_name.as_deref(),
+            Some("Current"),
+            "an already-migrated config must keep its current account name"
+        );
+        assert_eq!(cfg.accounts.len(), 1);
+    }
+
+    /// During a real v0→v1 migration, a provider whose slot carries a legacy name
+    /// must NOT clobber an `accounts` entry the same config already happens to
+    /// carry for that service id — existing fields win, legacy only fills blanks.
+    #[test]
+    fn migration_does_not_clobber_a_preexisting_account_entry() {
+        let raw = serde_json::json!({
+            // No schema_version (v0) → migrate runs.
+            "poll_seconds": 300,
+            "providers": [
+                { "enabled": true, "custom_name": "Legacy Claude", "primary_window": "Weekly", "notify_thresholds": [50], "sort_index": 0 },
+                { "enabled": true, "notify_thresholds": [50], "sort_index": 1 },
+                { "enabled": true, "notify_thresholds": [50], "sort_index": 2 },
+                { "enabled": true, "notify_thresholds": [50], "sort_index": 3 },
+                { "enabled": true, "notify_thresholds": [50], "sort_index": 4 },
+                { "enabled": true, "notify_thresholds": [50], "sort_index": 5 }
+            ],
+            // The user already has a name on auto:claude; only the window is blank.
+            "accounts": { "auto:claude": { "custom_name": "Kept Name" } },
+            "auto_anchor": {}
+        });
+        let lifted = AppConfig::lift_legacy_provider_fields(&raw);
+        let mut cfg: AppConfig = serde_json::from_value(raw).unwrap();
+        cfg.migrate(lifted);
+
+        let acct = cfg.accounts.get("auto:claude").unwrap();
+        assert_eq!(
+            acct.custom_name.as_deref(),
+            Some("Kept Name"),
+            "an existing custom_name must NOT be overwritten by the legacy slot"
+        );
+        assert_eq!(
+            acct.primary_window.as_deref(),
+            Some("Weekly"),
+            "but a blank field is filled from the legacy slot"
+        );
+        assert_eq!(cfg.schema_version, 1);
+    }
+
     /// ISOLATION GATE (D2.2): two distinct accounts of the SAME provider (Claude)
     /// — an auto:claude and a stored:abc — carry independent `custom_name`s that
     /// survive a save→load round-trip. This is the regression net for BUG-2: a

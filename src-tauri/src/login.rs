@@ -2,20 +2,22 @@
 //! manually-added account is treated as "logged in via that CLI". The backend
 //! requests the device code, the UI opens the verification URL in the user's
 //! browser, and this module polls to completion then persists the credential.
-//! Feasible for Codex / Copilot. Gemini uses loopback OAuth (see
-//! `oauth_login.rs`); its Google installed-app client_id does not support the
+//! Feasible for Codex / Copilot. Gemini uses loopback OAuth (see the `oauth`
+//! module); its Google installed-app client_id does not support the
 //! device-code grant (`invalid_client: Invalid client type`). Claude
 //! (Cloudflare-blocked) and Cursor (no public client_id) are not supported
 //! here either.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::Arc;
 
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 
-use crate::model::{Provider, EVENT_LOGIN_COMPLETE};
-use crate::store::{self, StoredCredential};
+use crate::auth::cancel_token::CancelToken;
+use crate::auth::finish::finish;
+use crate::model::Provider;
+use crate::store::StoredCredential;
 
 const CODEX_ISSUER: &str = "https://auth.openai.com";
 const CODEX_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -32,58 +34,12 @@ pub struct LoginInfo {
     pub expires_in: u64,
 }
 
-#[derive(Clone, Serialize)]
-struct LoginResult {
-    provider: Provider,
-    ok: bool,
-    label: Option<String>,
-    error: Option<String>,
-}
-
-static DEVICE_ACTIVE: LazyLock<Mutex<Option<Arc<AtomicBool>>>> = LazyLock::new(|| Mutex::new(None));
+/// Cancel flag for the active device-code login. Independent of the OAuth
+/// callback flow's token — `cancel_login` cancels both deliberately.
+static DEVICE_ACTIVE: CancelToken = CancelToken::new();
 
 pub fn cancel() {
-    if let Ok(guard) = DEVICE_ACTIVE.lock() {
-        if let Some(flag) = guard.as_ref() {
-            flag.store(true, Ordering::SeqCst);
-        }
-    }
-}
-
-fn install_device_cancel_flag(new: Arc<AtomicBool>) {
-    if let Ok(mut guard) = DEVICE_ACTIVE.lock() {
-        if let Some(prev) = guard.take() {
-            prev.store(true, Ordering::SeqCst);
-        }
-        *guard = Some(new);
-    }
-}
-
-struct DeviceActiveGuard(Arc<AtomicBool>);
-
-impl Drop for DeviceActiveGuard {
-    fn drop(&mut self) {
-        if let Ok(mut guard) = DEVICE_ACTIVE.lock() {
-            if guard.as_ref().is_some_and(|cur| Arc::ptr_eq(cur, &self.0)) {
-                *guard = None;
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-fn reset_device_cancel_for_test() {
-    if let Ok(mut guard) = DEVICE_ACTIVE.lock() {
-        *guard = None;
-    }
-}
-
-#[cfg(test)]
-fn device_cancel_is_clear_for_test() -> bool {
-    DEVICE_ACTIVE
-        .lock()
-        .map(|guard| guard.is_none())
-        .unwrap_or(false)
+    DEVICE_ACTIVE.cancel();
 }
 
 /// Request a device code and spawn the background poll. Returns what the UI
@@ -152,35 +108,6 @@ async fn read<T: DeserializeOwned>(resp: reqwest::Response, url: &str) -> Result
     })
 }
 
-fn finish(app: &AppHandle, provider: Provider, res: Result<StoredCredential, String>) {
-    let result = match res {
-        Ok(c) => {
-            let label = c.label.clone();
-            match store::add(c) {
-                Ok(_) => LoginResult {
-                    provider,
-                    ok: true,
-                    label: Some(label),
-                    error: None,
-                },
-                Err(e) => LoginResult {
-                    provider,
-                    ok: false,
-                    label: None,
-                    error: Some(format!("failed to store credential: {e}")),
-                },
-            }
-        }
-        Err(e) => LoginResult {
-            provider,
-            ok: false,
-            label: None,
-            error: Some(e),
-        },
-    };
-    let _ = app.emit(EVENT_LOGIN_COMPLETE, &result);
-}
-
 // ---- Codex (OpenAI) ----
 
 #[derive(Deserialize)]
@@ -226,9 +153,9 @@ async fn start_codex(
     };
     let app2 = app.clone();
     let cancelled = Arc::new(AtomicBool::new(false));
-    install_device_cancel_flag(cancelled.clone());
+    DEVICE_ACTIVE.install(cancelled.clone());
     tauri::async_runtime::spawn(async move {
-        let _active = DeviceActiveGuard(cancelled.clone());
+        let _active = DEVICE_ACTIVE.guard(cancelled.clone());
         let res = poll_codex(http, r.device_auth_id, r.user_code, interval, cancelled).await;
         finish(&app2, provider, res);
     });
@@ -362,9 +289,9 @@ async fn start_github(
     };
     let app2 = app.clone();
     let cancelled = Arc::new(AtomicBool::new(false));
-    install_device_cancel_flag(cancelled.clone());
+    DEVICE_ACTIVE.install(cancelled.clone());
     tauri::async_runtime::spawn(async move {
-        let _active = DeviceActiveGuard(cancelled.clone());
+        let _active = DEVICE_ACTIVE.guard(cancelled.clone());
         let res = poll_github(http, r.device_code, r.user_code, interval, cancelled).await;
         finish(&app2, provider, res);
     });
@@ -480,8 +407,8 @@ async fn sleep_or_cancel(secs: u64, cancelled: &AtomicBool) -> Result<(), String
 
 // Gemini used to live here as a device-code flow, but Google's installed-app
 // client_id (the one gemini-cli ships) rejects the device-code grant with
-// `invalid_client: Invalid client type`. Gemini now uses loopback OAuth in
-// `oauth_login.rs` (Authorization Code + PKCE + client_secret, matching
+// `invalid_client: Invalid client type`. Gemini now uses loopback OAuth in the
+// `oauth` module (Authorization Code + PKCE + client_secret, matching
 // gemini-cli's `oauth2.ts`).
 
 fn interval_secs(v: &serde_json::Value, default: u64) -> u64 {
@@ -542,6 +469,10 @@ mod tests {
 
     static DEVICE_ACTIVE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+    // The install/cancel/guard mechanics are proven once in
+    // `auth::cancel_token`; this verifies the device flow is wired to its OWN
+    // `DEVICE_ACTIVE` token and that the public `cancel()` (cancel_login) flips
+    // it — i.e. cancelling the device-code poll, independently of OAuth.
     #[test]
     fn device_cancel_flag_lifecycle() {
         use std::sync::atomic::{AtomicBool, Ordering};
@@ -550,12 +481,11 @@ mod tests {
         let _g = DEVICE_ACTIVE_TEST_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        reset_device_cancel_for_test();
 
         let first = Arc::new(AtomicBool::new(false));
-        install_device_cancel_flag(first.clone());
+        DEVICE_ACTIVE.install(first.clone());
         let second = Arc::new(AtomicBool::new(false));
-        install_device_cancel_flag(second.clone());
+        DEVICE_ACTIVE.install(second.clone());
         assert!(
             first.load(Ordering::SeqCst),
             "starting a new device-code login cancels the previous poll"
@@ -568,15 +498,10 @@ mod tests {
             "cancel_login must cancel the active device-code poll"
         );
 
+        // The owning poll's guard clears the device flag on exit.
         let owned = Arc::new(AtomicBool::new(false));
-        install_device_cancel_flag(owned.clone());
-        drop(DeviceActiveGuard(owned));
-        assert!(
-            device_cancel_is_clear_for_test(),
-            "the owning poll clears the active device-code flag on exit"
-        );
-
-        reset_device_cancel_for_test();
+        DEVICE_ACTIVE.install(owned.clone());
+        drop(DEVICE_ACTIVE.guard(owned));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

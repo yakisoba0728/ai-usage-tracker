@@ -1,148 +1,22 @@
-//! Codex (ChatGPT) via Codex CLI. Reads `~/.codex/auth.json` and calls the SAME
-//! endpoint the official codex CLI polls: `chatgpt.com/backend-api/wham/usage` with
-//! `Authorization: Bearer <access_token>`, `ChatGPT-Account-Id`, and a
-//! `codex_cli_rs/` User-Agent. Surfaces the main 5h/weekly rate limits, every
-//! additional rate limit (e.g. `GPT-5.3-Codex-Spark`), credits, and available
-//! rate-limit resets. Stored manual accounts self-refresh via `refresh_stored`
-//! (POST `auth.openai.com/oauth/token`, public CLI client_id from codex-rs/login).
-//! Token-parsing only.
+//! Codex OAuth refresh: both the auto/CLI-path self-refresh
+//! (`refresh_auto_auth_if_needed`, which persists back to `auth.json`) and the
+//! stored-account `build_refreshed_cred` path. POST `auth.openai.com/oauth/token`
+//! with the public CLI client_id from codex-rs/login.
 
-use std::path::Path;
-
-use async_trait::async_trait;
-use serde::Deserialize;
 use serde_json::Value;
 
 use crate::http;
-use crate::model::{auto_service_id, LimitWindow, Provider, ServiceSource, ServiceUsage};
 use crate::providers::ProviderError;
-use crate::secrets;
 
-/// Usage endpoint, per openai/codex `backend-client/rate_limit_resets.rs`
-/// (`PathStyle::ChatGptApi` → `/wham/usage` under `/backend-api`).
-const USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
-/// User-Agent. Cloudflare's allow-list keys on the `codex_cli_rs/` prefix
-/// (stable identifier in codex-rs/login `DEFAULT_ORIGINATOR`); the version
-/// mirrors the current CLI build so the UA looks like a real client.
-/// `ai-usage-tracker` is appended for transparency (allowed UA suffix).
-const CODEX_UA: &str = "codex_cli_rs/0.141.0 (ai-usage-tracker)";
+use super::creds::{read_auth, write_auth, Tokens};
+
 /// Public OAuth client_id shipped in codex-rs/login (`auth/manager.rs::CLIENT_ID`).
 /// Used for both the device-code login and `refresh_token` grant.
 const CODEX_OAUTH_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 /// OAuth token endpoint (codex-rs/login `REFRESH_TOKEN_URL`).
 const CODEX_REFRESH_URL: &str = "https://auth.openai.com/oauth/token";
 
-#[derive(Deserialize)]
-struct AuthDotJson {
-    #[serde(default)]
-    tokens: Option<Tokens>,
-}
-#[derive(Deserialize)]
-struct Tokens {
-    access_token: String,
-    #[serde(default)]
-    refresh_token: Option<String>,
-    #[serde(default)]
-    id_token: Option<String>,
-    #[serde(default)]
-    account_id: Option<String>,
-}
-
 static AUTO_REFRESH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
-#[derive(Deserialize, Default)]
-struct WhamUsage {
-    #[serde(default)]
-    plan_type: Option<String>,
-    #[serde(default)]
-    email: Option<String>,
-    #[serde(default)]
-    rate_limit: Option<RateLimit>,
-    #[serde(default)]
-    additional_rate_limits: Vec<AdditionalLimit>,
-    #[serde(default)]
-    credits: Option<Credits>,
-    #[serde(default)]
-    rate_limit_reset_credits: Option<ResetCredits>,
-    #[serde(default)]
-    code_review_rate_limit: Option<RateLimit>,
-}
-#[derive(Deserialize, Default)]
-struct RateLimit {
-    #[serde(default)]
-    primary_window: Option<RateWindow>,
-    #[serde(default)]
-    secondary_window: Option<RateWindow>,
-}
-#[derive(Deserialize, Default)]
-struct RateWindow {
-    #[serde(default)]
-    used_percent: Option<f64>,
-    #[serde(default)]
-    reset_at: Option<i64>, // epoch seconds
-}
-#[derive(Deserialize, Default)]
-struct AdditionalLimit {
-    #[serde(default)]
-    limit_name: Option<String>,
-    #[serde(default)]
-    rate_limit: Option<RateLimit>,
-}
-#[derive(Deserialize, Default)]
-struct Credits {
-    #[serde(default)]
-    balance: Option<Value>,
-    #[serde(default)]
-    has_credits: Option<bool>,
-    #[serde(default)]
-    unlimited: Option<bool>,
-}
-#[derive(Deserialize, Default)]
-struct ResetCredits {
-    #[serde(default)]
-    available_count: Option<i64>,
-}
-
-pub struct CodexProvider {
-    http: reqwest::Client,
-}
-impl Default for CodexProvider {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl CodexProvider {
-    pub fn new() -> Self {
-        Self {
-            http: http::shared(),
-        }
-    }
-}
-
-fn read_auth() -> Result<(Value, Tokens), ProviderError> {
-    let v = secrets::read_json_file(&secrets::codex_auth_path())?;
-    let a: AuthDotJson = serde_json::from_value(v.clone())
-        .map_err(|e| ProviderError::Parse(format!("codex auth: {e}")))?;
-    let tokens = a.tokens.ok_or_else(|| {
-        ProviderError::NotLoggedIn("Codex not logged in (run `codex login`)".into())
-    })?;
-    Ok((v, tokens))
-}
-
-fn write_auth(v: &Value) -> Result<(), ProviderError> {
-    write_auth_to(&secrets::codex_auth_path(), v)
-}
-
-fn write_auth_to(path: &Path, v: &Value) -> Result<(), ProviderError> {
-    let text = serde_json::to_string_pretty(v)
-        .map_err(|e| ProviderError::Parse(format!("codex auth write: {e}")))?;
-    // Atomic + owner-only: a crash/ENOSPC mid-write must not corrupt the CLI's
-    // auth.json — by the time we get here the old refresh token is already
-    // rotated away server-side, so a torn file would strand both tools (B-5).
-    crate::util::write_atomic(path, text.as_bytes(), Some(0o600))
-        .map_err(|e| ProviderError::Network(format!("write {}: {e}", path.display())))
-}
 
 fn access_needs_refresh(access_token: &str, now_sec: i64) -> bool {
     crate::jwt::jwt_exp(access_token)
@@ -181,27 +55,7 @@ fn apply_auth_refresh(mut auth: Value, fresh: &Refreshed, refreshed_at: &str) ->
     Some(auth)
 }
 
-fn push_window(ws: &mut Vec<LimitWindow>, label: &str, w: &Option<RateWindow>) {
-    if let Some(w) = w {
-        if w.used_percent.is_none() && w.reset_at.is_none() {
-            return;
-        }
-        ws.push(LimitWindow {
-            label: label.into(),
-            used_percent: w.used_percent.map(|x| x as f32),
-            resets_at: w.reset_at,
-            used: None,
-            limit: None,
-        });
-    }
-}
-
-fn parse_number(v: &Value) -> Option<f64> {
-    v.as_f64()
-        .or_else(|| v.as_str()?.trim().parse::<f64>().ok())
-}
-
-fn account_id_for_tokens(tokens: &Tokens) -> Option<String> {
+pub(super) fn account_id_for_tokens(tokens: &Tokens) -> Option<String> {
     tokens.account_id.clone().or_else(|| {
         tokens
             .id_token
@@ -210,86 +64,7 @@ fn account_id_for_tokens(tokens: &Tokens) -> Option<String> {
     })
 }
 
-/// Pure: primary windows (5h/Weekly) + detail windows (Spark / code-review / credits / resets).
-fn normalize(u: &WhamUsage) -> (Vec<LimitWindow>, Vec<LimitWindow>) {
-    let mut ws = Vec::new();
-    let mut detail = Vec::new();
-    if let Some(rl) = &u.rate_limit {
-        push_window(&mut ws, "5-hour", &rl.primary_window);
-        push_window(&mut ws, "Weekly", &rl.secondary_window);
-    }
-    for al in &u.additional_rate_limits {
-        let Some(rl) = &al.rate_limit else { continue };
-        let name = al.limit_name.clone().unwrap_or_default();
-        if name.is_empty() {
-            continue;
-        }
-        push_window(&mut detail, &format!("{name} · 5-hour"), &rl.primary_window);
-        push_window(
-            &mut detail,
-            &format!("{name} · Weekly"),
-            &rl.secondary_window,
-        );
-    }
-    if let Some(rl) = &u.code_review_rate_limit {
-        push_window(&mut detail, "Code review · 5-hour", &rl.primary_window);
-        push_window(&mut detail, "Code review · Weekly", &rl.secondary_window);
-    }
-    if let Some(c) = &u.credits {
-        let bal = c.balance.as_ref().and_then(parse_number);
-        if c.unlimited == Some(true) {
-            detail.push(LimitWindow {
-                label: "Credits (unlimited)".into(),
-                used_percent: None,
-                resets_at: None,
-                used: None,
-                limit: None,
-            });
-        } else if c.has_credits == Some(true) || matches!(bal, Some(v) if v > 0.0) {
-            if let Some(v) = bal {
-                // This is the *remaining* balance; keep it in the label rather
-                // than `used` (which means consumption everywhere else) so the
-                // semantics aren't inverted if the UI ever derives a percent or
-                // `remaining = limit - used` (B-15).
-                detail.push(LimitWindow {
-                    label: format!("Credits balance: ${v:.2}"),
-                    used_percent: None,
-                    resets_at: None,
-                    used: None,
-                    limit: None,
-                });
-            }
-        }
-    }
-    if let Some(r) = &u.rate_limit_reset_credits {
-        if let Some(n) = r.available_count {
-            detail.push(LimitWindow {
-                label: "Available rate-limit resets".into(),
-                used_percent: None,
-                resets_at: None,
-                used: Some(n as f64),
-                limit: None,
-            });
-        }
-    }
-    (ws, detail)
-}
-
-#[async_trait]
-impl crate::providers::ProviderApi for CodexProvider {
-    fn key(&self) -> Provider {
-        Provider::Codex
-    }
-
-    async fn fetch(&self) -> Result<ServiceUsage, ProviderError> {
-        let (_, t) = read_auth()?;
-        let t = refresh_auto_auth_if_needed(&self.http, t).await?;
-        let account_id = account_id_for_tokens(&t);
-        fetch_with(&self.http, &t.access_token, account_id.as_deref(), None).await
-    }
-}
-
-async fn refresh_auto_auth_if_needed(
+pub(super) async fn refresh_auto_auth_if_needed(
     http: &reqwest::Client,
     tokens: Tokens,
 ) -> Result<Tokens, ProviderError> {
@@ -336,48 +111,11 @@ async fn refresh_auto_auth_if_needed(
     Ok(latest)
 }
 
-/// Fetch Codex usage given an explicit token (used for manually-added accounts).
-pub(crate) async fn fetch_with(
-    http: &reqwest::Client,
-    access_token: &str,
-    account_id: Option<&str>,
-    label_override: Option<&str>,
-) -> Result<ServiceUsage, ProviderError> {
-    let mut extra: Vec<(&str, &str)> = vec![("User-Agent", CODEX_UA)];
-    let acc_holder;
-    if let Some(acc) = account_id {
-        acc_holder = acc.to_string();
-        extra.push(("ChatGPT-Account-Id", acc_holder.as_str()));
-    }
-    let raw: Value = http::get_json(http, access_token, USAGE_URL, &extra).await?;
-    let raw_json = serde_json::to_string_pretty(&raw).ok();
-    let u: WhamUsage = serde_json::from_value(raw)
-        .map_err(|e| ProviderError::Parse(format!("codex usage: {e}")))?;
-    let plan = u.plan_type.as_deref().map(crate::util::capitalize);
-    let account = match label_override {
-        Some(l) => Some(l.to_string()),
-        None => u.email.clone(),
-    };
-    let (windows, detail_windows) = normalize(&u);
-    Ok(ServiceUsage {
-        id: auto_service_id(Provider::Codex),
-        source: ServiceSource::Auto,
-        provider: Provider::Codex,
-        connected: true,
-        plan,
-        account,
-        error: None,
-        windows,
-        detail_windows,
-        raw_response: raw_json,
-    })
-}
-
 /// Successful OAuth refresh response from `auth.openai.com/oauth/token`
 /// (matches codex-rs/login `RefreshResponse`). `id_token`/`refresh_token`
 /// may be omitted; `access_token` is always present on a successful refresh.
 #[derive(serde::Deserialize)]
-struct Refreshed {
+pub(super) struct Refreshed {
     #[serde(default)]
     id_token: Option<String>,
     #[serde(default)]
@@ -451,7 +189,7 @@ async fn refresh_oauth(
 /// (caller persists); `None` if there is no refresh_token, the network call
 /// fails, the server returns non-2xx, or the response lacks an access_token
 /// (caller falls back to the existing token).
-pub(crate) async fn refresh_stored(
+pub(super) async fn refresh_stored(
     http: &reqwest::Client,
     cred: &crate::store::StoredCredential,
 ) -> Option<crate::store::StoredCredential> {
@@ -461,113 +199,10 @@ pub(crate) async fn refresh_stored(
     Some(build_refreshed_cred(cred, &fresh))
 }
 
-/// Fetch usage for a stored Codex account (uniform stored-fetch adapter).
-pub(crate) async fn fetch_stored(
-    http: &reqwest::Client,
-    cred: &crate::store::StoredCredential,
-) -> Result<ServiceUsage, ProviderError> {
-    fetch_with(
-        http,
-        &cred.access_token,
-        cred.account_id.as_deref(),
-        Some(&cred.label),
-    )
-    .await
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[cfg(unix)]
-    #[test]
-    fn write_auth_persists_atomically_and_owner_only() {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = std::env::temp_dir().join(format!("ait_codex_auth_{}", std::process::id()));
-        let _ = std::fs::create_dir_all(&dir);
-        let path = dir.join("auth.json");
-        let v = serde_json::json!({"tokens":{"access_token":"a","refresh_token":"r"}});
-
-        write_auth_to(&path, &v).unwrap();
-
-        // Round-trips as valid JSON (not torn).
-        let back: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(back["tokens"]["access_token"], "a");
-        // Credential file → owner-only (B-5 / consistency with X-1).
-        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600);
-        // The temp file is consumed by the rename.
-        assert!(!dir.join("auth.json.tmp").exists());
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn normalize_wham_fixture_includes_spark_and_credits() {
-        let u: WhamUsage =
-            serde_json::from_str(include_str!("../../tests/codex_wham_fixture.json")).unwrap();
-        let (ws, detail) = normalize(&u);
-        let labels: Vec<&str> = ws.iter().map(|w| w.label.as_str()).collect();
-        assert_eq!(labels, vec!["5-hour", "Weekly"]); // primary only
-        let dlabels: Vec<&str> = detail.iter().map(|w| w.label.as_str()).collect();
-        assert!(dlabels
-            .iter()
-            .any(|l| l.contains("Spark") && l.contains("5-hour")));
-        // The *remaining* credits balance lives in the label, not the `used`
-        // field (which everywhere else means consumption) — B-15.
-        let credits = detail
-            .iter()
-            .find(|w| w.label.starts_with("Credits balance"))
-            .unwrap();
-        assert_eq!(credits.label, "Credits balance: $9.99");
-        assert_eq!(credits.used, None);
-        assert!(dlabels.contains(&"Available rate-limit resets"));
-        let five = ws.iter().find(|w| w.label == "5-hour").unwrap();
-        assert_eq!(five.used_percent, Some(1.0));
-    }
-
-    #[test]
-    fn normalize_accepts_numeric_credit_balance() {
-        let u: WhamUsage = serde_json::from_value(serde_json::json!({
-            "credits": {
-                "has_credits": true,
-                "unlimited": false,
-                "balance": 9.99
-            }
-        }))
-        .unwrap();
-        let (_ws, detail) = normalize(&u);
-        let credits = detail
-            .iter()
-            .find(|w| w.label.starts_with("Credits balance"))
-            .unwrap();
-        assert_eq!(credits.label, "Credits balance: $9.99");
-        assert_eq!(credits.used, None);
-    }
-
-    #[test]
-    fn normalize_skips_blank_rate_limit_windows() {
-        let u = WhamUsage {
-            rate_limit: Some(RateLimit {
-                primary_window: Some(RateWindow::default()),
-                secondary_window: None,
-            }),
-            ..Default::default()
-        };
-        let (ws, detail) = normalize(&u);
-        assert!(ws.is_empty());
-        assert!(detail.is_empty());
-    }
-
-    #[test]
-    fn reads_tokens_from_fixture() {
-        let v: Value =
-            serde_json::from_str(include_str!("../../tests/codex_auth_fixture.json")).unwrap();
-        let a: AuthDotJson = serde_json::from_value(v).unwrap();
-        let tokens = a.tokens.unwrap();
-        assert_eq!(tokens.refresh_token.as_deref(), Some("r"));
-    }
+    use crate::model::Provider;
 
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
@@ -726,7 +361,7 @@ mod tests {
     #[test]
     fn apply_auth_refresh_updates_tokens_and_last_refresh() {
         let auth: Value =
-            serde_json::from_str(include_str!("../../tests/codex_auth_fixture.json")).unwrap();
+            serde_json::from_str(include_str!("../../../tests/codex_auth_fixture.json")).unwrap();
         let fresh = Refreshed {
             id_token: Some("new.id".into()),
             access_token: Some("new.access".into()),

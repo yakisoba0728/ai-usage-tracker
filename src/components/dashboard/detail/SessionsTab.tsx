@@ -10,12 +10,14 @@ export function SessionsTab({
   service,
   fetchedAt,
   nowMs,
+  refreshing,
   onRefresh,
   onOpenAdd,
 }: {
   service: ServiceUsage;
   fetchedAt: number | null;
   nowMs: number;
+  refreshing: boolean;
   onRefresh: () => void;
   onOpenAdd: () => void;
 }) {
@@ -50,8 +52,8 @@ export function SessionsTab({
       </div>
 
       <div className="flex flex-wrap gap-2">
-        <Button variant="outline" onClick={onRefresh}>
-          <RefreshCw className="size-4" />
+        <Button variant="outline" disabled={refreshing} onClick={onRefresh}>
+          <RefreshCw className={refreshing ? "size-4 animate-spin" : "size-4"} />
           {t("detail.sessions.reuseLocal")}
         </Button>
         <Button variant="secondary" onClick={onOpenAdd}>

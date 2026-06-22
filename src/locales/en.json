@@ -20,6 +20,15 @@
     "online": "Online",
     "offline": "Offline"
   },
+  "status": {
+    "refreshingUsage": "Refreshing usage…",
+    "refreshingAccount": "Refreshing account…",
+    "refreshComplete": "Refresh complete.",
+    "refreshFailed": "Refresh failed.",
+    "sendingAnchor": "Sending anchor message…",
+    "anchorSent": "Anchor message sent.",
+    "anchorFailed": "Anchor message failed."
+  },
   "card": {
     "stored": "Stored",
     "session": "Session",
@@ -29,7 +38,7 @@
     "resetsIn": "Resets in {{time}}",
     "viewDetails": "View details",
     "refresh": "Refresh",
-    "sendRequest": "Send request",
+    "sendRequest": "Send anchor",
     "autoAvail": "Auto-request",
     "autoUnavail": "No auto"
   },
@@ -112,7 +121,7 @@
     "anchor": {
       "title": "Window anchoring",
       "auto": "Auto-anchor when the 5-hour window is empty",
-      "sendNow": "Send a message now",
+      "sendNow": "Send anchor message now",
       "unsupported": "Not supported for this provider (calendar quota / no send path).",
       "confirmTitle": "Send an anchor message?",
       "confirmBody": "This sends a real 1-token message, consumes quota, and may violate the provider's terms. Continue?"
@@ -203,7 +212,7 @@
     "scanning": "Local sessions are being scanned again.",
     "dismiss": "Dismiss notification",
     "anchorSent": "Anchor message sent.",
-    "anchorFailed": "Anchor failed: {{error}}"
+    "anchorFailed": "Anchor message failed: {{error}}"
   },
   "time": {
     "justNow": "Updated just now",

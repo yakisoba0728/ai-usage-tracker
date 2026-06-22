@@ -5,21 +5,21 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-/// Per-provider customizable settings. Lives inside `AppConfig.providers`.
+/// The current on-disk config schema version. Bumped whenever `migrate()` gains
+/// a new step so the migration runs exactly once per upgrade.
+pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+
+/// Per-provider customizable settings. Lives inside `AppConfig.providers`,
+/// indexed by canonical provider order. These are genuinely provider-level —
+/// every account of a provider shares them. Per-ACCOUNT name/window moved out to
+/// `AppConfig.accounts` (keyed by service_id) to fix BUG-2 "rename-all".
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProviderConfig {
     pub enabled: bool,
-    /// Override the display name shown on the card / modal title.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub custom_name: Option<String>,
     /// Notification thresholds in percent (0–100). Fires a notification when
     /// usage crosses each value. Default: [50, 75, 90, 95, 100].
     #[serde(default = "default_thresholds")]
     pub notify_thresholds: Vec<u8>,
-    /// Which window label to surface as the card headline. None = auto-pick
-    /// (highest-burn window).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub primary_window: Option<String>,
     /// Sort index for drag-and-drop reordering. Lower = earlier.
     #[serde(default)]
     pub sort_index: i32,
@@ -33,20 +33,50 @@ impl Default for ProviderConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            custom_name: None,
             notify_thresholds: default_thresholds(),
-            primary_window: None,
             sort_index: 0,
         }
     }
 }
 
+/// Per-ACCOUNT customizable settings, keyed by service_id (`auto:<provider>` or
+/// `stored:<id>`) in `AppConfig.accounts`. Two accounts of the same provider
+/// have independent entries — this is the fix for BUG-2 (rename-all).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct AccountConfig {
+    /// Override the display name shown on the card / modal title. None = use the
+    /// canonical provider label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_name: Option<String>,
+    /// Which window label to surface as the card headline. None = auto-pick
+    /// (highest-burn window).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_window: Option<String>,
+}
+
+impl AccountConfig {
+    /// True when this entry carries no customization at all — used to avoid
+    /// persisting empty placeholder entries.
+    fn is_empty(&self) -> bool {
+        self.custom_name.is_none() && self.primary_window.is_none()
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AppConfig {
+    /// On-disk schema version. Missing (older configs) → 0 via serde default,
+    /// which triggers the one-time `migrate()`; a fresh `Default` config is
+    /// already current (`CURRENT_SCHEMA_VERSION`) and never re-migrates.
+    #[serde(default)]
+    pub schema_version: u32,
     pub poll_seconds: u64,
     /// Indexed by canonical provider order [Claude, Codex, Gemini, Copilot,
     /// Cursor, z.ai].
     pub providers: [ProviderConfig; 6],
+    /// Per-`service_id` account settings (display name + pinned window). Keyed
+    /// by `auto:<provider>` / `stored:<id>`; default empty.
+    #[serde(default)]
+    pub accounts: HashMap<String, AccountConfig>,
     /// Per-`service_id` opt-in for auto window-anchoring (default: empty = OFF).
     #[serde(default)]
     pub auto_anchor: HashMap<String, bool>,
@@ -55,8 +85,12 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            // A fresh config is already at the current schema — it must NOT be
+            // re-migrated (that path only runs for older, lower-versioned files).
+            schema_version: CURRENT_SCHEMA_VERSION,
             poll_seconds: 300,
             providers: Default::default(),
+            accounts: HashMap::new(),
             auto_anchor: HashMap::new(),
         }
     }
@@ -111,14 +145,12 @@ impl AppConfig {
         let Ok(text) = std::fs::read_to_string(path) else {
             return Self::default(); // missing → defaults (expected first run)
         };
-        match serde_json::from_str::<Self>(&text) {
-            Ok(cfg) => match cfg.validate() {
-                Ok(()) => cfg,
-                Err(e) => {
-                    Self::preserve_invalid(path, &e, "invalid");
-                    Self::default()
-                }
-            },
+        // Two-stage parse so the one-time migration can lift fields that no
+        // longer exist on the typed struct (provider-level custom_name /
+        // primary_window → per-account `accounts` map). The classification of a
+        // failure is preserved (syntax/EOF = "corrupt"; semantic = "invalid").
+        let raw: serde_json::Value = match serde_json::from_str(&text) {
+            Ok(value) => value,
             Err(e) => {
                 let suffix = match e.classify() {
                     serde_json::error::Category::Syntax | serde_json::error::Category::Eof => {
@@ -129,9 +161,93 @@ impl AppConfig {
                     }
                 };
                 Self::preserve_invalid(path, &e, suffix);
+                return Self::default();
+            }
+        };
+
+        // Lift legacy per-provider fields BEFORE deserializing into the new shape
+        // (a serde-ignored field would otherwise be silently dropped on parse).
+        let lifted = Self::lift_legacy_provider_fields(&raw);
+
+        let mut cfg: Self = match serde_json::from_value(raw) {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                // Reaching here means valid JSON but a shape/type mismatch
+                // (Data) — semantically invalid, preserved as ".invalid-*".
+                Self::preserve_invalid(path, &e, "invalid");
+                return Self::default();
+            }
+        };
+
+        cfg.migrate(lifted);
+
+        match cfg.validate() {
+            Ok(()) => cfg,
+            Err(e) => {
+                Self::preserve_invalid(path, &e, "invalid");
                 Self::default()
             }
         }
+    }
+
+    /// Extract the OLD per-provider `custom_name`/`primary_window` from the raw
+    /// parsed JSON, paired with the provider slot index. Returns the
+    /// auto-service-id keyed `AccountConfig`s the migration should seed. Empty
+    /// when there's nothing to migrate (no such fields present).
+    fn lift_legacy_provider_fields(raw: &serde_json::Value) -> Vec<(String, AccountConfig)> {
+        let mut lifted = Vec::new();
+        let Some(slots) = raw.get("providers").and_then(|p| p.as_array()) else {
+            return lifted;
+        };
+        for (idx, slot) in slots.iter().enumerate() {
+            let custom_name = slot
+                .get("custom_name")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned);
+            let primary_window = slot
+                .get("primary_window")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned);
+            if custom_name.is_none() && primary_window.is_none() {
+                continue;
+            }
+            let Some(provider) = crate::model::provider_at_index(idx) else {
+                continue;
+            };
+            lifted.push((
+                crate::model::auto_service_id(provider),
+                AccountConfig {
+                    custom_name,
+                    primary_window,
+                },
+            ));
+        }
+        lifted
+    }
+
+    /// One-time, idempotent schema migration. Runs only when the loaded
+    /// `schema_version` is below the current target. v0→v1 seeds the per-account
+    /// `accounts` map from the legacy per-provider fields lifted from the raw
+    /// JSON, never overwriting an account entry the user already has.
+    fn migrate(&mut self, legacy_accounts: Vec<(String, AccountConfig)>) {
+        if self.schema_version >= CURRENT_SCHEMA_VERSION {
+            return;
+        }
+        // v0 → v1: per-provider name/window → per-account `accounts`.
+        for (service_id, legacy) in legacy_accounts {
+            // Don't clobber a real entry that somehow already exists; merge the
+            // legacy fields into any blank slot instead.
+            let entry = self.accounts.entry(service_id).or_default();
+            if entry.custom_name.is_none() {
+                entry.custom_name = legacy.custom_name;
+            }
+            if entry.primary_window.is_none() {
+                entry.primary_window = legacy.primary_window;
+            }
+        }
+        // Drop any entry that ended up with no customization (defensive).
+        self.accounts.retain(|_, a| !a.is_empty());
+        self.schema_version = CURRENT_SCHEMA_VERSION;
     }
 
     fn preserve_invalid(path: &Path, reason: &dyn std::fmt::Display, suffix: &str) {
@@ -352,34 +468,30 @@ mod tests {
         assert_eq!(arr, [true, true, false, true, true, true]);
     }
 
-    // ── Chunk-0 migration gate: pin the CURRENT on-disk config shape ─────────
+    // ── Per-account settings migration gate (FEAT-1 / BUG-2) ────────────────
     //
-    // CHUNK-3 MIGRATION TARGET: today `custom_name` + `primary_window` (and
-    // `sort_index`) live in the per-PROVIDER `ProviderConfig` slot, indexed by
-    // provider — so all accounts of one provider share a single name/window
-    // (BUG-2 "rename-all"). Chunk 3 relocates `custom_name`/`primary_window` to a
-    // per-`service_id` `accounts: HashMap<String, AccountConfig>` and adds
-    // `schema_version`, running a one-time `migrate()` that seeds the accounts
-    // map from the old provider slots then clears them. These two tests are the
-    // load-bearing data-loss gate: they pin that a realistic OLD-shape config
-    // (no `schema_version`, no `accounts`) parses today WITHOUT resetting — so
-    // Chunk 3's migration test can prove old prefs are migrated, not wiped.
+    // Before this chunk `custom_name` + `primary_window` lived in the per-PROVIDER
+    // `ProviderConfig` slot, indexed by provider — so all accounts of one provider
+    // shared a single name/window (BUG-2 "rename-all"). They now live in a
+    // per-`service_id` `accounts: HashMap<String, AccountConfig>`; `schema_version`
+    // gates a one-time `migrate()` that seeds the accounts map from the old
+    // provider slots. These two tests are the load-bearing data-loss gate.
 
-    /// Characterization: a realistic v0 config (provider-level `custom_name` /
-    /// `primary_window` / `sort_index`, an `auto_anchor` map, and NO
-    /// `schema_version` / `accounts` fields) loads via the real `load_from`
-    /// path WITHOUT tripping the corrupt/invalid preserve-and-reset branch, and
-    /// the provider-level `custom_name` is readable at `providers[0].custom_name`.
-    /// Pins TODAY's behavior; the relocation is Chunk 3's job.
+    /// MIGRATION GATE (D2.1): a realistic v0 config (provider-level `custom_name` /
+    /// `primary_window` on the Claude slot, `sort_index`, an `auto_anchor` map, and
+    /// NO `schema_version` / `accounts` fields) loads via the real `load_from`
+    /// path WITHOUT tripping the corrupt/invalid preserve-and-reset branch, and the
+    /// old provider-level `custom_name`/`primary_window` are MIGRATED into
+    /// `accounts[auto_service_id(Claude)]` — not lost, not reset. Per-provider
+    /// `enabled` / `notify_thresholds` / `sort_index` stay on the provider slot.
     #[test]
-    fn config_v0_fixture_loads_without_data_loss_today() {
+    fn config_v0_provider_level_fields_migrate_into_accounts_map() {
         let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let fixture = include_str!("../tests/config_v0_provider_level.json");
 
         // Write the fixture to a temp path and load it through the production
         // `load_from` (the same branch that would reset a config it can't parse).
-        let dir =
-            std::env::temp_dir().join(format!("ait_cfg_v0_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("ait_cfg_v0_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("config.json");
@@ -387,53 +499,191 @@ mod tests {
 
         let cfg = AppConfig::load_from(&path);
 
-        // NOT reset: if the v0 shape failed to parse, `load_from` would have
-        // moved the file aside and returned defaults (poll_seconds 300, all
-        // slots default). Proving the real values survived proves no data loss.
+        // NOT reset: if the v0 shape failed to parse, `load_from` would have moved
+        // the file aside and returned defaults (poll_seconds 300, empty accounts).
+        // Proving the real values survived proves no data loss.
         assert_eq!(cfg.poll_seconds, 600, "v0 poll_seconds must survive load");
         assert!(
             path.exists(),
             "a parseable v0 config must NOT be renamed away as corrupt/invalid"
         );
 
-        // The provider-level customizations are readable as-is today.
+        // The old provider-level customizations are MIGRATED to the Claude
+        // (slot 0) auto service id — this is the whole point of the migration.
+        let claude_id = crate::model::auto_service_id(crate::model::Provider::Claude);
+        let acct = cfg
+            .accounts
+            .get(&claude_id)
+            .expect("migration must seed accounts[auto:claude] from the v0 Claude slot");
         assert_eq!(
-            cfg.providers[0].custom_name.as_deref(),
+            acct.custom_name.as_deref(),
             Some("Work Claude"),
-            "provider-level custom_name must load from the v0 slot"
+            "provider-level custom_name must migrate into accounts[auto:claude]"
         );
         assert_eq!(
-            cfg.providers[0].primary_window.as_deref(),
+            acct.primary_window.as_deref(),
             Some("Weekly"),
-            "provider-level primary_window must load from the v0 slot"
+            "provider-level primary_window must migrate into accounts[auto:claude]"
         );
+
+        // No spurious account entries for slots that had no custom_name/window.
+        assert_eq!(
+            cfg.accounts.len(),
+            1,
+            "only the one customized slot should produce an account entry"
+        );
+
+        // Per-provider settings stay on the provider slot (NOT migrated).
         assert_eq!(cfg.providers[0].sort_index, 2);
         assert!(!cfg.providers[2].enabled, "per-provider enabled survives");
         assert_eq!(cfg.providers[2].notify_thresholds, vec![80, 100]);
 
-        // auto_anchor is already correctly keyed per service_id (the shape the
-        // migration mirrors) and must round-trip from the v0 file unchanged.
-        assert_eq!(
-            cfg.auto_anchor.get("stored:zai-1700000000"),
-            Some(&true)
-        );
+        // The migration bumps schema_version so it runs exactly once.
+        assert_eq!(cfg.schema_version, 1, "migration must bump schema_version");
+
+        // auto_anchor is already correctly keyed per service_id and must
+        // round-trip from the v0 file unchanged.
+        assert_eq!(cfg.auto_anchor.get("stored:zai-1700000000"), Some(&true));
         assert_eq!(cfg.auto_anchor.get("auto:codex"), Some(&false));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A realistic current-shape `AppConfig` serializes → deserializes to an
-    /// equal value. Pins the round-trip so Chunk 3's reshape can't silently drop
-    /// a field. (`ProviderConfig` skips `None` `custom_name`/`primary_window` on
-    /// serialize, so we assert the meaningful fields rather than `Debug`-equality.)
+    /// A config already at schema_version 1 is NEVER re-migrated, even if a stray
+    /// legacy provider-level field is still present in the JSON: the user's
+    /// current `accounts` map wins and the legacy field is simply ignored (it has
+    /// no field on the typed struct). Guards against a double-migration clobber.
+    #[test]
+    fn already_migrated_config_is_not_re_migrated() {
+        let raw = serde_json::json!({
+            "schema_version": 1,
+            "poll_seconds": 300,
+            "providers": [
+                // Stray legacy field on the Claude slot — must be ignored because
+                // schema_version is already current.
+                { "enabled": true, "custom_name": "STALE", "notify_thresholds": [50], "sort_index": 0 },
+                { "enabled": true, "notify_thresholds": [50], "sort_index": 1 },
+                { "enabled": true, "notify_thresholds": [50], "sort_index": 2 },
+                { "enabled": true, "notify_thresholds": [50], "sort_index": 3 },
+                { "enabled": true, "notify_thresholds": [50], "sort_index": 4 },
+                { "enabled": true, "notify_thresholds": [50], "sort_index": 5 }
+            ],
+            "accounts": { "auto:claude": { "custom_name": "Current" } },
+            "auto_anchor": {}
+        });
+        let lifted = AppConfig::lift_legacy_provider_fields(&raw);
+        let mut cfg: AppConfig = serde_json::from_value(raw).unwrap();
+        cfg.migrate(lifted);
+
+        // The legacy "STALE" name must NOT overwrite the user's current entry.
+        assert_eq!(
+            cfg.accounts.get("auto:claude").unwrap().custom_name.as_deref(),
+            Some("Current"),
+            "an already-migrated config must keep its current account name"
+        );
+        assert_eq!(cfg.accounts.len(), 1);
+    }
+
+    /// During a real v0→v1 migration, a provider whose slot carries a legacy name
+    /// must NOT clobber an `accounts` entry the same config already happens to
+    /// carry for that service id — existing fields win, legacy only fills blanks.
+    #[test]
+    fn migration_does_not_clobber_a_preexisting_account_entry() {
+        let raw = serde_json::json!({
+            // No schema_version (v0) → migrate runs.
+            "poll_seconds": 300,
+            "providers": [
+                { "enabled": true, "custom_name": "Legacy Claude", "primary_window": "Weekly", "notify_thresholds": [50], "sort_index": 0 },
+                { "enabled": true, "notify_thresholds": [50], "sort_index": 1 },
+                { "enabled": true, "notify_thresholds": [50], "sort_index": 2 },
+                { "enabled": true, "notify_thresholds": [50], "sort_index": 3 },
+                { "enabled": true, "notify_thresholds": [50], "sort_index": 4 },
+                { "enabled": true, "notify_thresholds": [50], "sort_index": 5 }
+            ],
+            // The user already has a name on auto:claude; only the window is blank.
+            "accounts": { "auto:claude": { "custom_name": "Kept Name" } },
+            "auto_anchor": {}
+        });
+        let lifted = AppConfig::lift_legacy_provider_fields(&raw);
+        let mut cfg: AppConfig = serde_json::from_value(raw).unwrap();
+        cfg.migrate(lifted);
+
+        let acct = cfg.accounts.get("auto:claude").unwrap();
+        assert_eq!(
+            acct.custom_name.as_deref(),
+            Some("Kept Name"),
+            "an existing custom_name must NOT be overwritten by the legacy slot"
+        );
+        assert_eq!(
+            acct.primary_window.as_deref(),
+            Some("Weekly"),
+            "but a blank field is filled from the legacy slot"
+        );
+        assert_eq!(cfg.schema_version, 1);
+    }
+
+    /// ISOLATION GATE (D2.2): two distinct accounts of the SAME provider (Claude)
+    /// — an auto:claude and a stored:abc — carry independent `custom_name`s that
+    /// survive a save→load round-trip. This is the regression net for BUG-2: a
+    /// rename of one account must NOT touch the other.
+    #[test]
+    fn per_account_custom_names_are_independent_across_save_load() {
+        let auto_id = crate::model::auto_service_id(crate::model::Provider::Claude);
+        let stored_id = crate::model::stored_service_id("abc");
+
+        let mut cfg = AppConfig::default();
+        cfg.accounts.insert(
+            auto_id.clone(),
+            AccountConfig {
+                custom_name: Some("Personal Claude".into()),
+                primary_window: None,
+            },
+        );
+        cfg.accounts.insert(
+            stored_id.clone(),
+            AccountConfig {
+                custom_name: Some("Work Claude".into()),
+                primary_window: Some("Weekly".into()),
+            },
+        );
+
+        let json = serde_json::to_string_pretty(&cfg).unwrap();
+        let back: AppConfig = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(
+            back.accounts.get(&auto_id).and_then(|a| a.custom_name.as_deref()),
+            Some("Personal Claude"),
+            "auto:claude name survives independently"
+        );
+        assert_eq!(
+            back.accounts.get(&stored_id).and_then(|a| a.custom_name.as_deref()),
+            Some("Work Claude"),
+            "stored:abc name survives independently (NOT overwritten by the auto rename)"
+        );
+        assert_eq!(
+            back.accounts.get(&stored_id).and_then(|a| a.primary_window.as_deref()),
+            Some("Weekly"),
+        );
+        // The auto account has no primary_window; the stored one's must not leak.
+        assert!(back.accounts.get(&auto_id).unwrap().primary_window.is_none());
+    }
+
+    /// A realistic current-shape `AppConfig` (new accounts map + schema_version)
+    /// serializes → deserializes to an equal value. Pins the round-trip so a
+    /// later reshape can't silently drop a field.
     #[test]
     fn appconfig_roundtrips_current_shape() {
         let mut cfg = AppConfig {
             poll_seconds: 450,
             ..Default::default()
         };
-        cfg.providers[0].custom_name = Some("Work Claude".into());
-        cfg.providers[0].primary_window = Some("Weekly".into());
+        cfg.accounts.insert(
+            "auto:claude".into(),
+            AccountConfig {
+                custom_name: Some("Work Claude".into()),
+                primary_window: Some("Weekly".into()),
+            },
+        );
         cfg.providers[0].sort_index = 2;
         cfg.providers[2].enabled = false;
         cfg.providers[2].notify_thresholds = vec![80, 100];
@@ -443,14 +693,16 @@ mod tests {
         let back: AppConfig = serde_json::from_str(&json).unwrap();
 
         assert_eq!(back.poll_seconds, cfg.poll_seconds);
+        assert_eq!(back.schema_version, cfg.schema_version);
         assert_eq!(back.providers.len(), 6);
         for (a, b) in cfg.providers.iter().zip(back.providers.iter()) {
             assert_eq!(a.enabled, b.enabled);
-            assert_eq!(a.custom_name, b.custom_name);
-            assert_eq!(a.primary_window, b.primary_window);
             assert_eq!(a.notify_thresholds, b.notify_thresholds);
             assert_eq!(a.sort_index, b.sort_index);
         }
+        let a = back.accounts.get("auto:claude").unwrap();
+        assert_eq!(a.custom_name.as_deref(), Some("Work Claude"));
+        assert_eq!(a.primary_window.as_deref(), Some("Weekly"));
         assert_eq!(back.auto_anchor, cfg.auto_anchor);
     }
 

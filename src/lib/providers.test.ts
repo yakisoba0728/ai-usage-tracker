@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 
 import {
   highestBurnWindow,
+  providerDisplayName,
   providerIndex,
   resolveHeadlineWindow,
   setAutoAnchor,
 } from "@/lib/providers";
 import type {
+  AccountConfig,
   AppConfig,
   LimitWindow,
   ProviderConfig,
@@ -17,18 +19,25 @@ function win(label: string, used_percent: number | null): LimitWindow {
   return { label, used_percent, resets_at: null, used: null, limit: null };
 }
 
-function pc(sort_index: number, primary_window: string | null = null): ProviderConfig {
+function pc(sort_index: number): ProviderConfig {
   return {
     enabled: true,
-    custom_name: null,
     notify_thresholds: [50, 75, 90, 95, 100],
-    primary_window,
     sort_index,
   };
 }
 
-function cfg(slots: ProviderConfig[]): AppConfig {
-  return { poll_seconds: 300, providers: slots as AppConfig["providers"], auto_anchor: {} };
+function cfg(
+  slots: ProviderConfig[],
+  accounts: Record<string, AccountConfig> = {},
+): AppConfig {
+  return {
+    schema_version: 1,
+    poll_seconds: 300,
+    providers: slots as AppConfig["providers"],
+    accounts,
+    auto_anchor: {},
+  };
 }
 
 function service(partial: Partial<ServiceUsage>): ServiceUsage {
@@ -85,13 +94,32 @@ describe("resolveHeadlineWindow", () => {
     expect(resolveHeadlineWindow(s, null)?.label).toBe("5-hour");
   });
 
-  it("honors a pinned primary_window, even a detail-only window", () => {
+  it("honors a per-account pinned primary_window, even a detail-only window", () => {
     const s = service({
       windows: [win("5-hour", 92)],
       detail_windows: [win("Extra usage", 12)],
     });
-    const config = cfg([pc(0, "Extra usage"), pc(1), pc(2), pc(3), pc(4), pc(5)]);
+    // Pinned window is now keyed by SERVICE ID, not the provider slot.
+    const config = cfg(
+      [pc(0), pc(1), pc(2), pc(3), pc(4), pc(5)],
+      { "auto:claude": { primary_window: "Extra usage" } },
+    );
     expect(resolveHeadlineWindow(s, config)?.label).toBe("Extra usage");
+  });
+
+  it("does not apply ANOTHER account's pinned window to this service", () => {
+    const s = service({
+      id: "stored:claude-1",
+      windows: [win("5-hour", 92)],
+      detail_windows: [win("Extra usage", 12)],
+    });
+    // auto:claude has a pin; the stored Claude account (different service id)
+    // must ignore it and fall back to its first primary window.
+    const config = cfg(
+      [pc(0), pc(1), pc(2), pc(3), pc(4), pc(5)],
+      { "auto:claude": { primary_window: "Extra usage" } },
+    );
+    expect(resolveHeadlineWindow(s, config)?.label).toBe("5-hour");
   });
 
   it("falls back to the highest-burn detail window when there is no primary", () => {
@@ -100,5 +128,38 @@ describe("resolveHeadlineWindow", () => {
       detail_windows: [win("a", 10), win("b", 65)],
     });
     expect(resolveHeadlineWindow(s, null)?.label).toBe("b");
+  });
+});
+
+describe("providerDisplayName (per-account; BUG-2 isolation)", () => {
+  it("resolves an account's own custom_name keyed by service id", () => {
+    const config = cfg(
+      [pc(0), pc(1), pc(2), pc(3), pc(4), pc(5)],
+      { "auto:claude": { custom_name: "Personal Claude" } },
+    );
+    expect(providerDisplayName(config, "auto:claude", "claude")).toBe("Personal Claude");
+  });
+
+  it("renaming account A does NOT change account B of the same provider", () => {
+    // Two Claude accounts; only auto:claude is renamed. stored:claude-1 must
+    // still resolve to the canonical provider label — the core of BUG-2.
+    const config = cfg(
+      [pc(0), pc(1), pc(2), pc(3), pc(4), pc(5)],
+      { "auto:claude": { custom_name: "Personal Claude" } },
+    );
+    expect(providerDisplayName(config, "auto:claude", "claude")).toBe("Personal Claude");
+    expect(providerDisplayName(config, "stored:claude-1", "claude")).toBe("Claude");
+  });
+
+  it("falls back to the canonical label when no override or no config", () => {
+    expect(providerDisplayName(null, "auto:claude", "claude")).toBe("Claude");
+    const blank = cfg([pc(0), pc(1), pc(2), pc(3), pc(4), pc(5)]);
+    expect(providerDisplayName(blank, "auto:codex", "codex")).toBe("Codex");
+    // A whitespace-only custom_name is ignored.
+    const ws = cfg(
+      [pc(0), pc(1), pc(2), pc(3), pc(4), pc(5)],
+      { "auto:zai": { custom_name: "   " } },
+    );
+    expect(providerDisplayName(ws, "auto:zai", "zai")).toBe("z.ai Coding Plan");
   });
 });

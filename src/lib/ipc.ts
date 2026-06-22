@@ -87,6 +87,28 @@ export function removeAccount(id: string): Promise<boolean> {
   return invoke<boolean>("remove_account", { id });
 }
 
+/**
+ * Rename ONE account by its service id (per-account; BUG-2 fix). `name = null`
+ * clears the override back to the canonical provider label. In the browser dev
+ * server this mutates the in-memory config so the UI reflects the change.
+ */
+export function renameAccount(
+  serviceId: string,
+  name: string | null,
+): Promise<void> {
+  if (!hasTauriRuntime()) {
+    const trimmed = name?.trim();
+    const prev = browserConfig.accounts[serviceId] ?? {};
+    const nextAccount = { ...prev, custom_name: trimmed && trimmed.length > 0 ? trimmed : null };
+    browserConfig = {
+      ...browserConfig,
+      accounts: { ...browserConfig.accounts, [serviceId]: nextAccount },
+    };
+    return Promise.resolve();
+  }
+  return invoke<void>("rename_account", { serviceId, name });
+}
+
 export function sendAnchorNow(serviceId: string): Promise<void> {
   if (!hasTauriRuntime()) {
     void serviceId;
@@ -204,6 +226,7 @@ function browserOnlyError(provider: Provider): Error {
 
 function createDefaultConfig(): AppConfig {
   return {
+    schema_version: 1,
     poll_seconds: 300,
     providers: [
       providerConfig(0),
@@ -213,6 +236,7 @@ function createDefaultConfig(): AppConfig {
       providerConfig(4),
       providerConfig(5),
     ],
+    accounts: {},
     auto_anchor: {},
   };
 }
@@ -220,9 +244,7 @@ function createDefaultConfig(): AppConfig {
 function providerConfig(sortIndex: number): AppConfig["providers"][number] {
   return {
     enabled: true,
-    custom_name: null,
     notify_thresholds: [50, 75, 90, 95, 100],
-    primary_window: null,
     sort_index: sortIndex,
   };
 }

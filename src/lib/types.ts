@@ -72,10 +72,24 @@ export interface UsageSnapshot {
 
 /**
  * Per-provider user settings. Mirrors the Rust `ProviderConfig` 1:1 (config.rs).
- * Indexed in `AppConfig.providers` by canonical `PROVIDER_ORDER`.
+ * Indexed in `AppConfig.providers` by canonical `PROVIDER_ORDER`. These are
+ * genuinely provider-level — every account of a provider shares them. Per-ACCOUNT
+ * name/window live in `AppConfig.accounts` (keyed by service_id), fixing BUG-2.
  */
 export interface ProviderConfig {
   enabled: boolean;
+  /** Notification thresholds in percent (0–100). Default [50,75,90,95,100]. */
+  notify_thresholds: number[];
+  /** Sort index for drag-and-drop reordering. Lower = earlier. */
+  sort_index: number;
+}
+
+/**
+ * Per-ACCOUNT user settings, keyed by service_id (`auto:<provider>` /
+ * `stored:<id>`) in `AppConfig.accounts`. Mirrors the Rust `AccountConfig`.
+ * Two accounts of the same provider have independent entries (BUG-2 fix).
+ */
+export interface AccountConfig {
   /**
    * Override the display name shown on the card / modal title. Optional AND
    * nullable: Rust serializes this with `skip_serializing_if = Option::is_none`,
@@ -83,12 +97,8 @@ export interface ProviderConfig {
    * side may set it back to `null` (F-3).
    */
   custom_name?: string | null;
-  /** Notification thresholds in percent (0–100). Default [50,75,90,95,100]. */
-  notify_thresholds: number[];
   /** Which window label to surface as the card headline. Absent/null = auto. */
   primary_window?: string | null;
-  /** Sort index for drag-and-drop reordering. Lower = earlier. */
-  sort_index: number;
 }
 
 /**
@@ -97,6 +107,8 @@ export interface ProviderConfig {
  * Rust `AppConfig.providers: [ProviderConfig; 6]`.
  */
 export interface AppConfig {
+  /** On-disk schema version (1 = current). Drives one-time Rust-side migration. */
+  schema_version: number;
   poll_seconds: number;
   providers: [
     ProviderConfig,
@@ -106,6 +118,8 @@ export interface AppConfig {
     ProviderConfig,
     ProviderConfig,
   ];
+  /** Per-service_id account settings (display name + pinned window). */
+  accounts: Record<string, AccountConfig>;
   /** Per-service_id opt-in for auto window-anchoring. */
   auto_anchor: Record<string, boolean>;
 }

@@ -132,6 +132,7 @@ pub fn run() {
             commands::cancel_login,
             commands::send_anchor_now,
             commands::refresh_account,
+            commands::rename_account,
         ])
         .setup(|app| {
             // --- Tray with a native menu (usage rows + actions) ---

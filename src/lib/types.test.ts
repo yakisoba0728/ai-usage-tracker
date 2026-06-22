@@ -69,12 +69,14 @@ describe("IPC contract shape", () => {
     expect(Object.keys(codeOnly)).toEqual(["code"]);
   });
 
-  it("AppConfig is a poll interval plus a fixed 6-provider tuple", () => {
-    // ProviderConfig.custom_name / primary_window are skip_serializing_if=None on
-    // the Rust side, so we don't pin the inner key set here — only the top-level
-    // AppConfig shape and the providers tuple length (part of the contract:
-    // Rust is `[ProviderConfig; 6]`, indexed by canonical provider order).
+  it("AppConfig is a versioned poll interval, a fixed 6-provider tuple, and per-account maps", () => {
+    // AccountConfig.custom_name / primary_window are skip_serializing_if=None on
+    // the Rust side (in the `accounts` map), so we don't pin those inner key sets
+    // here — only the top-level AppConfig shape and the providers tuple length
+    // (part of the contract: Rust is `[ProviderConfig; 6]`, indexed by canonical
+    // provider order, plus `schema_version` + `accounts` per service id).
     const config: AppConfig = {
+      schema_version: 1,
       poll_seconds: 300,
       providers: [
         providerConfig(),
@@ -84,9 +86,16 @@ describe("IPC contract shape", () => {
         providerConfig(),
         providerConfig(),
       ],
+      accounts: {},
       auto_anchor: {},
     };
-    expect(Object.keys(config).sort()).toEqual(["auto_anchor", "poll_seconds", "providers"]);
+    expect(Object.keys(config).sort()).toEqual([
+      "accounts",
+      "auto_anchor",
+      "poll_seconds",
+      "providers",
+      "schema_version",
+    ]);
     expect(config.providers).toHaveLength(6);
   });
 
@@ -103,9 +112,7 @@ describe("IPC contract shape", () => {
 function providerConfig(): AppConfig["providers"][number] {
   return {
     enabled: true,
-    custom_name: null,
     notify_thresholds: [50, 75, 90, 95, 100],
-    primary_window: null,
     sort_index: 0,
   };
 }

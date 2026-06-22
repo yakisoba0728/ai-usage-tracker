@@ -168,13 +168,9 @@ export function SettingsDialog({
                     key={provider}
                     icon={<ProviderMark provider={provider} className="size-4" />}
                     label={PROVIDER_LABEL[provider]}
-                    description={
-                      config?.providers[index].custom_name
-                        ? t("settings.shownAs", {
-                            name: config.providers[index].custom_name,
-                          })
-                        : t("settings.defaultName")
-                    }
+                    // Per-account display names moved to the account detail
+                    // dialog (BUG-2); this row only toggles the provider on/off.
+                    description={t("settings.defaultName")}
                   >
                     <Toggle
                       checked={config?.providers[index].enabled ?? false}

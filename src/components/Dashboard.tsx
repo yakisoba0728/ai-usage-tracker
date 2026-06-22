@@ -57,10 +57,12 @@ import {
   onTriggerRefresh,
   refreshAccount,
   removeAccount,
+  renameAccount,
   sendAnchorNow,
   setConfig,
 } from "@/lib/ipc";
 import {
+  patchAccountConfig,
   providerDisplayName,
 } from "@/lib/providers";
 import { scrubErrorText } from "@/lib/errorScrub";
@@ -104,6 +106,21 @@ export function Dashboard() {
     setConfigState(next);
     void setConfig(next).catch((e) => console.error("set_config failed:", e));
   }, []);
+
+  // Per-account rename (BUG-2). Persists via the dedicated `rename_account`
+  // command — NOT `set_config` — so a rename never restarts the poll scheduler.
+  // The optimistic local update is what refreshes the title in both runtimes.
+  const handleRenameAccount = useCallback(
+    (serviceId: string, name: string | null) => {
+      setConfigState((prev) =>
+        prev ? patchAccountConfig(prev, serviceId, { custom_name: name }) : prev,
+      );
+      void renameAccount(serviceId, name).catch((e) =>
+        console.error("rename_account failed:", e),
+      );
+    },
+    [],
+  );
 
   const applyAccountActions = useCallback((next: AccountActionState) => {
     accountActionsRef.current = next;
@@ -384,7 +401,7 @@ export function Dashboard() {
     for (const crossing of collectThresholdCrossings(snapshot, config, prevPctRef.current)) {
       pushToast(
         t("toast.reached", {
-          provider: providerDisplayName(config, crossing.provider),
+          provider: providerDisplayName(config, crossing.serviceId, crossing.provider),
           percent: Math.round(crossing.threshold),
         }),
       );
@@ -531,6 +548,7 @@ export function Dashboard() {
         onOpenAdd={openAddAccount}
         onOpenSettings={openSettings}
         onConfigChange={updateConfig}
+        onRenameAccount={handleRenameAccount}
         onRemove={handleRemoveSelected}
       />
 

@@ -139,6 +139,19 @@ Behavior-preserving (D2). Backend: `commands.rs`→`ipc/`+`refresh.rs`+`snapshot
 - **Live-only paths:** Claude web anchor success, z.ai send success, Codex no-in-band-failure, and the OS notification naming the right account are **live-only**. Add `examples/live_anchor.rs` (env-gated) and a documented **manual live checklist** as a required pre-merge gate for any anchor/notification chunk.
 - **Bug fix = new test first:** every BUG-* lands as failing→passing (D2).
 
+### Decision record: component testing = logic-in-lib (Chunk 0, 2026-06-22)
+
+**Decision.** The frontend has **no component-render infra** (no `@testing-library/react`, no jsdom/happy-dom); all 76 vitest cases target pure `src/lib/` modules. We keep that on purpose. For every chunk that rewrites a component (Chunks 2/3/6), the component's **decision logic is extracted into a `src/lib/` pure function with vitest coverage BEFORE the JSX is rewritten.** The JSX shell then only wires already-tested logic to the DOM. This is cheaper than standing up testing-library, and it keeps the regression net where it has always lived (spec §3.4 "tested `lib/` model modules").
+
+**Why (evidence).** The current `lib/` modules (`dashboardState`, `accountActionState`, `snapshotState`, `addAccountState`, `thresholdToasts`, `inspectorModel`, `format`, `status`, `providers`) already prove this pattern works — every user-visible decision is a pure function the components consume. Adding testing-library now would duplicate that net at higher cost (render setup, async act() flakiness) for no extra coverage of the logic that actually changes.
+
+**Concretely, the rewrite's user-visible behaviors each get a tested `lib/` function first:**
+- **Rename resolution (Chunk 3, BUG-2):** "which display name shows for this `service_id`" → a pure resolver keyed by service id (e.g. `providerDisplayName(serviceId, config)`), unit-tested for the per-account-isolation case (two accounts of one provider, independent names) — the §8 "per-account name isolation" gate lands here, in the chunk that creates the behavior.
+- **Anchor / notification text (Chunk 2, FEAT-3):** "the toast/OS-notification string naming provider + account + window + pct" → a pure text builder (input: provider+account+window+pct+auto-vs-manual → string), unit-tested (§6.4) before either the Rust notification call or the in-app toast JSX is wired.
+- **Threshold-cross targeting (Chunk 2/6):** "which threshold fires for which account" → stays in `thresholdToasts` (already pure + tested); any rewrite extends its tests first.
+
+**Escape hatch.** `happy-dom` + `@testing-library/react` are added **only if** a specific flow genuinely cannot be cleanly extracted to a pure function (e.g. focus management, a DOM-event ordering bug). That is a per-case, justified exception — not the default — and is decided in the owning chunk, not pre-emptively.
+
 ## 9. Per-chunk verification gate
 
 1. `pnpm verify:runtime` green (lint, `tsc --noEmit`, vitest, `cargo test --lib`).

@@ -211,8 +211,10 @@
     "reached": "{{provider}} reached {{percent}}%.",
     "scanning": "Local sessions are being scanned again.",
     "dismiss": "Dismiss notification",
-    "anchorSent": "Anchor message sent.",
-    "anchorFailed": "Anchor message failed: {{error}}"
+    "anchorSentFor": "Anchor message sent for {{name}}.",
+    "anchorFailedFor": "Anchor failed for {{name}}: {{error}}",
+    "anchorAutoSentFor": "Auto-anchored {{name}}.",
+    "anchorAutoFailedFor": "Auto-anchor failed for {{name}}: {{error}}"
   },
   "time": {
     "justNow": "Updated just now",

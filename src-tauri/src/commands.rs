@@ -7,7 +7,11 @@ use tauri::{AppHandle, Emitter, State};
 use tokio::sync::RwLock;
 
 use crate::config::AppConfig;
-use crate::model::{auto_service_id, stored_service_id, Provider, ServiceSource, UsageSnapshot};
+use crate::model::{
+    auto_service_id, stored_service_id, Provider, ServiceSource, UsageSnapshot,
+    EVENT_ANCHOR_RESULT, EVENT_PROVIDER_LOADING, EVENT_REFRESH_RESULT, EVENT_USAGE_UPDATED,
+};
+use crate::notify::anchor_notification;
 use crate::providers::{fetch_all, ProviderApi};
 
 pub type SnapshotStore = Arc<RwLock<UsageSnapshot>>;
@@ -96,7 +100,7 @@ async fn refresh_once_inner(
         services,
     };
     *snap.write().await = snapshot.clone();
-    let _ = app.emit("usage-updated", &snapshot);
+    let _ = app.emit(EVENT_USAGE_UPDATED, &snapshot);
     // Auto window-anchoring: for each opted-in, connected, supported service
     // whose 5-hour window is empty (100% remaining), send one anchor message.
     let now_sec = chrono::Utc::now().timestamp();
@@ -109,6 +113,10 @@ async fn refresh_once_inner(
             && crate::anchor::try_begin(&s.id, now_sec)
         {
             let id = s.id.clone();
+            // Source provider + account label from THIS snapshot reading (the
+            // auto path has the full `ServiceUsage` in hand — no store lookup).
+            let provider = s.provider;
+            let label = s.account.clone();
             let app2 = app.clone();
             tauri::async_runtime::spawn(async move {
                 let res = crate::anchor::send(&id).await;
@@ -126,13 +134,19 @@ async fn refresh_once_inner(
                         }
                     }
                 }
+                let ok = res.is_ok();
+                // Fire the OS notification (is_auto = true) — works even when the
+                // menu-bar window is hidden.
+                show_anchor_notification(&app2, provider, label.as_deref(), ok, true);
                 let _ = app2.emit(
-                    "anchor-result",
-                    serde_json::json!({
-                        "id": id,
-                        "ok": res.is_ok(),
-                        "detail": res.as_ref().err().map(|e| e.to_string()),
-                    }),
+                    EVENT_ANCHOR_RESULT,
+                    anchor_result_payload(
+                        &id,
+                        ok,
+                        res.as_ref().err().map(|e| e.to_string()),
+                        Some(provider),
+                        label.as_deref(),
+                    ),
                 );
             });
         }
@@ -186,7 +200,79 @@ fn loading_payload(id: &str, provider: Provider) -> serde_json::Value {
 }
 
 fn emit_loading(app: &AppHandle, id: &str, provider: Provider) {
-    let _ = app.emit("provider-loading", loading_payload(id, provider));
+    let _ = app.emit(EVENT_PROVIDER_LOADING, loading_payload(id, provider));
+}
+
+/// The enriched `anchor-result` payload (spec §3 allowed delta): keeps
+/// `{id, ok, detail}` and ADDS `provider` (lowercase-serialized enum, or null
+/// when the id can't be resolved to a provider) + `label` (the account/email
+/// display string, or null when unknown). Shared by BOTH the manual
+/// `send_anchor_now` and the auto-anchor emit sites so they never drift.
+fn anchor_result_payload(
+    service_id: &str,
+    ok: bool,
+    detail: Option<String>,
+    provider: Option<Provider>,
+    label: Option<&str>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "id": service_id,
+        "ok": ok,
+        "detail": detail,
+        "provider": provider,
+        "label": label,
+    })
+}
+
+/// Fire the OS-native notification for an anchor outcome (works when the
+/// menu-bar window is hidden). The TEXT is the pure `notify::anchor_notification`
+/// builder; this wrapper is the thin, untested `.show()` shell. Errors (e.g.
+/// permission denied on an unsigned bundle) are swallowed — a failed toast must
+/// never panic the refresh path.
+fn show_anchor_notification(
+    app: &AppHandle,
+    provider: Provider,
+    label: Option<&str>,
+    ok: bool,
+    is_auto: bool,
+) {
+    use tauri_plugin_notification::NotificationExt;
+    let text = anchor_notification(provider, label, ok, is_auto);
+    let _ = app
+        .notification()
+        .builder()
+        .title(text.title)
+        .body(text.body)
+        .show();
+}
+
+/// Resolve the account display label for a service id, preferring the live
+/// snapshot reading (`s.account`), then a stored credential's label, else None.
+/// Never returns a raw `stored:<uuid>` id (finding notif-missing-account-identity).
+async fn resolve_anchor_label(snap: &SnapshotStore, service_id: &str) -> Option<String> {
+    if let Some(account) = snap
+        .read()
+        .await
+        .services
+        .iter()
+        .find(|s| s.id == service_id)
+        .and_then(|s| s.account.clone())
+    {
+        return Some(account);
+    }
+    crate::store::find_by_service_id(service_id).map(|c| c.label)
+}
+
+/// The provider for a service id: from the `auto:<provider>` prefix, or the
+/// stored credential's provider. Used at the manual emit site, where we only
+/// have the masked id.
+fn provider_for_service_id(service_id: &str) -> Option<Provider> {
+    for p in crate::model::PROVIDER_ORDER {
+        if auto_service_id(p) == service_id {
+            return Some(p);
+        }
+    }
+    crate::store::find_by_service_id(service_id).map(|c| c.provider)
 }
 
 fn refresh_result_payload(
@@ -352,17 +438,34 @@ pub fn cancel_login() {
 
 /// Send a minimal "anchor" message for one service to start its usage window.
 /// Tokens stay in Rust; the frontend only passes the masked service id.
-/// Emits `anchor-result` so the frontend can toast the outcome.
+/// Emits `anchor-result` (enriched with provider+label) so the frontend can
+/// toast the outcome, and fires an OS-native notification (works with the
+/// window hidden). This is the MANUAL path (`is_auto = false`).
 #[tauri::command]
-pub async fn send_anchor_now(app: AppHandle, service_id: String) -> Result<(), String> {
+pub async fn send_anchor_now(
+    app: AppHandle,
+    snap: State<'_, SnapshotStore>,
+    service_id: String,
+) -> Result<(), String> {
     let res = crate::anchor::send(&service_id).await;
+    let ok = res.is_ok();
+    // Source provider + label from the masked id (no full ServiceUsage here):
+    // provider from the id prefix / stored cred; label from the snapshot reading
+    // or the stored credential, never the raw id.
+    let provider = provider_for_service_id(&service_id);
+    let label = resolve_anchor_label(snap.inner(), &service_id).await;
+    if let Some(provider) = provider {
+        show_anchor_notification(&app, provider, label.as_deref(), ok, false);
+    }
     let _ = app.emit(
-        "anchor-result",
-        serde_json::json!({
-            "id": service_id,
-            "ok": res.is_ok(),
-            "detail": res.as_ref().err().map(|e| e.to_string()),
-        }),
+        EVENT_ANCHOR_RESULT,
+        anchor_result_payload(
+            &service_id,
+            ok,
+            res.as_ref().err().map(|e| e.to_string()),
+            provider,
+            label.as_deref(),
+        ),
     );
     res.map_err(|e| e.to_string())
 }
@@ -379,7 +482,7 @@ pub async fn refresh_account(
 ) -> Result<(), String> {
     let result = refresh_account_once(&app, cfg.inner(), snap.inner(), &service_id).await;
     let _ = app.emit(
-        "refresh-result",
+        EVENT_REFRESH_RESULT,
         refresh_result_payload(&service_id, result.as_ref()),
     );
     result.map(|_| ())
@@ -445,7 +548,7 @@ async fn refresh_account_once_inner(
         guard.fetched_at = chrono::Utc::now().timestamp();
     }
     let snapshot = snap.read().await.clone();
-    let _ = app.emit("usage-updated", &snapshot);
+    let _ = app.emit(EVENT_USAGE_UPDATED, &snapshot);
     Ok(returned)
 }
 
@@ -456,7 +559,7 @@ async fn remove_service_from_snapshot(app: &AppHandle, snap: &SnapshotStore, ser
         guard.fetched_at = chrono::Utc::now().timestamp();
     }
     let snapshot = snap.read().await.clone();
-    let _ = app.emit("usage-updated", &snapshot);
+    let _ = app.emit(EVENT_USAGE_UPDATED, &snapshot);
 }
 
 #[cfg(test)]
@@ -618,6 +721,54 @@ mod tests {
 
         let ids: Vec<&str> = services.iter().map(|s| s.id.as_str()).collect();
         assert_eq!(ids, vec!["auto:codex", "stored:kept"]);
+    }
+
+    #[test]
+    fn anchor_result_payload_keeps_legacy_fields_and_adds_provider_and_label() {
+        // Spec §3 allowed delta: the payload KEEPS {id, ok, detail} and ADDS
+        // {provider, label}. provider serializes lowercase; label is the account
+        // display string. A failed send carries the detail string.
+        let ok = anchor_result_payload(
+            "stored:claude-1",
+            true,
+            None,
+            Some(Provider::Claude),
+            Some("person@example.invalid"),
+        );
+        let mut keys: Vec<&str> = ok.as_object().unwrap().keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, vec!["detail", "id", "label", "ok", "provider"]);
+        assert_eq!(ok["id"], "stored:claude-1");
+        assert_eq!(ok["ok"], true);
+        assert_eq!(ok["detail"], serde_json::Value::Null);
+        assert_eq!(ok["provider"], "claude");
+        assert_eq!(ok["label"], "person@example.invalid");
+
+        let failed = anchor_result_payload(
+            "auto:zai",
+            false,
+            Some("boom".into()),
+            Some(Provider::Zai),
+            None,
+        );
+        assert_eq!(failed["ok"], false);
+        assert_eq!(failed["detail"], "boom");
+        assert_eq!(failed["provider"], "zai");
+        assert_eq!(failed["label"], serde_json::Value::Null);
+
+        // An unresolvable id leaves provider null (never a fabricated provider).
+        let unknown = anchor_result_payload("bogus", false, Some("x".into()), None, None);
+        assert_eq!(unknown["provider"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn provider_for_service_id_resolves_auto_prefix() {
+        assert_eq!(provider_for_service_id("auto:claude"), Some(Provider::Claude));
+        assert_eq!(provider_for_service_id("auto:zai"), Some(Provider::Zai));
+        assert_eq!(provider_for_service_id("auto:codex"), Some(Provider::Codex));
+        // An unknown / malformed id with no matching stored cred → None.
+        assert_eq!(provider_for_service_id("auto:nope"), None);
+        assert_eq!(provider_for_service_id("garbage"), None);
     }
 
     #[test]

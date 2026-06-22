@@ -21,7 +21,7 @@ use tauri::{AppHandle, Emitter};
 use tiny_http::{Response, Server};
 
 use crate::jwt::jwt_payload;
-use crate::model::Provider;
+use crate::model::{Provider, EVENT_LOGIN_COMPLETE};
 use crate::store::{self, StoredCredential};
 
 const LOCAL_REDIRECT_PATH: &str = "/auth/callback";
@@ -311,7 +311,7 @@ fn run_server(server: Server, ctx: RunCtx) {
             match store::add(cred) {
                 Ok(_) => {
                     let _ = app.emit(
-                        "login-complete",
+                        EVENT_LOGIN_COMPLETE,
                         LoginResult {
                             provider,
                             ok: true,
@@ -465,7 +465,7 @@ fn random_b64(n: usize) -> String {
 
 fn emit_err(app: &AppHandle, provider: Provider, msg: String) {
     let _ = app.emit(
-        "login-complete",
+        EVENT_LOGIN_COMPLETE,
         LoginResult {
             provider,
             ok: false,

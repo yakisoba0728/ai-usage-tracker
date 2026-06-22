@@ -259,7 +259,8 @@ pub async fn send_anchor_now(app: AppHandle, service_id: String) -> Result<(), S
 }
 
 /// Re-fetch a single account (auto:<provider> or stored:<id>) and merge it into
-/// the snapshot. Emits provider-loading then usage-updated.
+/// the snapshot. Emits provider-loading then usage-updated, and a `refresh-result`
+/// on EVERY path so a failure is surfaced instead of silently dropped (F-7).
 #[tauri::command]
 pub async fn refresh_account(
     app: AppHandle,
@@ -267,10 +268,28 @@ pub async fn refresh_account(
     snap: State<'_, SnapshotStore>,
     service_id: String,
 ) -> Result<(), String> {
+    let result = refresh_account_once(&app, cfg.inner(), snap.inner(), &service_id).await;
+    let _ = app.emit(
+        "refresh-result",
+        serde_json::json!({
+            "id": service_id,
+            "ok": result.is_ok(),
+            "detail": result.as_ref().err().cloned(),
+        }),
+    );
+    result
+}
+
+async fn refresh_account_once(
+    app: &AppHandle,
+    cfg: &ConfigStore,
+    snap: &SnapshotStore,
+    service_id: &str,
+) -> Result<(), String> {
     use crate::model::auto_service_id;
     // Resolve the fresh ServiceUsage for this id.
     let fresh: Option<crate::model::ServiceUsage> = if service_id.starts_with("stored:") {
-        let cred = crate::store::find_by_service_id(&service_id);
+        let cred = crate::store::find_by_service_id(service_id);
         match cred {
             Some(c) => {
                 let _ = app.emit("provider-loading", c.provider);

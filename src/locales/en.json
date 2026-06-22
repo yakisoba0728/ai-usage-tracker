@@ -197,6 +197,7 @@
   "toast": {
     "removed": "Stored account removed.",
     "removeFailed": "Remove failed: {{error}}",
+    "refreshFailed": "Refresh failed: {{error}}",
     "reached": "{{provider}} reached {{percent}}%.",
     "scanning": "Local sessions are being scanned again.",
     "dismiss": "Dismiss notification",

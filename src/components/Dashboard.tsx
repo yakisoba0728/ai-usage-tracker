@@ -37,6 +37,7 @@ import {
 import {
   getConfig,
   onAnchorResult,
+  onRefreshResult,
   onTriggerRefresh,
   removeAccount,
   setConfig,
@@ -153,6 +154,22 @@ export function Dashboard() {
       pushToast(p.ok ? t("toast.anchorSent") : t("toast.anchorFailed", { error: p.detail ?? t("error.unknown") }));
     }).catch((e) => {
       console.error("subscribe anchor-result failed:", e);
+      return undefined;
+    });
+    return () => {
+      void un.then((u) => u?.());
+    };
+  }, [pushToast, t]);
+
+  // A per-card refresh emits `refresh-result` on every path; only surface a
+  // failure (success already updates the card via usage-updated) — F-7.
+  useEffect(() => {
+    const un = onRefreshResult((p) => {
+      if (!p.ok) {
+        pushToast(t("toast.refreshFailed", { error: p.detail ?? t("error.unknown") }));
+      }
+    }).catch((e) => {
+      console.error("subscribe refresh-result failed:", e);
       return undefined;
     });
     return () => {

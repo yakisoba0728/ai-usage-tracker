@@ -75,17 +75,17 @@ fn read_accounts() -> Vec<StoredCredential> {
     parsed.accounts
 }
 
-fn persist_accounts(accounts: &[StoredCredential]) {
+fn persist_accounts(accounts: &[StoredCredential]) -> std::io::Result<()> {
     let path = store_path();
     let file = StoreFile {
         accounts: accounts.to_vec(),
     };
-    let Ok(json) = serde_json::to_string_pretty(&file) else {
-        return;
-    };
+    let json = serde_json::to_string_pretty(&file)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     // Atomic (temp + rename, no torn file for a concurrent reader) AND owner-only
-    // (0o600): the file holds plaintext access/refresh tokens (X-1).
-    let _ = crate::util::write_atomic(&path, json.as_bytes(), Some(0o600));
+    // (0o600): the file holds plaintext access/refresh tokens (X-1). The Result
+    // is propagated so a failed write isn't swallowed (B-2).
+    crate::util::write_atomic(&path, json.as_bytes(), Some(0o600))
 }
 
 fn gen_id(provider: &Provider) -> String {
@@ -107,7 +107,7 @@ pub fn add(mut cred: StoredCredential) -> Result<String, String> {
     let id = cred.id.clone();
     let mut accounts = read_accounts();
     accounts.push(cred);
-    persist_accounts(&accounts);
+    persist_accounts(&accounts).map_err(|e| format!("could not save account: {e}"))?;
     Ok(id)
 }
 
@@ -118,24 +118,25 @@ pub fn remove(id: &str) -> bool {
     accounts.retain(|c| c.id != id);
     let changed = accounts.len() != before;
     if changed {
-        persist_accounts(&accounts);
+        let _ = persist_accounts(&accounts);
     }
     changed
 }
 
 /// Replace a stored credential in place (the refresh path persists rotated
-/// tokens). Returns `true` if the id was found and the updated record written.
-/// The whole file is rewritten atomically, so a rotated token and its metadata
-/// can never land out of sync.
-pub fn update(cred: &StoredCredential) -> bool {
+/// tokens). `Ok(true)` = found and persisted; `Ok(false)` = unknown id (no-op);
+/// `Err` = the write failed, so the caller can surface it rather than lose a
+/// rotated token silently (B-2). Rewritten atomically, so a rotated token and
+/// its metadata can never land out of sync.
+pub fn update(cred: &StoredCredential) -> std::io::Result<bool> {
     let _guard = STORE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut accounts = read_accounts();
     let Some(idx) = accounts.iter().position(|c| c.id == cred.id) else {
-        return false; // unknown id; nothing to update
+        return Ok(false); // unknown id; nothing to update
     };
     accounts[idx] = cred.clone();
-    persist_accounts(&accounts);
-    true
+    persist_accounts(&accounts)?;
+    Ok(true)
 }
 
 /// Build a rotated credential, preserving `id`/`provider`/`label`/`account_id`.
@@ -171,6 +172,13 @@ pub fn find_by_service_id(service_id: &str) -> Option<StoredCredential> {
     list()
         .into_iter()
         .find(|c| crate::model::stored_service_id(&c.id) == service_id)
+}
+
+/// Find a stored credential by its raw account `id`. Used to RE-READ the latest
+/// persisted record inside the refresh lock, so a refresher that waited sees a
+/// rotation a concurrent refresher already committed (B-1).
+pub fn find(id: &str) -> Option<StoredCredential> {
+    list().into_iter().find(|c| c.id == id)
 }
 
 /// Load all stored accounts. A record with an empty access token (e.g. a stale
@@ -288,7 +296,10 @@ mod tests {
             id_token: None,
             account_id: None,
         };
-        assert!(update(&rotated), "update finds and replaces the record");
+        assert!(
+            update(&rotated).unwrap(),
+            "update finds and replaces the record"
+        );
 
         let loaded = load();
         assert_eq!(loaded.len(), 1);
@@ -296,10 +307,14 @@ mod tests {
         assert_eq!(loaded[0].refresh_token.as_deref(), Some("REFRESH-V2"));
         assert_eq!(loaded[0].expires_at, 999_999);
 
-        // Updating an unknown id is a no-op returning false.
+        // find() re-reads the latest persisted record by id (B-1 re-read path).
+        assert_eq!(find(&id).unwrap().access_token, "ACCESS-V2");
+        assert!(find("does-not-exist").is_none());
+
+        // Updating an unknown id is a no-op returning Ok(false).
         let mut unknown = rotated.clone();
         unknown.id = "does-not-exist".into();
-        assert!(!update(&unknown));
+        assert!(!update(&unknown).unwrap());
 
         assert!(remove(&id));
         std::env::remove_var("AIT_ACCOUNTS_PATH");

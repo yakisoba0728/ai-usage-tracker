@@ -114,6 +114,21 @@ export function onAnchorResult(
   });
 }
 
+export function onRefreshResult(
+  handler: (payload: { id: string; ok: boolean; detail: string | null }) => void,
+): Promise<UnlistenFn> {
+  if (!hasTauriRuntime()) {
+    void handler;
+    return Promise.resolve(() => undefined);
+  }
+  return listen<{ id: string; ok: boolean; detail: string | null }>(
+    "refresh-result",
+    (event) => {
+      handler(event.payload);
+    },
+  );
+}
+
 export function onUsageUpdated(
   cb: (snapshot: UsageSnapshot) => void,
 ): Promise<UnlistenFn> {

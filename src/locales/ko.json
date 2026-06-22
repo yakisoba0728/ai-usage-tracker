@@ -197,6 +197,7 @@
   "toast": {
     "removed": "저장된 계정이 제거되었습니다.",
     "removeFailed": "제거 실패: {{error}}",
+    "refreshFailed": "새로고침 실패: {{error}}",
     "reached": "{{provider}}이(가) {{percent}}%에 도달했습니다.",
     "scanning": "로컬 세션을 다시 검색하는 중입니다.",
     "dismiss": "알림 닫기",

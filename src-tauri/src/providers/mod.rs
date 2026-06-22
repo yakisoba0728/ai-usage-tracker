@@ -87,29 +87,62 @@ pub async fn fetch_all(providers: Vec<Box<dyn ProviderApi>>) -> Vec<ServiceUsage
 
 /// Fetch usage for a manually-added (OAuth/API-key) account whose token lives
 /// in the store. Refreshes the access token first if it's near expiry (P0 #3).
+/// Serializes the refresh+persist critical section so two concurrent refreshes
+/// of the SAME stored credential can't both replay the old (rotating) refresh
+/// token and lose the winner's rotated token (B-1). Held only across
+/// refresh+persist — never the usage fetch — so per-provider fetch parallelism
+/// is preserved.
+static REFRESH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+fn is_expired(cred: &crate::store::StoredCredential, now_ms: i64) -> bool {
+    cred.expires_at > 0 && cred.expires_at < now_ms
+}
+
+/// Refresh a stored credential if its access token is past expiry, persisting the
+/// rotated token, and return the credential to actually use. Serialized via
+/// `REFRESH_LOCK` and RE-READS the latest persisted record inside the lock, so a
+/// refresher that waited adopts a rotation a concurrent one already committed
+/// instead of replaying the now-invalid old refresh token (B-1). Providers with
+/// no refresh path (Cursor/Copilot/z.ai) or no refresh_token (Claude session
+/// keys) leave the credential unchanged.
+pub async fn refresh_if_expired(
+    http: &reqwest::Client,
+    cred: &crate::store::StoredCredential,
+) -> crate::store::StoredCredential {
+    if !is_expired(cred, chrono::Utc::now().timestamp_millis()) {
+        return cred.clone();
+    }
+    let _guard = REFRESH_LOCK.lock().await;
+    // Re-read: a concurrent refresher may have rotated + persisted while we waited.
+    let latest = crate::store::find(&cred.id).unwrap_or_else(|| cred.clone());
+    if !is_expired(&latest, chrono::Utc::now().timestamp_millis()) {
+        return latest;
+    }
+    match refresh_stored(http, &latest).await {
+        Some(updated) => {
+            match crate::store::update(&updated) {
+                Ok(true) => {}
+                Ok(false) => eprintln!(
+                    "stored {:?} account {}: vanished before refreshed token could persist",
+                    updated.provider, updated.id
+                ),
+                // B-2: a failed write is logged with the real fs error, not
+                // swallowed — the next poll would otherwise replay the old token.
+                Err(e) => eprintln!(
+                    "stored {:?} account {}: refreshed token not persisted: {e}",
+                    updated.provider, updated.id
+                ),
+            }
+            updated
+        }
+        None => latest,
+    }
+}
+
 pub async fn fetch_credential(cred: &crate::store::StoredCredential) -> ServiceUsage {
     let http = crate::http::shared();
-    let now_ms = chrono::Utc::now().timestamp_millis();
-
-    // P0 #3: refresh expired stored tokens before fetching. Cursor/CoPilot/z.ai
-    // return None (no refresh path); Claude session-key accounts return None
-    // (no refresh_token). Codex/Gemini OAuth accounts rotate and persist.
-    let active = if cred.expires_at > 0 && cred.expires_at < now_ms {
-        match refresh_stored(&http, cred).await {
-            Some(updated) => {
-                if !crate::store::update(&updated) {
-                    eprintln!(
-                        "stored {:?} account {}: refreshed token not persisted",
-                        updated.provider, updated.id
-                    );
-                }
-                updated
-            }
-            None => cred.clone(),
-        }
-    } else {
-        cred.clone()
-    };
+    // P0 #3: refresh expired stored tokens before fetching (serialized + re-read).
+    let active = refresh_if_expired(&http, cred).await;
 
     let res = match active.provider {
         Provider::Codex => crate::providers::codex::fetch_stored(&http, &active).await,
@@ -219,6 +252,25 @@ mod tests {
         );
         assert_eq!(out[2].provider, Provider::Gemini);
         assert!(out[2].connected);
+    }
+
+    #[test]
+    fn is_expired_only_for_positive_past_expiry() {
+        let cred = |exp: i64| crate::store::StoredCredential {
+            id: "x".into(),
+            provider: Provider::Codex,
+            label: "x".into(),
+            access_token: "a".into(),
+            refresh_token: None,
+            expires_at: exp,
+            id_token: None,
+            account_id: None,
+        };
+        assert!(is_expired(&cred(100), 200)); // positive, in the past
+        assert!(!is_expired(&cred(300), 200)); // in the future
+        assert!(!is_expired(&cred(0), 200)); // 0 = unknown → never expired
+        assert!(!is_expired(&cred(-5), 200)); // non-positive → never
+        assert!(!is_expired(&cred(200), 200)); // exactly now → not yet (strict <)
     }
 
     #[test]

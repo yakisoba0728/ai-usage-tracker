@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  accountSubtitle,
   buildAccountSections,
+  buildInspectorSummary,
   selectVisibleServiceId,
 } from "@/lib/inspectorModel";
 import type { AppConfig, Provider, ServiceUsage } from "@/lib/types";
@@ -92,6 +94,46 @@ describe("inspector model", () => {
       "auto:gemini",
       "auto:zai",
     ]);
+  });
+
+  it("never renders a raw stored:<uuid> subtitle for a null-account stored service (BUG-6)", () => {
+    const uuid = "9f8c1a2b-3d4e-5f60-7a8b-9c0d1e2f3a4b";
+    const stored = service(`stored:${uuid}`, "claude", true, 12, null, "Max");
+
+    const subtitle = accountSubtitle(stored, config);
+    // The raw `stored:` prefix and the full uuid must never leak.
+    expect(subtitle).not.toContain("stored:");
+    expect(subtitle).not.toContain(uuid);
+    // Provider label + a short id tail (last 6 of the stripped id).
+    expect(subtitle).toContain("Claude");
+    expect(subtitle).toContain(uuid.slice(-6));
+
+    // The inspector summary id must not leak the raw stored:<uuid> either.
+    const summary = buildInspectorSummary(stored, config);
+    expect(summary.accountId).not.toContain("stored:");
+    expect(summary.accountId).not.toContain(uuid);
+
+    // And the card subtitle (via buildAccountSections) is the resolved string.
+    const sections = buildAccountSections([stored], config, {
+      query: "",
+      showOffline: true,
+    });
+    expect(sections[0]?.rows[0]?.subtitle).toBe(subtitle);
+  });
+
+  it("prefers a real account label, then custom_name, over the synthesized fallback (BUG-6)", () => {
+    const uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    const id = `stored:${uuid}`;
+    // 1) real account label wins.
+    const withAccount = service(id, "zai", true, 12, "z.ai workspace", "Pro");
+    expect(accountSubtitle(withAccount, config)).toBe("z.ai workspace");
+    // 2) null account but a per-account custom_name → custom_name.
+    const namedConfig: AppConfig = {
+      ...config,
+      accounts: { [id]: { custom_name: "My zai key" } },
+    };
+    const noAccount = service(id, "zai", true, 12, null, "Pro");
+    expect(accountSubtitle(noAccount, namedConfig)).toBe("My zai key");
   });
 
   it("keeps modal selection only while the selected account remains visible", () => {

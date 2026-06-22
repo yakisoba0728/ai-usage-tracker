@@ -34,7 +34,7 @@ export function ConfirmDialog({
         </DialogHeader>
         <div className="mt-4 flex justify-end gap-2">
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
-            {t("common.close")}
+            {t("common.cancel")}
           </Button>
           <Button
             onClick={() => {

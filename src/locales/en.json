@@ -8,6 +8,7 @@
     "accounts": "Accounts"
   },
   "common": {
+    "cancel": "Cancel",
     "close": "Close",
     "refresh": "Refresh",
     "settings": "Settings"

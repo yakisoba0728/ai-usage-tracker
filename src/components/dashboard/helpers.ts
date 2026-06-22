@@ -29,9 +29,3 @@ export function storedAccountId(service: ServiceUsage): string | null {
 export function allServiceWindows(service: ServiceUsage): LimitWindow[] {
   return [...(service.windows ?? []), ...(service.detail_windows ?? [])];
 }
-
-/** The id shown under a card title — the service id minus its `auto:`/`stored:`
- *  source prefix. */
-export function displayAccountId(service: ServiceUsage): string {
-  return service.id.replace(/^(auto|stored):/, "");
-}

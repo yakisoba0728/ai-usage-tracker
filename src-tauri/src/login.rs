@@ -421,21 +421,9 @@ async fn poll_github(
     };
 
     // Resolve username for the label.
-    let label = match http
-        .get("https://api.github.com/user")
-        .header("Authorization", format!("Bearer {token}"))
-        .header("User-Agent", "ai-usage-tracker")
-        .send()
+    let label = resolve_github_label(&http, &token, "https://api.github.com/user")
         .await
-    {
-        Ok(r) => r
-            .json::<serde_json::Value>()
-            .await
-            .ok()
-            .and_then(|v| v.get("login").and_then(|x| x.as_str()).map(String::from)),
-        Err(_) => None,
-    }
-    .unwrap_or_else(|| "GitHub account".into());
+        .unwrap_or_else(|| "GitHub account".into());
 
     Ok(StoredCredential {
         id: String::new(),
@@ -447,6 +435,31 @@ async fn poll_github(
         id_token: None,
         account_id: None,
     })
+}
+
+/// Resolve a GitHub `login` name for the account label. Copilot CLI `gho_`
+/// user-OAuth tokens use the legacy `Authorization: token <t>` scheme — NOT
+/// `Bearer` (which 401s and degrades the label to a generic fallback, BUG-5).
+/// Matches `copilot.rs::fetch_with`. `user_url` is injectable for testing.
+async fn resolve_github_label(
+    http: &reqwest::Client,
+    token: &str,
+    user_url: &str,
+) -> Option<String> {
+    match http
+        .get(user_url)
+        .header("Authorization", format!("token {token}"))
+        .header("User-Agent", "ai-usage-tracker")
+        .send()
+        .await
+    {
+        Ok(r) => r
+            .json::<serde_json::Value>()
+            .await
+            .ok()
+            .and_then(|v| v.get("login").and_then(|x| x.as_str()).map(String::from)),
+        Err(_) => None,
+    }
 }
 
 fn check_cancelled(cancelled: &AtomicBool) -> Result<(), String> {
@@ -564,5 +577,27 @@ mod tests {
         );
 
         reset_device_cancel_for_test();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn github_label_lookup_uses_token_scheme_not_bearer() {
+        use wiremock::matchers::{header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        // Copilot CLI `gho_` user-OAuth tokens use the legacy `token <t>` scheme;
+        // a `Bearer <t>` request would 401 and degrade the label (BUG-5). The
+        // mock only answers 200 when the scheme is `token`.
+        Mock::given(method("GET"))
+            .and(path("/user"))
+            .and(header("authorization", "token gho-test"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"login": "octocat"})),
+            )
+            .mount(&server)
+            .await;
+        let client = crate::http::build_client();
+        let url = format!("{}/user", server.uri());
+        let label = resolve_github_label(&client, "gho-test", &url).await;
+        assert_eq!(label.as_deref(), Some("octocat"));
     }
 }

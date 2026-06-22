@@ -1,0 +1,392 @@
+//! Tauri command surface + the shared refresh routine + managed state stores.
+//!
+//! The 15 `#[tauri::command]` handlers stay HERE in `commands/mod.rs` so the
+//! companion `__cmd__<name>` macros `generate_handler!` expands to remain
+//! reachable at `crate::commands::<name>` — `lib.rs`'s invoke list and the
+//! `model.rs` catalog-freeze test reference these by that path unchanged. The
+//! engine they delegate to is split into siblings: pure merge algebra in
+//! `snapshot_merge`, the refresh pipeline in `refresh`, and the managed-state
+//! types + provider table in `state`.
+
+mod refresh;
+mod snapshot_merge;
+mod state;
+
+use tauri::{AppHandle, Emitter, State};
+
+use crate::config::AppConfig;
+use crate::model::{
+    auto_service_id, Provider, UsageSnapshot, EVENT_ANCHOR_RESULT, EVENT_REFRESH_RESULT,
+};
+
+// Re-export the pieces external modules (`scheduler`, `update`) and the
+// catalog-freeze test reach via `crate::commands::…`, so their paths are
+// unchanged after the split.
+pub use refresh::{build_providers, refresh_once};
+pub use state::{default_config_store, empty_snapshot_store, ConfigStore, SnapshotStore};
+
+use refresh::{refresh_account_once, show_anchor_notification};
+use snapshot_merge::{anchor_result_payload, refresh_result_payload};
+
+/// Resolve the account display label for a service id, preferring the live
+/// snapshot reading (`s.account`), then a stored credential's label, else None.
+/// Never returns a raw `stored:<uuid>` id (finding notif-missing-account-identity).
+async fn resolve_anchor_label(snap: &SnapshotStore, service_id: &str) -> Option<String> {
+    if let Some(account) = snap
+        .read()
+        .await
+        .services
+        .iter()
+        .find(|s| s.id == service_id)
+        .and_then(|s| s.account.clone())
+    {
+        return Some(account);
+    }
+    crate::store::find_by_service_id(service_id).map(|c| c.label)
+}
+
+/// The provider for a service id: from the `auto:<provider>` prefix, or the
+/// stored credential's provider. Used at the manual emit site, where we only
+/// have the masked id.
+fn provider_for_service_id(service_id: &str) -> Option<Provider> {
+    for p in crate::model::PROVIDER_ORDER {
+        if auto_service_id(p) == service_id {
+            return Some(p);
+        }
+    }
+    crate::store::find_by_service_id(service_id).map(|c| c.provider)
+}
+
+#[tauri::command]
+pub async fn get_usage(snap: State<'_, SnapshotStore>) -> Result<UsageSnapshot, String> {
+    Ok(snap.read().await.clone())
+}
+
+#[tauri::command]
+pub async fn refresh_now(
+    app: AppHandle,
+    cfg: State<'_, ConfigStore>,
+    snap: State<'_, SnapshotStore>,
+) -> Result<UsageSnapshot, String> {
+    Ok(refresh_once(&app, &cfg.inner().clone(), &snap.inner().clone()).await)
+}
+
+#[tauri::command]
+pub async fn get_config(cfg: State<'_, ConfigStore>) -> Result<AppConfig, String> {
+    Ok(cfg.read().await.clone())
+}
+
+#[tauri::command]
+pub async fn set_config(
+    app: AppHandle,
+    cfg: State<'_, ConfigStore>,
+    new: AppConfig,
+) -> Result<(), String> {
+    new.validate().map_err(|e| e.to_string())?;
+    let poll = new.poll_seconds;
+    new.save()
+        .map_err(|e| format!("could not save config: {e}"))?;
+    *cfg.write().await = new;
+    crate::scheduler::restart(&app, poll);
+    Ok(())
+}
+
+/// Apply a per-account rename to a config in place: set/clear
+/// `accounts[service_id].custom_name`, dropping a now-empty entry. Pure logic,
+/// extracted so it's unit-testable without constructing a Tauri `State` (the
+/// BUG-2 per-account isolation is proven against THIS function).
+pub fn apply_account_rename(cfg: &mut AppConfig, service_id: &str, name: Option<String>) {
+    let trimmed = name.and_then(|n| {
+        let t = n.trim().to_string();
+        (!t.is_empty()).then_some(t)
+    });
+    let entry = cfg.accounts.entry(service_id.to_string()).or_default();
+    entry.custom_name = trimmed;
+    // Drop a now-empty entry so we don't accumulate blank placeholders.
+    if entry.custom_name.is_none() && entry.primary_window.is_none() {
+        cfg.accounts.remove(service_id);
+    }
+}
+
+/// Rename a single account by its service id (`auto:<provider>` / `stored:<id>`).
+/// Writes `accounts[service_id].custom_name` in the config and persists — this
+/// is PER-ACCOUNT (BUG-2 fix), so renaming one account never touches another of
+/// the same provider. `name = None` (or blank) clears the override back to the
+/// canonical provider label. Does NOT touch the poll scheduler.
+#[tauri::command]
+pub async fn rename_account(
+    cfg: State<'_, ConfigStore>,
+    service_id: String,
+    name: Option<String>,
+) -> Result<(), String> {
+    let mut guard = cfg.write().await;
+    apply_account_rename(&mut guard, &service_id, name);
+    guard
+        .save()
+        .map_err(|e| format!("could not save config: {e}"))?;
+    Ok(())
+}
+
+/// Manually check for a newer GitHub release NOW (the "Check for updates"
+/// button, FEAT-5). Runs regardless of the `auto_update_check` toggle (`force =
+/// true`) and always notifies for a newer release. Returns `Some({version,
+/// html_url})` when an update is available so the UI can show it, `None` when
+/// already up to date. A check failure (offline / rate-limited) surfaces as a
+/// command error string rather than panicking.
+#[tauri::command]
+pub async fn check_update_now(
+    app: AppHandle,
+    cfg: State<'_, ConfigStore>,
+) -> Result<Option<crate::update::AvailableUpdate>, String> {
+    crate::update::run_update_check(&app, &cfg.inner().clone(), true).await
+}
+
+/// Enable/disable launch-at-login (FEAT-4) AND persist the intent. Toggles the
+/// OS login item via the autostart plugin's `autolaunch()` manager, then writes
+/// `launch_at_login` to the config so `.setup` can reconcile a manually-removed
+/// item on the next start. An OS-side failure is returned as an error (the
+/// config is NOT written in that case, so the flag never claims a state the OS
+/// didn't accept).
+#[tauri::command]
+pub async fn set_launch_at_login(
+    app: AppHandle,
+    cfg: State<'_, ConfigStore>,
+    enable: bool,
+) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let manager = app.autolaunch();
+    if enable {
+        manager
+            .enable()
+            .map_err(|e| format!("could not enable launch at login: {e}"))?;
+    } else {
+        manager
+            .disable()
+            .map_err(|e| format!("could not disable launch at login: {e}"))?;
+    }
+    let mut guard = cfg.write().await;
+    guard.launch_at_login = enable;
+    guard
+        .save()
+        .map_err(|e| format!("could not save config: {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn start_login(
+    app: AppHandle,
+    provider: crate::model::Provider,
+) -> Result<crate::login::LoginInfo, String> {
+    crate::login::start(app, provider).await
+}
+
+/// Display-only list of stored accounts — tokens never cross IPC (P0 #1).
+#[tauri::command]
+pub async fn list_accounts() -> Result<Vec<crate::model::AccountInfo>, String> {
+    Ok(crate::store::list()
+        .into_iter()
+        .map(|c| crate::model::AccountInfo {
+            id: c.id,
+            provider: c.provider,
+            label: c.label,
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn remove_account(id: String) -> Result<bool, String> {
+    crate::store::remove(&id)
+}
+
+/// Add an account by pasting a raw credential (Claude session key, or any
+/// provider's access/session token). No OAuth flow involved.
+#[tauri::command]
+pub async fn add_session_key(
+    provider: crate::model::Provider,
+    key: String,
+    label: Option<String>,
+) -> Result<String, String> {
+    let access_token = match provider {
+        crate::model::Provider::Claude => crate::providers::claude::normalize_session_key(&key),
+        _ => key.trim().to_string(),
+    };
+    let cred = crate::store::StoredCredential {
+        id: String::new(),
+        provider,
+        label: label.unwrap_or_else(|| format!("{provider:?}")),
+        access_token,
+        refresh_token: None,
+        expires_at: 0,
+        id_token: None,
+        account_id: None,
+    };
+    crate::store::add(cred)
+}
+
+/// Browser + localhost-callback OAuth login (codex-switcher pattern). Returns
+/// the authorize URL for the frontend to open in the browser; emits
+/// `login-complete` when tokens are captured.
+#[tauri::command]
+pub async fn login_oauth(
+    app: AppHandle,
+    provider: crate::model::Provider,
+) -> Result<String, String> {
+    crate::oauth_login::start(app, provider)
+}
+
+/// Cancel the in-progress OAuth login (closes the local callback server).
+#[tauri::command]
+pub fn cancel_login() {
+    crate::oauth_login::cancel();
+    crate::login::cancel();
+}
+
+/// Send a minimal "anchor" message for one service to start its usage window.
+/// Tokens stay in Rust; the frontend only passes the masked service id.
+/// Emits `anchor-result` (enriched with provider+label) so the frontend can
+/// toast the outcome, and fires an OS-native notification (works with the
+/// window hidden). This is the MANUAL path (`is_auto = false`).
+#[tauri::command]
+pub async fn send_anchor_now(
+    app: AppHandle,
+    snap: State<'_, SnapshotStore>,
+    service_id: String,
+) -> Result<(), String> {
+    let res = crate::anchor::send(&service_id).await;
+    let ok = res.is_ok();
+    // Source provider + label from the masked id (no full ServiceUsage here):
+    // provider from the id prefix / stored cred; label from the snapshot reading
+    // or the stored credential, never the raw id.
+    let provider = provider_for_service_id(&service_id);
+    let label = resolve_anchor_label(snap.inner(), &service_id).await;
+    if let Some(provider) = provider {
+        show_anchor_notification(&app, provider, label.as_deref(), ok, false);
+    }
+    let _ = app.emit(
+        EVENT_ANCHOR_RESULT,
+        anchor_result_payload(
+            &service_id,
+            ok,
+            res.as_ref().err().map(|e| e.to_string()),
+            provider,
+            label.as_deref(),
+        ),
+    );
+    res.map_err(|e| e.to_string())
+}
+
+/// Re-fetch a single account (auto:<provider> or stored:<id>) and merge it into
+/// the snapshot. Emits provider-loading then usage-updated, and a `refresh-result`
+/// on EVERY path so a failure is surfaced instead of silently dropped (F-7).
+#[tauri::command]
+pub async fn refresh_account(
+    app: AppHandle,
+    cfg: State<'_, ConfigStore>,
+    snap: State<'_, SnapshotStore>,
+    service_id: String,
+) -> Result<(), String> {
+    let result = refresh_account_once(&app, cfg.inner(), snap.inner(), &service_id).await;
+    let _ = app.emit(
+        EVENT_REFRESH_RESULT,
+        refresh_result_payload(&service_id, result.as_ref()),
+    );
+    result.map(|_| ())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn provider_for_service_id_resolves_auto_prefix() {
+        assert_eq!(provider_for_service_id("auto:claude"), Some(Provider::Claude));
+        assert_eq!(provider_for_service_id("auto:zai"), Some(Provider::Zai));
+        assert_eq!(provider_for_service_id("auto:codex"), Some(Provider::Codex));
+        // An unknown / malformed id with no matching stored cred → None.
+        assert_eq!(provider_for_service_id("auto:nope"), None);
+        assert_eq!(provider_for_service_id("garbage"), None);
+    }
+
+    #[test]
+    fn apply_account_rename_is_per_service_id_isolated() {
+        // The command's core mutation: renaming one Claude account must NOT touch
+        // another Claude account of the same provider (BUG-2 isolation).
+        let mut cfg = AppConfig::default();
+
+        apply_account_rename(&mut cfg, "auto:claude", Some("Personal".into()));
+        apply_account_rename(&mut cfg, "stored:abc", Some("Work".into()));
+        // Rename the first again — the second must be unaffected.
+        apply_account_rename(&mut cfg, "auto:claude", Some("Personal v2".into()));
+
+        assert_eq!(
+            cfg.accounts.get("auto:claude").unwrap().custom_name.as_deref(),
+            Some("Personal v2")
+        );
+        assert_eq!(
+            cfg.accounts.get("stored:abc").unwrap().custom_name.as_deref(),
+            Some("Work"),
+            "renaming auto:claude must not touch stored:abc"
+        );
+
+        // Clearing the name (None / blank) drops the now-empty entry.
+        apply_account_rename(&mut cfg, "auto:claude", None);
+        assert!(!cfg.accounts.contains_key("auto:claude"));
+        apply_account_rename(&mut cfg, "stored:abc", Some("   ".into()));
+        assert!(
+            !cfg.accounts.contains_key("stored:abc"),
+            "a whitespace-only name clears the override"
+        );
+    }
+
+    #[test]
+    fn apply_account_rename_preserves_a_pinned_window() {
+        // Clearing the name must NOT delete the entry when a primary_window is
+        // still pinned on it.
+        let mut cfg = AppConfig::default();
+        cfg.accounts.insert(
+            "auto:codex".into(),
+            crate::config::AccountConfig {
+                custom_name: Some("Old".into()),
+                primary_window: Some("Weekly".into()),
+            },
+        );
+        apply_account_rename(&mut cfg, "auto:codex", None);
+        let entry = cfg
+            .accounts
+            .get("auto:codex")
+            .expect("entry survives because a window is still pinned");
+        assert!(entry.custom_name.is_none());
+        assert_eq!(entry.primary_window.as_deref(), Some("Weekly"));
+    }
+
+    #[test]
+    fn add_claude_session_key_persists_only_session_key_cookie_value() {
+        let _guard = crate::store::STORE_TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let path = std::env::temp_dir().join(format!(
+            "ait_commands_session_cookie_{}.json",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        std::env::set_var("AIT_ACCOUNTS_PATH", &path);
+
+        let id = tauri::async_runtime::block_on(add_session_key(
+            Provider::Claude,
+            "Cookie: other=not-this; sessionKey=sk-ant-sid01-session; x=also-not-this".into(),
+            Some("Claude web".into()),
+        ))
+        .unwrap();
+
+        let loaded = crate::store::load();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].id, id);
+        assert_eq!(loaded[0].access_token, "sk-ant-sid01-session");
+        assert!(!loaded[0].access_token.contains("other=not-this"));
+        assert!(!loaded[0].access_token.contains("also-not-this"));
+
+        let _ = crate::store::remove(&id);
+        std::env::remove_var("AIT_ACCOUNTS_PATH");
+        let _ = std::fs::remove_file(&path);
+    }
+}

@@ -20,3 +20,10 @@ export function severityToStatus(severity: Severity | null): ServiceStatus {
   if (severity === "ok") return "ok";
   return "unknown";
 }
+
+// percent → tone: the inner composition AccountCard/LimitsTab both have a bare
+// percent (not a full service), so they share this instead of re-spelling
+// `severityToStatus(percentSeverity(...))` (the real F-6-style duplication).
+export function toneForPercent(p: number | null): ServiceStatus {
+  return severityToStatus(percentSeverity(p));
+}

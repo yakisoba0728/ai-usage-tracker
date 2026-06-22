@@ -1,7 +1,11 @@
-//! Cross-platform credential reads. Claude on macOS reads the Keychain via
+//! Cross-platform credential reads. Copilot on macOS reads the Keychain via
 //! `/usr/bin/security` (the stored account is the OS username, not empty, so the
 //! `keyring` crate's `Entry::new(service, "")` cannot be used). Everywhere else
 //! (and for Codex/Gemini) we read JSON files from disk.
+//!
+//! Claude is **session-key only** (FEAT-2/BUG-1) — its OAuth/keychain credential
+//! reader (`read_claude_creds_json` + helpers) was removed; manual Claude
+//! accounts paste a claude.ai `sessionKey` and flow through `claude::web`.
 
 use serde_json::Value;
 use std::path::PathBuf;
@@ -18,13 +22,6 @@ pub enum SecretsError {
 
 fn dirs_home() -> PathBuf {
     dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
-}
-
-pub fn claude_token_path() -> PathBuf {
-    let base = std::env::var("CLAUDE_CONFIG_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| dirs_home().join(".claude"));
-    base.join(".credentials.json")
 }
 
 pub fn codex_home() -> PathBuf {
@@ -80,43 +77,11 @@ pub fn read_json_file(path: &PathBuf) -> Result<Value, SecretsError> {
         .map_err(|e| SecretsError::Parse(format!("{}: {e}", path.display())))
 }
 
-pub(crate) fn normalize_claude_oauth_token(raw: &str) -> Option<String> {
-    let token = raw
-        .trim()
-        .strip_prefix("Bearer ")
-        .unwrap_or_else(|| raw.trim())
-        .trim();
-    if token.starts_with("sk-ant-") || token.starts_with("oat-") {
-        Some(token.to_string())
-    } else {
-        None
-    }
-}
-
-pub fn parse_claude_creds_raw(raw: &str, source: &str) -> Result<Value, SecretsError> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Err(SecretsError::Parse(format!(
-            "{source}: empty Claude credentials"
-        )));
-    }
-    match serde_json::from_str::<Value>(trimmed) {
-        Ok(v) => Ok(v),
-        Err(json_err) => normalize_claude_oauth_token(trimmed)
-            .map(|access_token| {
-                serde_json::json!({
-                    "claudeAiOauth": {
-                        "accessToken": access_token,
-                    },
-                })
-            })
-            .ok_or_else(|| SecretsError::Parse(format!("{source}: {json_err}"))),
-    }
-}
-
 /// Read the macOS Keychain generic-password value for `service` (any account)
-/// by shelling out to `/usr/bin/security` — matches how Claude Code/claude-meter
-/// store and read the `Claude Code-credentials` item.
+/// by shelling out to `/usr/bin/security`. Used by Copilot
+/// (`copilot-cli` item); Claude no longer reads a keychain item (session-key
+/// only). The `keyring` crate's `Entry::new(service, "")` can't be used because
+/// the stored account is the OS username, not empty.
 pub fn read_macos_keychain(service: &str) -> Result<String, SecretsError> {
     let out = std::process::Command::new("/usr/bin/security")
         .args(["find-generic-password", "-s", service, "-w"])
@@ -133,38 +98,6 @@ pub fn read_macos_keychain(service: &str) -> Result<String, SecretsError> {
     String::from_utf8(out.stdout)
         .map(|s| s.trim_end_matches('\n').to_string())
         .map_err(|e| SecretsError::Read(format!("keychain value not utf-8: {e}")))
-}
-
-/// Read Claude Code credentials as JSON. macOS → Keychain; otherwise the file.
-pub fn read_claude_creds_json() -> Result<Value, SecretsError> {
-    if let Ok(raw) = std::env::var("CLAUDE_CODE_OAUTH_TOKEN") {
-        if !raw.trim().is_empty() {
-            return parse_claude_creds_raw(&raw, "CLAUDE_CODE_OAUTH_TOKEN");
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        match read_macos_keychain("Claude Code-credentials")
-            .and_then(|raw| parse_claude_creds_raw(&raw, "claude keychain"))
-        {
-            Ok(v) => Ok(v),
-            Err(keychain_err) => match read_json_file(&claude_token_path()) {
-                Ok(v) => Ok(v),
-                Err(file_err) => {
-                    if matches!(keychain_err, SecretsError::NotFound(_)) {
-                        Err(file_err)
-                    } else {
-                        Err(keychain_err)
-                    }
-                }
-            },
-        }
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        read_json_file(&claude_token_path())
-    }
 }
 
 #[cfg(test)]
@@ -235,18 +168,5 @@ mod tests {
 
         std::env::remove_var("AIT_CURSOR_DATA_DIR");
         let _ = std::fs::remove_dir_all(&base);
-    }
-
-    #[test]
-    fn parse_claude_creds_raw_accepts_json_and_oauth_token() {
-        let json = parse_claude_creds_raw(
-            r#"{"claudeAiOauth":{"accessToken":"sk-ant-oat01-json"}}"#,
-            "test-json",
-        )
-        .unwrap();
-        assert_eq!(json["claudeAiOauth"]["accessToken"], "sk-ant-oat01-json");
-
-        let raw = parse_claude_creds_raw("sk-ant-oat01-raw", "test-token").unwrap();
-        assert_eq!(raw["claudeAiOauth"]["accessToken"], "sk-ant-oat01-raw");
     }
 }

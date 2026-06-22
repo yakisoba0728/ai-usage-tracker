@@ -76,13 +76,35 @@ pub async fn get_config(cfg: State<'_, ConfigStore>) -> Result<AppConfig, String
     Ok(cfg.read().await.clone())
 }
 
+/// Carry backend-managed fields from the `current` config into an `incoming`
+/// one that omits them. The UI never reads or writes `device_id` (FEAT-2) or
+/// `last_notified_version` (FEAT-5) — both are `skip_serializing_if=None`, so if
+/// the frontend reconstructs `AppConfig` from state and ever drops them, a blind
+/// `set_config` overwrite would wipe them: regenerating a NEW device_id on the
+/// next anchor (breaking "stable per-install") or re-notifying an old release.
+/// Pure + unit-tested so `set_config` can stay a thin command shell.
+fn preserve_backend_managed_fields(incoming: &mut AppConfig, current: &AppConfig) {
+    if incoming.device_id.is_none() {
+        incoming.device_id = current.device_id.clone();
+    }
+    if incoming.last_notified_version.is_none() {
+        incoming.last_notified_version = current.last_notified_version.clone();
+    }
+}
+
 #[tauri::command]
 pub async fn set_config(
     app: AppHandle,
     cfg: State<'_, ConfigStore>,
-    new: AppConfig,
+    mut new: AppConfig,
 ) -> Result<(), String> {
     new.validate().map_err(|e| e.to_string())?;
+    // Preserve backend-managed fields the UI never writes (FEAT-2/FEAT-5) — see
+    // `preserve_backend_managed_fields`.
+    {
+        let current = cfg.read().await;
+        preserve_backend_managed_fields(&mut new, &current);
+    }
     let poll = new.poll_seconds;
     new.save()
         .map_err(|e| format!("could not save config: {e}"))?;
@@ -241,6 +263,23 @@ pub fn cancel_login() {
     crate::login::cancel();
 }
 
+/// Resolve the stable per-install `device_id` from the managed config (the
+/// `anthropic-device-id` for the Claude web anchor). It is ensured at startup,
+/// so the read lock almost always hits; the write-lock `ensure` is a defensive
+/// fallback (e.g. a config reset between setup and the first anchor).
+pub(crate) async fn device_id_for_anchor(cfg: &ConfigStore) -> String {
+    if let Some(id) = cfg
+        .read()
+        .await
+        .device_id
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+    {
+        return id;
+    }
+    cfg.write().await.ensure_device_id()
+}
+
 /// Send a minimal "anchor" message for one service to start its usage window.
 /// Tokens stay in Rust; the frontend only passes the masked service id.
 /// Emits `anchor-result` (enriched with provider+label) so the frontend can
@@ -250,9 +289,11 @@ pub fn cancel_login() {
 pub async fn send_anchor_now(
     app: AppHandle,
     snap: State<'_, SnapshotStore>,
+    cfg: State<'_, ConfigStore>,
     service_id: String,
 ) -> Result<(), String> {
-    let res = crate::anchor::send(&service_id).await;
+    let device_id = device_id_for_anchor(cfg.inner()).await;
+    let res = crate::anchor::send(&service_id, &device_id).await;
     let ok = res.is_ok();
     // Source provider + label from the masked id (no full ServiceUsage here):
     // provider from the id prefix / stored cred; label from the snapshot reading
@@ -357,6 +398,56 @@ mod tests {
             .expect("entry survives because a window is still pinned");
         assert!(entry.custom_name.is_none());
         assert_eq!(entry.primary_window.as_deref(), Some("Weekly"));
+    }
+
+    /// `set_config`'s core guard: a frontend save that omits the backend-managed
+    /// `device_id` (FEAT-2) / `last_notified_version` (FEAT-5) must NOT wipe them
+    /// — they are carried over from the current config. A device_id wipe would
+    /// regenerate a new id on the next anchor, breaking "stable per-install".
+    #[test]
+    fn preserve_backend_managed_fields_carries_over_when_incoming_omits() {
+        let current = AppConfig {
+            device_id: Some("dev-stable-uuid".into()),
+            last_notified_version: Some("0.3.0".into()),
+            ..Default::default()
+        };
+        // The UI reconstructs a config WITHOUT these (it "never writes" them).
+        let mut incoming = AppConfig {
+            poll_seconds: 450,
+            device_id: None,
+            last_notified_version: None,
+            ..Default::default()
+        };
+        preserve_backend_managed_fields(&mut incoming, &current);
+        assert_eq!(
+            incoming.device_id.as_deref(),
+            Some("dev-stable-uuid"),
+            "device_id must survive a UI save that omits it"
+        );
+        assert_eq!(
+            incoming.last_notified_version.as_deref(),
+            Some("0.3.0"),
+            "last_notified_version must survive a UI save that omits it"
+        );
+        // The UI's real edits (poll_seconds) are untouched.
+        assert_eq!(incoming.poll_seconds, 450);
+    }
+
+    /// If the incoming config DOES carry a device_id (e.g. the UI round-tripped
+    /// it), that value wins — the preservation only fills an omitted field, it
+    /// never clobbers a present one.
+    #[test]
+    fn preserve_backend_managed_fields_does_not_clobber_present_values() {
+        let current = AppConfig {
+            device_id: Some("old".into()),
+            ..Default::default()
+        };
+        let mut incoming = AppConfig {
+            device_id: Some("round-tripped".into()),
+            ..Default::default()
+        };
+        preserve_backend_managed_fields(&mut incoming, &current);
+        assert_eq!(incoming.device_id.as_deref(), Some("round-tripped"));
     }
 
     #[test]

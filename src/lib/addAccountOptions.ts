@@ -16,6 +16,9 @@ export const ADD_ACCOUNT_PROVIDERS: Provider[] = PROVIDER_ORDER;
 export function authOptionsForProvider(provider: Provider): AddAccountOptionId[] {
   switch (provider) {
     case "claude":
+      // Claude is session-key only (FEAT-2/BUG-1): no CLI/OAuth auto-detect, so
+      // no "local-session" option — paste a claude.ai sessionKey.
+      return ["session-key"];
     case "zai":
       return ["session-key", "local-session"];
     case "codex":

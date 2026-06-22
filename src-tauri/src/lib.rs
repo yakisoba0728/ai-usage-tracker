@@ -202,6 +202,19 @@ pub fn run() {
             // is opened from the tray menu.
             set_dock_visible(app.handle(), false);
 
+            // --- Device id (FEAT-2) ---
+            // Ensure a stable per-install `device_id` exists (the
+            // `anthropic-device-id` for the claude.ai web anchor). Generated +
+            // persisted once here so every later anchor reuses the same id; the
+            // managed config is the in-memory source of truth the anchor reads.
+            {
+                use tauri::Manager;
+                let cfg = app.state::<commands::ConfigStore>().inner().clone();
+                tauri::async_runtime::block_on(async move {
+                    cfg.write().await.ensure_device_id();
+                });
+            }
+
             // --- Launch-at-login reconcile (FEAT-4) ---
             // If the user wants launch-at-login but the OS login item was removed
             // out-of-band (e.g. manually deleted in System Settings), re-enable it

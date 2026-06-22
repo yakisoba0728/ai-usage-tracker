@@ -1,8 +1,10 @@
 //! Window anchoring: send a minimal throwaway message so a provider's rolling
 //! usage window starts at a predictable time. The app's only write path — kept
 //! entirely in Rust (tokens never cross IPC). Supported: Claude, Codex, z.ai.
-//! Claude & z.ai send a 1-token message; Codex sends a minimal turn via the
-//! Responses API (no 1-token cap — reasoning models reject it).
+//! z.ai sends a 1-token message; Codex sends a minimal turn via the Responses
+//! API (no 1-token cap — reasoning models reject it); Claude (session-key only,
+//! FEAT-2/BUG-1) sends via the claude.ai WEB chat completion endpoint — see
+//! `providers::claude::web::send_claude_web`.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -16,14 +18,6 @@ use crate::providers::ProviderError;
 // use a current coding model.
 const ZAI_CHAT_URL: &str = "https://api.z.ai/api/coding/paas/v4/chat/completions";
 const ZAI_MODEL: &str = "glm-4.6";
-
-const CLAUDE_MESSAGES_URL: &str = "https://api.anthropic.com/v1/messages";
-const CLAUDE_VERSION: &str = "2023-06-01";
-// Claude Code's OAuth tokens require the OAuth beta flag on the Messages API.
-// Verify the exact tag with the guarded test-send (Step 8) and adjust if 401/400.
-const CLAUDE_OAUTH_BETA: &str = "oauth-2025-04-20";
-// claude-3-5-haiku is retired (404); use a current cheap model.
-const CLAUDE_MODEL: &str = "claude-haiku-4-5-20251001";
 
 const CODEX_RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
 // ChatGPT-account Codex rejects `codex-mini-latest` ("model is not supported");
@@ -108,25 +102,6 @@ fn zai_anchor_consumed_window(body: &serde_json::Value) -> Result<(), ProviderEr
     }
 }
 
-pub async fn send_claude(
-    http: &reqwest::Client,
-    token: &str,
-    url: &str,
-) -> Result<(), ProviderError> {
-    let resp = http
-        .post(url)
-        .header("Authorization", format!("Bearer {token}"))
-        .header("anthropic-version", CLAUDE_VERSION)
-        .header("anthropic-beta", CLAUDE_OAUTH_BETA)
-        .header("Content-Type", "application/json")
-        .json(&anchor_body(CLAUDE_MODEL))
-        .send()
-        .await
-        .map_err(|e| ProviderError::Network(e.to_string()))?;
-    let _ = http::send_for_json(resp, "claude anchor").await?;
-    Ok(())
-}
-
 /// Detect an in-band failure frame in a drained Codex Responses SSE stream. The
 /// endpoint can return HTTP 200 and then emit `event: response.failed`,
 /// `event: response.incomplete`, or `event: error`, meaning the turn did NOT
@@ -205,25 +180,6 @@ fn resolve_zai_auto() -> Result<String, ProviderError> {
     }
 }
 
-/// Extract the current Claude access token from the Claude Code credential store.
-fn resolve_claude_auto() -> Result<String, ProviderError> {
-    let v = crate::secrets::read_claude_creds_json()?;
-    for key in ["claudeAiOauth", "claude_ai_oauth", "oauth"] {
-        if let Some(obj) = v.get(key).and_then(|o| o.as_object()) {
-            if let Some(tok) = obj
-                .get("accessToken")
-                .or_else(|| obj.get("access_token"))
-                .and_then(|s| s.as_str())
-            {
-                return Ok(tok.to_string());
-            }
-        }
-    }
-    Err(ProviderError::NotLoggedIn(
-        "claude creds: no accessToken".into(),
-    ))
-}
-
 fn resolve_codex_auto() -> Result<(String, Option<String>), ProviderError> {
     let v = crate::secrets::read_json_file(&crate::secrets::codex_auth_path())?;
     let tokens = v
@@ -246,7 +202,12 @@ fn resolve_stored(service_id: &str) -> Option<crate::store::StoredCredential> {
 }
 
 /// Send an anchor message for the given UI `service_id`.
-pub async fn send(service_id: &str) -> Result<(), ProviderError> {
+///
+/// `device_id` is the stable per-install `anthropic-device-id` (from
+/// `AppConfig`, ensured at startup) — required for the Claude web-chat anchor;
+/// the other providers ignore it. Both call sites supply it (the auto path holds
+/// the `ConfigStore`; `send_anchor_now` reads it from the managed config).
+pub async fn send(service_id: &str, device_id: &str) -> Result<(), ProviderError> {
     let http = http::shared();
     if service_id.starts_with("stored:") {
         let cred = resolve_stored(service_id)
@@ -259,11 +220,23 @@ pub async fn send(service_id: &str) -> Result<(), ProviderError> {
         }
         // Refresh an expired token before sending, so a manual "Anchor now" is
         // never weaker than the poll path (which refreshes via fetch_credential)
-        // and doesn't 401 on a stale bearer (B-11).
+        // and doesn't 401 on a stale bearer (B-11). Claude session keys have no
+        // refresh path, so this is a no-op for them.
         let cred = crate::providers::refresh_if_expired(&http, &cred).await?;
         return match cred.provider {
             Provider::Zai => send_zai(&http, &cred.access_token, ZAI_CHAT_URL).await,
-            Provider::Claude => send_claude(&http, &cred.access_token, CLAUDE_MESSAGES_URL).await,
+            // Claude is session-key only: anchor via the claude.ai WEB chat
+            // completion endpoint (FEAT-2/BUG-1). The stored access_token holds
+            // the pasted session key / full Cookie header.
+            Provider::Claude => {
+                crate::providers::claude::web::send_claude_web(
+                    &http,
+                    &cred.access_token,
+                    device_id,
+                    crate::providers::claude::web::CLAUDE_WEB_API_BASE,
+                )
+                .await
+            }
             Provider::Codex => {
                 send_codex(
                     &http,
@@ -278,8 +251,9 @@ pub async fn send(service_id: &str) -> Result<(), ProviderError> {
             ))),
         };
     }
+    // Auto (CLI/env-detected) anchors. Claude has NO auto path anymore
+    // (session-key only) — there is no `auto:claude` arm.
     match service_id {
-        "auto:claude" => send_claude(&http, &resolve_claude_auto()?, CLAUDE_MESSAGES_URL).await,
         "auto:zai" => send_zai(&http, &resolve_zai_auto()?, ZAI_CHAT_URL).await,
         "auto:codex" => {
             let (access, account_id) = resolve_codex_auto()?;
@@ -413,26 +387,10 @@ mod tests {
         assert!(resolve_zai_auto().is_err());
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn send_claude_posts_oauth_bearer_version_and_one_token() {
-        use wiremock::matchers::{body_partial_json, header, header_exists, method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/v1/messages"))
-            .and(header("authorization", "Bearer oat-test"))
-            .and(header("anthropic-version", "2023-06-01"))
-            .and(header_exists("anthropic-beta"))
-            .and(body_partial_json(serde_json::json!({"max_tokens": 1})))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({"id":"msg_x"})),
-            )
-            .mount(&server)
-            .await;
-        let client = crate::http::build_client();
-        let url = format!("{}/v1/messages", server.uri());
-        send_claude(&client, "oat-test", &url).await.unwrap();
-    }
+    // NOTE: the Claude anchor moved to the claude.ai WEB chat completion endpoint
+    // (session-key only, FEAT-2/BUG-1). The old `/v1/messages` OAuth wiremock
+    // test was deleted; the new request-SHAPE test lives next to the
+    // implementation — `providers::claude::web::tests::send_claude_web_*`.
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn send_zai_posts_bearer_and_one_token_body() {

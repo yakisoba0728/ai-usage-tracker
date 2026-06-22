@@ -117,7 +117,10 @@ pub fn read_macos_keychain(service: &str) -> Result<String, SecretsError> {
             String::from_utf8_lossy(&out.stderr).trim()
         )));
     }
+    // `security -w` appends a trailing newline; trim it at the source so the
+    // return value is a clean credential regardless of caller (B-10).
     String::from_utf8(out.stdout)
+        .map(|s| s.trim_end_matches('\n').to_string())
         .map_err(|e| SecretsError::Read(format!("keychain value not utf-8: {e}")))
 }
 

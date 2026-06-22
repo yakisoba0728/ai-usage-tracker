@@ -231,6 +231,11 @@ fn normalize(resp: &CopilotUsageResp) -> (Vec<LimitWindow>, Vec<LimitWindow>) {
         let pct = q.percent_remaining.map(|r| (100.0 - r) as f32);
         // Reference uses `remaining`; older payloads carry `quota_remaining`.
         let remaining = q.remaining.or(q.quota_remaining);
+        // Nothing displayable → don't emit a blank window that could sort to the
+        // card headline as a zero bar (B-16; mirrors cursor::normalize's guard).
+        if pct.is_none() && q.entitlement.is_none() && remaining.is_none() {
+            continue;
+        }
         let used = match (q.entitlement, remaining) {
             (Some(e), Some(r)) => Some(e - r),
             _ => None,
@@ -395,6 +400,32 @@ mod tests {
         // Both windows share the parsed reset date.
         assert!(ws[0].resets_at.is_some());
         assert!(ws[1].resets_at.is_some());
+    }
+
+    #[test]
+    fn normalize_skips_metered_category_with_no_displayable_fields() {
+        // A metered (unlimited absent → false) category with no
+        // entitlement/remaining/percent must NOT emit a blank zero-bar window
+        // that could sort to the card headline (B-16).
+        let resp = CopilotUsageResp {
+            login: None,
+            copilot_plan: None,
+            quota_reset_date: None,
+            quota_snapshots: QuotaSnapshots {
+                chat: Some(QuotaSnapshot {
+                    entitlement: None,
+                    remaining: None,
+                    quota_remaining: None,
+                    percent_remaining: None,
+                    unlimited: None,
+                }),
+                premium_interactions: None,
+                completions: None,
+            },
+        };
+        let (ws, detail) = normalize(&resp);
+        assert!(ws.is_empty(), "no displayable fields → no window");
+        assert!(detail.is_empty());
     }
 
     #[test]

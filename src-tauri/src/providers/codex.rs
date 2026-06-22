@@ -213,11 +213,15 @@ fn normalize(u: &WhamUsage) -> (Vec<LimitWindow>, Vec<LimitWindow>) {
             });
         } else if c.has_credits == Some(true) || matches!(bal, Some(v) if v > 0.0) {
             if let Some(v) = bal {
+                // This is the *remaining* balance; keep it in the label rather
+                // than `used` (which means consumption everywhere else) so the
+                // semantics aren't inverted if the UI ever derives a percent or
+                // `remaining = limit - used` (B-15).
                 detail.push(LimitWindow {
-                    label: "Credits balance".into(),
+                    label: format!("Credits balance: ${v:.2}"),
                     used_percent: None,
                     resets_at: None,
-                    used: Some(v),
+                    used: None,
                     limit: None,
                 });
             }
@@ -452,7 +456,14 @@ mod tests {
         assert!(dlabels
             .iter()
             .any(|l| l.contains("Spark") && l.contains("5-hour")));
-        assert!(dlabels.contains(&"Credits balance"));
+        // The *remaining* credits balance lives in the label, not the `used`
+        // field (which everywhere else means consumption) — B-15.
+        let credits = detail
+            .iter()
+            .find(|w| w.label.starts_with("Credits balance"))
+            .unwrap();
+        assert_eq!(credits.label, "Credits balance: $9.99");
+        assert_eq!(credits.used, None);
         assert!(dlabels.contains(&"Available rate-limit resets"));
         let five = ws.iter().find(|w| w.label == "5-hour").unwrap();
         assert_eq!(five.used_percent, Some(1.0));

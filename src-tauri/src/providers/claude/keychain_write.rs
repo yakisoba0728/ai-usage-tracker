@@ -22,9 +22,10 @@ pub(super) fn write_creds(s: &str) -> Result<(), ProviderError> {
     #[cfg(not(target_os = "macos"))]
     {
         let p = crate::secrets::claude_token_path();
-        std::fs::write(&p, s)
-            .map_err(|e| ProviderError::Network(format!("write {}: {e}", p.display())))?;
-        Ok(())
+        // Atomic + owner-only: don't leave a concurrent CLI reader a half-written
+        // .credentials.json (B-6).
+        crate::util::write_atomic(&p, s.as_bytes(), Some(0o600))
+            .map_err(|e| ProviderError::Network(format!("write {}: {e}", p.display())))
     }
 }
 
@@ -41,16 +42,39 @@ fn existing_keychain_account() -> Option<String> {
         return None;
     }
     // `security find-generic-password -s X` (no -w/-g) prints attributes
-    // without prompting; the account line looks like:  "acct"<blob>="yakisoba"
+    // without prompting; the account line looks like:  "acct"<blob>="yakisoba".
     let text = String::from_utf8_lossy(&out.stdout);
-    text.lines().find_map(|l| {
-        let l = l.trim();
-        let after = l.strip_prefix("\"acct\"<blob>=\"")?;
-        after
-            .strip_suffix('"')
-            .map(str::to_string)
-            .filter(|s| !s.is_empty())
-    })
+    text.lines().find_map(parse_keychain_acct)
+}
+
+/// Parse the `acct` attribute from one `security find-generic-password` output
+/// line. Handles the quoted form (`"acct"<blob>="name"`) AND the hex form
+/// (`"acct"<blob>=0x<hex>`) that `security` emits when the account contains
+/// non-ASCII bytes (e.g. `José` → `0x4A6F73C3A9`, `유저` → `0xEC9CA0ECA080`).
+/// `<NULL>` / empty / non-acct lines → None (B-8).
+#[cfg(target_os = "macos")]
+fn parse_keychain_acct(line: &str) -> Option<String> {
+    let after = line.trim().strip_prefix("\"acct\"<blob>=")?;
+    if let Some(hex) = after.strip_prefix("0x") {
+        // Hex run up to the first non-hex char, decoded as UTF-8 bytes.
+        let hex: String = hex.chars().take_while(|c| c.is_ascii_hexdigit()).collect();
+        if hex.is_empty() || !hex.len().is_multiple_of(2) {
+            return None;
+        }
+        let bytes: Option<Vec<u8>> = (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
+            .collect();
+        return bytes
+            .and_then(|b| String::from_utf8(b).ok())
+            .filter(|s| !s.is_empty());
+    }
+    // Quoted form: `"acct"<blob>="value"`.
+    after
+        .strip_prefix('"')?
+        .strip_suffix('"')
+        .map(str::to_string)
+        .filter(|s| !s.is_empty())
 }
 
 /// Add/update a generic-password keychain item, feeding the secret on stdin so
@@ -119,6 +143,30 @@ fn add_password_args(service: &str, account: &str) -> Vec<String> {
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_keychain_acct_handles_quoted_and_hex_forms() {
+        assert_eq!(
+            parse_keychain_acct("    \"acct\"<blob>=\"yakisoba\""),
+            Some("yakisoba".into())
+        );
+        // hex-encoded non-ASCII accounts (security uses hex for non-printable).
+        assert_eq!(
+            parse_keychain_acct("    \"acct\"<blob>=0x4A6F73C3A9"),
+            Some("José".into())
+        );
+        assert_eq!(
+            parse_keychain_acct("    \"acct\"<blob>=0xEC9CA0ECA080"),
+            Some("유저".into())
+        );
+        // <NULL> / empty / unrelated lines → None.
+        assert_eq!(parse_keychain_acct("    \"acct\"<blob>=<NULL>"), None);
+        assert_eq!(parse_keychain_acct("    \"acct\"<blob>=\"\""), None);
+        assert_eq!(
+            parse_keychain_acct("    \"svce\"<blob>=\"Claude Code-credentials\""),
+            None
+        );
+    }
 
     #[test]
     fn add_password_args_omit_the_secret_and_read_stdin() {

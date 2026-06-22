@@ -350,6 +350,135 @@ mod tests {
         );
     }
 
+    /// B-1 end-to-end regression: two (here N=8) concurrent `refresh_if_expired`
+    /// calls on the SAME expired credential must (a) hit the underlying OAuth
+    /// token endpoint exactly ONCE — the per-id lock + re-read-inside-lock means
+    /// the 7 waiters adopt the rotation the first caller committed instead of
+    /// replaying the now-rotated-away refresh token — and (b) every caller
+    /// returns the rotated access token, which (c) is what's persisted on disk.
+    ///
+    /// Faithful characterization, not a synthetic stub: we seed a real expired
+    /// `StoredCredential` via `store::add` (temp `AIT_ACCOUNTS_PATH`) and point
+    /// Gemini's refresh POST at a wiremock token endpoint (via the
+    /// `GEMINI_OAUTH_TOKEN_URL` env override — same category as the existing
+    /// `GEMINI_OAUTH_CLIENT_ID/_SECRET` hooks; production defaults to the real
+    /// URL). Gemini is chosen over Codex because it derives `expires_at` from
+    /// `now + expires_in` — a mock `{access_token, expires_in: 3600}` yields a
+    /// genuine future expiry, so the in-lock re-read short-circuit fires for the
+    /// 7 waiters exactly as it would in production. The mock counts hits, so
+    /// `received_requests().len() == 1` is the deterministic single-refresh pin.
+    // The process-global env vars (AIT_ACCOUNTS_PATH + GEMINI_OAUTH_TOKEN_URL)
+    // must stay set across every `.await` in this test, so the `STORE_TEST_ENV_LOCK`
+    // (a `std::sync::Mutex`, matching every other store-touching test) is
+    // deliberately held across await points to keep the env isolation intact —
+    // this is single-threaded-with-respect-to-the-store test setup, not a
+    // production lock, so the await-holding-lock concern (cross-task deadlock /
+    // contention) doesn't apply.
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_refresh_refreshes_once_and_all_adopt_rotation() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // Both AIT_ACCOUNTS_PATH and GEMINI_OAUTH_TOKEN_URL are process-global,
+        // so serialize against the other store-touching tests.
+        let _g = crate::store::STORE_TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
+        let server = MockServer::start().await;
+        // Each successful refresh rotates to a fresh access/refresh token pair
+        // with a 1h future expiry, so the re-read inside the lock sees a
+        // non-expired record and short-circuits without a second POST.
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "ROTATED-ACCESS",
+                "refresh_token": "ROTATED-REFRESH",
+                "expires_in": 3600,
+            })))
+            .mount(&server)
+            .await;
+
+        let accounts_path = std::env::temp_dir()
+            .join(format!("ait_b1_concurrent_{}.json", std::process::id()));
+        let _ = std::fs::remove_file(&accounts_path);
+        std::env::set_var("AIT_ACCOUNTS_PATH", &accounts_path);
+        std::env::set_var("GEMINI_OAUTH_TOKEN_URL", format!("{}/token", server.uri()));
+
+        // Seed an already-expired stored Gemini credential (expires_at in the
+        // past, positive → `is_expired` true).
+        let id = crate::store::add(crate::store::StoredCredential {
+            id: String::new(),
+            provider: Provider::Gemini,
+            label: "b1-user@example.invalid".into(),
+            access_token: "STALE-ACCESS".into(),
+            refresh_token: Some("STALE-REFRESH".into()),
+            expires_at: 1, // positive + in the past → expired
+            id_token: None,
+            account_id: None,
+        })
+        .unwrap();
+        let seed = crate::store::find(&id).unwrap();
+
+        // Fire N=8 concurrent refreshes of the SAME expired credential.
+        let http = crate::http::shared();
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let http = http.clone();
+                let cred = seed.clone();
+                tokio::spawn(async move { refresh_if_expired(&http, &cred).await })
+            })
+            .collect();
+
+        let mut results = Vec::new();
+        for h in handles {
+            results.push(h.await.unwrap());
+        }
+
+        // (a) The underlying token endpoint was hit exactly once: lock + re-read
+        // collapsed 8 concurrent refreshes into a single rotation.
+        let hits = server.received_requests().await.unwrap();
+        let refresh_hits = hits
+            .iter()
+            .filter(|r| r.url.path() == "/token")
+            .count();
+        assert_eq!(
+            refresh_hits, 1,
+            "the OAuth token endpoint must be hit exactly once for 8 concurrent refreshes (B-1)"
+        );
+
+        // (b) Every caller returns the rotated access token — no waiter replayed
+        // the stale token or errored out.
+        for (i, r) in results.iter().enumerate() {
+            let cred = r
+                .as_ref()
+                .unwrap_or_else(|e| panic!("refresh #{i} errored: {e}"));
+            assert_eq!(
+                cred.access_token, "ROTATED-ACCESS",
+                "refresh #{i} must adopt the rotated access token"
+            );
+            assert_eq!(
+                cred.refresh_token.as_deref(),
+                Some("ROTATED-REFRESH"),
+                "refresh #{i} must adopt the rotated refresh token"
+            );
+        }
+
+        // (c) The persisted record equals the rotation (re-read path reads it back).
+        let persisted = crate::store::find(&id).unwrap();
+        assert_eq!(persisted.access_token, "ROTATED-ACCESS");
+        assert_eq!(persisted.refresh_token.as_deref(), Some("ROTATED-REFRESH"));
+        assert!(
+            persisted.expires_at > chrono::Utc::now().timestamp_millis(),
+            "rotated expiry must be in the future so waiters short-circuit"
+        );
+
+        std::env::remove_var("AIT_ACCOUNTS_PATH");
+        std::env::remove_var("GEMINI_OAUTH_TOKEN_URL");
+        let _ = std::fs::remove_file(&accounts_path);
+    }
+
     /// Guards the `fetch_credential` dispatch (the sole consumer of the
     /// per-provider stored-fetch adapters). Cursor is the one explicit `Err`
     /// arm (no manual accounts) and reaches no network, so it deterministically

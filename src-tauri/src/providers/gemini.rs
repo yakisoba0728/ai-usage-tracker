@@ -177,13 +177,26 @@ fn gemini_client_metadata() -> (String, String) {
     )
 }
 
+/// Resolve the OAuth token endpoint: env override > Google's public URL.
+/// Mirrors the `GEMINI_OAUTH_CLIENT_ID/_SECRET` override one function above —
+/// a plain runtime env hook (same category as `AIT_CONFIG_PATH`/
+/// `AIT_ACCOUNTS_PATH`) so a test (or a future self-hosted proxy) can point the
+/// refresh POST at a local server without changing the production signature.
+/// Defaults to the const, so production behavior is unchanged.
+fn gemini_token_url() -> String {
+    match std::env::var("GEMINI_OAUTH_TOKEN_URL") {
+        Ok(url) if !url.is_empty() => url,
+        _ => GEMINI_TOKEN_URL.to_string(),
+    }
+}
+
 async fn refresh_gemini_token(
     http: &reqwest::Client,
     rt: &str,
 ) -> Result<Refreshed, ProviderError> {
     let (id, sec) = gemini_client_metadata();
     let resp = http
-        .post(GEMINI_TOKEN_URL)
+        .post(gemini_token_url())
         .form(&[
             ("grant_type", "refresh_token"),
             ("refresh_token", rt),

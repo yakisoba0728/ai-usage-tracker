@@ -15,10 +15,8 @@ describe("add account options", () => {
   });
 
   it("shows only supported add methods for each provider", () => {
-    expect(authOptionsForProvider("claude")).toEqual([
-      "session-key",
-      "local-session",
-    ]);
+    // Claude is session-key only (FEAT-2/BUG-1): no CLI/OAuth "local-session".
+    expect(authOptionsForProvider("claude")).toEqual(["session-key"]);
     expect(authOptionsForProvider("codex")).toEqual([
       "browser-oauth",
       "local-session",

@@ -134,6 +134,12 @@ export interface AppConfig {
    * the key is ABSENT (→ `undefined`) until the first notification. Managed by
    * the backend; the UI never writes it. */
   last_notified_version?: string | null;
+  /**
+   * Stable per-install device id (the `anthropic-device-id` for the claude.ai
+   * web anchor, FEAT-2). Rust serializes with `skip_serializing_if =
+   * Option::is_none`, so the key is ABSENT until generated at startup. Managed
+   * entirely by the backend; the UI never reads or writes it. */
+  device_id?: string | null;
 }
 
 /**

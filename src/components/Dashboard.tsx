@@ -30,16 +30,9 @@ import type { InspectorTab } from "@/components/dashboard/inspectorTabs";
 import { Button } from "@/components/ui/button";
 import { useNow } from "@/hooks/useNow";
 import { useSnapshot } from "@/hooks/useSnapshot";
+import { useAccountActions } from "@/hooks/useAccountActions";
 import { useToasts } from "@/hooks/useToasts";
-import {
-  clearAccountAction,
-  finishAccountAction,
-  getAccountAction,
-  isAccountActionPending,
-  startAccountAction,
-  type AccountActionKind,
-  type AccountActionState,
-} from "@/lib/accountActionState";
+import { getAccountAction } from "@/lib/accountActionState";
 import { buildAnchorToast } from "@/lib/anchorToast";
 import {
   shouldProcessThresholdSnapshot,
@@ -73,10 +66,6 @@ import { scrubErrorText } from "@/lib/errorScrub";
 import { collectThresholdCrossings } from "@/lib/thresholdToasts";
 import type { AppConfig, UsageSnapshot } from "@/lib/types";
 
-function accountActionKey(serviceId: string, kind: AccountActionKind): string {
-  return `${kind}:${serviceId}`;
-}
-
 export function Dashboard() {
   const { snapshot, loading, refreshing, error, loadingProviders, refresh } =
     useSnapshot();
@@ -95,9 +84,13 @@ export function Dashboard() {
 
   const [sortBy, setSortBy] = useState<SortBy>("custom");
   const [showOffline, setShowOffline] = useState(false);
-  const [accountActions, setAccountActions] = useState<AccountActionState>({});
-  const accountActionsRef = useRef<AccountActionState>({});
-  const clearActionTimersRef = useRef<Map<string, number>>(new Map());
+  const {
+    accountActions,
+    getCurrentAction,
+    isActionPending,
+    beginAccountAction,
+    finishVisibleAccountAction,
+  } = useAccountActions();
 
   const [config, setConfigState] = useState<AppConfig | null>(null);
   useEffect(() => {
@@ -122,90 +115,6 @@ export function Dashboard() {
       void renameAccount(serviceId, name).catch((e) =>
         console.error("rename_account failed:", e),
       );
-    },
-    [],
-  );
-
-  const applyAccountActions = useCallback((next: AccountActionState) => {
-    accountActionsRef.current = next;
-    setAccountActions(next);
-  }, []);
-
-  const clearVisibleAccountAction = useCallback(
-    (serviceId: string, kind: AccountActionKind) => {
-      const next = clearAccountAction(accountActionsRef.current, serviceId, kind);
-      if (next !== accountActionsRef.current) {
-        applyAccountActions(next);
-      }
-    },
-    [applyAccountActions],
-  );
-
-  const scheduleAccountActionClear = useCallback(
-    (serviceId: string, kind: AccountActionKind) => {
-      const key = accountActionKey(serviceId, kind);
-      const existing = clearActionTimersRef.current.get(key);
-      if (existing != null) {
-        window.clearTimeout(existing);
-      }
-
-      const timeout = window.setTimeout(() => {
-        clearActionTimersRef.current.delete(key);
-        clearVisibleAccountAction(serviceId, kind);
-      }, 2200);
-      clearActionTimersRef.current.set(key, timeout);
-    },
-    [clearVisibleAccountAction],
-  );
-
-  const beginAccountAction = useCallback(
-    (serviceId: string, kind: AccountActionKind) => {
-      const result = startAccountAction(
-        accountActionsRef.current,
-        serviceId,
-        kind,
-      );
-      if (!result.started) return false;
-
-      const key = accountActionKey(serviceId, kind);
-      const existing = clearActionTimersRef.current.get(key);
-      if (existing != null) {
-        window.clearTimeout(existing);
-        clearActionTimersRef.current.delete(key);
-      }
-
-      applyAccountActions(result.state);
-      return true;
-    },
-    [applyAccountActions],
-  );
-
-  const finishVisibleAccountAction = useCallback(
-    (
-      serviceId: string,
-      kind: AccountActionKind,
-      status: "success" | "error",
-    ) => {
-      const next = finishAccountAction(
-        accountActionsRef.current,
-        serviceId,
-        kind,
-        status,
-      );
-      if (next === accountActionsRef.current) return false;
-      applyAccountActions(next);
-      scheduleAccountActionClear(serviceId, kind);
-      return true;
-    },
-    [applyAccountActions, scheduleAccountActionClear],
-  );
-
-  useEffect(
-    () => () => {
-      for (const timeout of clearActionTimersRef.current.values()) {
-        window.clearTimeout(timeout);
-      }
-      clearActionTimersRef.current.clear();
     },
     [],
   );
@@ -311,7 +220,7 @@ export function Dashboard() {
       // rejection is only a transport-level fallback.
       void refreshAccount(serviceId)
         .catch((e) => {
-          if (isAccountActionPending(accountActionsRef.current, serviceId, "refresh")) {
+          if (isActionPending(serviceId, "refresh")) {
             finishVisibleAccountAction(serviceId, "refresh", "error");
             pushToast(
               t("toast.refreshFailed", {
@@ -321,7 +230,14 @@ export function Dashboard() {
           }
         });
     },
-    [beginAccountAction, finishVisibleAccountAction, loadingProviders, pushToast, t],
+    [
+      beginAccountAction,
+      finishVisibleAccountAction,
+      isActionPending,
+      loadingProviders,
+      pushToast,
+      t,
+    ],
   );
 
   const handleSendAnchor = useCallback(
@@ -337,14 +253,14 @@ export function Dashboard() {
 
       void sendAnchorNow(serviceId)
         .then(() => {
-          if (isAccountActionPending(accountActionsRef.current, serviceId, "anchor")) {
+          if (isActionPending(serviceId, "anchor")) {
             finishVisibleAccountAction(serviceId, "anchor", "success");
             const toast = buildAnchorToast(provider, label, true, false);
             pushToast(t(toast.key, toast.params));
           }
         })
         .catch((e) => {
-          if (isAccountActionPending(accountActionsRef.current, serviceId, "anchor")) {
+          if (isActionPending(serviceId, "anchor")) {
             finishVisibleAccountAction(serviceId, "anchor", "error");
             const toast = buildAnchorToast(
               provider,
@@ -357,7 +273,14 @@ export function Dashboard() {
           }
         });
     },
-    [allServices, beginAccountAction, finishVisibleAccountAction, pushToast, t],
+    [
+      allServices,
+      beginAccountAction,
+      finishVisibleAccountAction,
+      isActionPending,
+      pushToast,
+      t,
+    ],
   );
 
   useEffect(() => {
@@ -372,7 +295,7 @@ export function Dashboard() {
 
   useEffect(() => {
     const un = onAnchorResult((p) => {
-      const current = getAccountAction(accountActionsRef.current, p.id, "anchor");
+      const current = getCurrentAction(p.id, "anchor");
       if (current === "pending") {
         finishVisibleAccountAction(p.id, "anchor", p.ok ? "success" : "error");
       }
@@ -397,13 +320,13 @@ export function Dashboard() {
     return () => {
       void un.then((u) => u?.());
     };
-  }, [finishVisibleAccountAction, pushToast, t]);
+  }, [finishVisibleAccountAction, getCurrentAction, pushToast, t]);
 
   // A per-card refresh emits `refresh-result` on every path; only surface a
   // failure (success already updates the card via usage-updated) — F-7.
   useEffect(() => {
     const un = onRefreshResult((p) => {
-      const current = getAccountAction(accountActionsRef.current, p.id, "refresh");
+      const current = getCurrentAction(p.id, "refresh");
       if (current === "pending") {
         finishVisibleAccountAction(p.id, "refresh", p.ok ? "success" : "error");
       }
@@ -424,7 +347,7 @@ export function Dashboard() {
     return () => {
       void un.then((u) => u?.());
     };
-  }, [finishVisibleAccountAction, pushToast, t]);
+  }, [finishVisibleAccountAction, getCurrentAction, pushToast, t]);
 
   useEffect(() => {
     if (!snapshot || !config) return;

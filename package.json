@@ -14,7 +14,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "node scripts/tauri.mjs",
-    "verify:runtime": "pnpm lint && pnpm exec tsc --noEmit && pnpm test && cargo test --lib --manifest-path src-tauri/Cargo.toml --locked",
+    "verify:runtime": "pnpm lint && pnpm exec tsc --noEmit && pnpm test && cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check && cargo clippy --all-targets --manifest-path src-tauri/Cargo.toml -- -D warnings && cargo test --lib --manifest-path src-tauri/Cargo.toml --locked",
     "verify:release": "pnpm build && pnpm tauri build --debug --no-bundle"
   },
   "dependencies": {

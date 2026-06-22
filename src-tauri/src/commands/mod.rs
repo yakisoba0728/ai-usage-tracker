@@ -348,7 +348,10 @@ mod tests {
 
     #[test]
     fn provider_for_service_id_resolves_auto_prefix() {
-        assert_eq!(provider_for_service_id("auto:claude"), Some(Provider::Claude));
+        assert_eq!(
+            provider_for_service_id("auto:claude"),
+            Some(Provider::Claude)
+        );
         assert_eq!(provider_for_service_id("auto:zai"), Some(Provider::Zai));
         assert_eq!(provider_for_service_id("auto:codex"), Some(Provider::Codex));
         // An unknown / malformed id with no matching stored cred → None.
@@ -368,11 +371,19 @@ mod tests {
         apply_account_rename(&mut cfg, "auto:claude", Some("Personal v2".into()));
 
         assert_eq!(
-            cfg.accounts.get("auto:claude").unwrap().custom_name.as_deref(),
+            cfg.accounts
+                .get("auto:claude")
+                .unwrap()
+                .custom_name
+                .as_deref(),
             Some("Personal v2")
         );
         assert_eq!(
-            cfg.accounts.get("stored:abc").unwrap().custom_name.as_deref(),
+            cfg.accounts
+                .get("stored:abc")
+                .unwrap()
+                .custom_name
+                .as_deref(),
             Some("Work"),
             "renaming auto:claude must not touch stored:abc"
         );

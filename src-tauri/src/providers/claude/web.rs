@@ -21,8 +21,7 @@ pub(crate) const CLAUDE_WEB_API_BASE: &str = "https://claude.ai/api";
 /// A realistic desktop User-Agent for the write path. claude.ai's bot protection
 /// (Cloudflare) is sensitive to a non-browser UA; the read path doesn't write so
 /// it can stay on the default client UA, but the completion POST mimics a browser.
-const WEB_UA: &str =
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 \
+const WEB_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 \
      (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
 /// The fixed root-message parent for the first turn of a fresh conversation
@@ -203,12 +202,10 @@ pub(super) fn full_cookie_header(input: &str) -> String {
         .unwrap_or(trimmed)
         .trim();
     // A pasted multi-cookie header carrying Cloudflare clearance → forward as-is.
-    let has_cf = payload
-        .split(';')
-        .any(|p| {
-            let p = p.trim();
-            p.starts_with("cf_clearance=") || p.starts_with("__cf_bm=")
-        });
+    let has_cf = payload.split(';').any(|p| {
+        let p = p.trim();
+        p.starts_with("cf_clearance=") || p.starts_with("__cf_bm=")
+    });
     if has_cf {
         return payload.to_string();
     }

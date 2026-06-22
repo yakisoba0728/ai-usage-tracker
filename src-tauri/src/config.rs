@@ -650,7 +650,11 @@ mod tests {
 
         // The legacy "STALE" name must NOT overwrite the user's current entry.
         assert_eq!(
-            cfg.accounts.get("auto:claude").unwrap().custom_name.as_deref(),
+            cfg.accounts
+                .get("auto:claude")
+                .unwrap()
+                .custom_name
+                .as_deref(),
             Some("Current"),
             "an already-migrated config must keep its current account name"
         );
@@ -796,21 +800,32 @@ mod tests {
         let back: AppConfig = serde_json::from_str(&json).unwrap();
 
         assert_eq!(
-            back.accounts.get(&auto_id).and_then(|a| a.custom_name.as_deref()),
+            back.accounts
+                .get(&auto_id)
+                .and_then(|a| a.custom_name.as_deref()),
             Some("Personal Claude"),
             "auto:claude name survives independently"
         );
         assert_eq!(
-            back.accounts.get(&stored_id).and_then(|a| a.custom_name.as_deref()),
+            back.accounts
+                .get(&stored_id)
+                .and_then(|a| a.custom_name.as_deref()),
             Some("Work Claude"),
             "stored:abc name survives independently (NOT overwritten by the auto rename)"
         );
         assert_eq!(
-            back.accounts.get(&stored_id).and_then(|a| a.primary_window.as_deref()),
+            back.accounts
+                .get(&stored_id)
+                .and_then(|a| a.primary_window.as_deref()),
             Some("Weekly"),
         );
         // The auto account has no primary_window; the stored one's must not leak.
-        assert!(back.accounts.get(&auto_id).unwrap().primary_window.is_none());
+        assert!(back
+            .accounts
+            .get(&auto_id)
+            .unwrap()
+            .primary_window
+            .is_none());
     }
 
     /// A realistic current-shape `AppConfig` (new accounts map + schema_version)

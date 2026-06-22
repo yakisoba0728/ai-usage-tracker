@@ -434,8 +434,8 @@ mod tests {
             .mount(&server)
             .await;
 
-        let accounts_path = std::env::temp_dir()
-            .join(format!("ait_b1_concurrent_{}.json", std::process::id()));
+        let accounts_path =
+            std::env::temp_dir().join(format!("ait_b1_concurrent_{}.json", std::process::id()));
         let _ = std::fs::remove_file(&accounts_path);
         std::env::set_var("AIT_ACCOUNTS_PATH", &accounts_path);
         std::env::set_var("GEMINI_OAUTH_TOKEN_URL", format!("{}/token", server.uri()));
@@ -473,10 +473,7 @@ mod tests {
         // (a) The underlying token endpoint was hit exactly once: lock + re-read
         // collapsed 8 concurrent refreshes into a single rotation.
         let hits = server.received_requests().await.unwrap();
-        let refresh_hits = hits
-            .iter()
-            .filter(|r| r.url.path() == "/token")
-            .count();
+        let refresh_hits = hits.iter().filter(|r| r.url.path() == "/token").count();
         assert_eq!(
             refresh_hits, 1,
             "the OAuth token endpoint must be hit exactly once for 8 concurrent refreshes (B-1)"

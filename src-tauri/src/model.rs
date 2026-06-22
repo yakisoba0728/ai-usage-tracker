@@ -440,7 +440,7 @@ mod tests {
     ///    Rust side ↔ `src/lib/ipc.ts` in lockstep).
     ///
     /// SYMMETRY (Chunk-2, gap closed): BOTH halves are now COMPILE-ANCHORED. The
-    /// 13 commands are anchored to their fn items (the `use` block). The 6 EVENTS
+    /// 15 commands are anchored to their fn items (the `use` block). The 6 EVENTS
     /// are anchored to the shared `EVENT_*` consts (this module), which every
     /// `emit`/`listen` call site references instead of a raw string literal — so
     /// renaming/removing one is a hard build break at the call site AND here. (The
@@ -452,7 +452,8 @@ mod tests {
     ///   - Chunk 2: `anchor-result` payload gains `provider` + `label` (the EVENT
     ///     NAME stays; only its payload shape grows). ← APPLIED (notification).
     ///   - Chunk 3: new command `rename_account`. ← APPLIED (per-account rename).
-    ///   - Chunk 4: new commands `set_launch_at_login`, `check_update_now`.
+    ///   - Chunk 4: new commands `set_launch_at_login`, `check_update_now`. ←
+    ///     APPLIED (autostart + update notifier).
     #[test]
     fn ipc_command_and_event_catalog_is_frozen() {
         // (1) Compile-time existence anchor: every command in the generate_handler!
@@ -460,17 +461,18 @@ mod tests {
         // breaks THIS line before any assertion runs.
         #[allow(unused_imports)]
         use crate::commands::{
-            add_session_key, cancel_login, get_config, get_usage, list_accounts, login_oauth,
-            refresh_account, refresh_now, remove_account, rename_account, send_anchor_now,
-            set_config, start_login,
+            add_session_key, cancel_login, check_update_now, get_config, get_usage, list_accounts,
+            login_oauth, refresh_account, refresh_now, remove_account, rename_account,
+            send_anchor_now, set_config, set_launch_at_login, start_login,
         };
 
         // (2) The frozen catalog. Mirrors `lib.rs` generate_handler! (commands) and
         // the six emitted/listened events (`usage-updated`, `provider-loading`,
         // `anchor-result`, `refresh-result`, `login-complete`, `trigger-refresh`).
-        const COMMANDS: [&str; 13] = [
+        const COMMANDS: [&str; 15] = [
             "add_session_key",
             "cancel_login",
+            "check_update_now",
             "get_config",
             "get_usage",
             "list_accounts",
@@ -481,6 +483,7 @@ mod tests {
             "rename_account",
             "send_anchor_now",
             "set_config",
+            "set_launch_at_login",
             "start_login",
         ];
         // Compile-anchored to the shared consts: removing/renaming one is a build
@@ -517,9 +520,9 @@ mod tests {
         assert_sorted_unique(&COMMANDS, "command");
         assert_sorted_unique(&EVENTS, "event");
 
-        // Cardinality pins: exactly 13 commands (lib.rs generate_handler!) and 6
+        // Cardinality pins: exactly 15 commands (lib.rs generate_handler!) and 6
         // events. Adding/removing one is a deliberate, reviewed change.
-        assert_eq!(COMMANDS.len(), 13, "exactly 13 IPC commands are frozen");
+        assert_eq!(COMMANDS.len(), 15, "exactly 15 IPC commands are frozen");
         assert_eq!(EVENTS.len(), 6, "exactly 6 IPC events are frozen");
     }
 }

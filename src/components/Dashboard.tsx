@@ -52,6 +52,7 @@ import {
   selectVisibleServiceId,
 } from "@/lib/inspectorModel";
 import {
+  checkUpdateNow,
   getConfig,
   onAnchorResult,
   onRefreshResult,
@@ -61,6 +62,7 @@ import {
   renameAccount,
   sendAnchorNow,
   setConfig,
+  setLaunchAtLogin,
 } from "@/lib/ipc";
 import {
   patchAccountConfig,
@@ -270,6 +272,38 @@ export function Dashboard() {
   const dismissToast = useCallback((id: number) => {
     setToasts((t) => t.filter((x) => x.id !== id));
   }, []);
+
+  // Launch-at-login (FEAT-4): optimistic flag update, then the dedicated command
+  // (OS login item + persist). On failure, revert the optimistic flag and toast.
+  const handleLaunchAtLogin = useCallback(
+    (enable: boolean) => {
+      setConfigState((prev) =>
+        prev ? { ...prev, launch_at_login: enable } : prev,
+      );
+      void setLaunchAtLogin(enable).catch((e) => {
+        setConfigState((prev) =>
+          prev ? { ...prev, launch_at_login: !enable } : prev,
+        );
+        pushToast(t("toast.launchAtLoginFailed", { error: String(e) }));
+      });
+    },
+    [pushToast, t],
+  );
+
+  // Manual "Check for updates" (FEAT-5): runs regardless of the auto-check
+  // toggle. Toasts the outcome; the OS notification (with click-to-open) is
+  // fired from Rust on a newer release.
+  const handleCheckForUpdates = useCallback(() => {
+    void checkUpdateNow()
+      .then((update) => {
+        pushToast(
+          update
+            ? t("toast.updateAvailable", { version: update.version })
+            : t("toast.upToDate"),
+        );
+      })
+      .catch((e) => pushToast(t("toast.updateCheckFailed", { error: String(e) })));
+  }, [pushToast, t]);
 
   const handleRefreshAll = useCallback(async () => {
     const result = await refresh();
@@ -588,6 +622,8 @@ export function Dashboard() {
           pushToast(t("toast.scanning"));
         }}
         onOpenAddAccount={openAddAccount}
+        onLaunchAtLoginChange={handleLaunchAtLogin}
+        onCheckForUpdates={handleCheckForUpdates}
       />
 
       <Toaster toasts={toasts} onDismiss={dismissToast} />

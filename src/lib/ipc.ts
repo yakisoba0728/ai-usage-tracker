@@ -109,6 +109,36 @@ export function renameAccount(
   return invoke<void>("rename_account", { serviceId, name });
 }
 
+/**
+ * Enable/disable launch-at-login (FEAT-4). Calls the `set_launch_at_login`
+ * command, which toggles the OS login item AND persists the flag. In the
+ * browser dev server this mutates the in-memory config so the toggle reflects.
+ */
+export function setLaunchAtLogin(enable: boolean): Promise<void> {
+  if (!hasTauriRuntime()) {
+    browserConfig = { ...browserConfig, launch_at_login: enable };
+    return Promise.resolve();
+  }
+  return invoke<void>("set_launch_at_login", { enable });
+}
+
+/** A newer release reported by `check_update_now`, or null when up to date. */
+export interface AvailableUpdate {
+  version: string;
+  html_url: string;
+}
+
+/**
+ * Manually check GitHub for a newer release NOW (FEAT-5). Runs regardless of the
+ * `auto_update_check` toggle and fires an OS notification for a newer release.
+ * Resolves to the update info, or null when already up to date. In the browser
+ * dev server there is no backend, so it resolves to null.
+ */
+export function checkUpdateNow(): Promise<AvailableUpdate | null> {
+  if (!hasTauriRuntime()) return Promise.resolve(null);
+  return invoke<AvailableUpdate | null>("check_update_now");
+}
+
 export function sendAnchorNow(serviceId: string): Promise<void> {
   if (!hasTauriRuntime()) {
     void serviceId;
@@ -252,6 +282,8 @@ function createDefaultConfig(): AppConfig {
     ],
     accounts: {},
     auto_anchor: {},
+    launch_at_login: false,
+    auto_update_check: true,
   };
 }
 

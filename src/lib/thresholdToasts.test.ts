@@ -22,6 +22,8 @@ const config: AppConfig = {
   })) as AppConfig["providers"],
   accounts: {},
   auto_anchor: {},
+  launch_at_login: false,
+  auto_update_check: true,
 };
 
 function usage(fetchedAt: number, pct: number): UsageSnapshot {

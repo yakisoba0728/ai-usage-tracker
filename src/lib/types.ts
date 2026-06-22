@@ -122,6 +122,18 @@ export interface AppConfig {
   accounts: Record<string, AccountConfig>;
   /** Per-service_id opt-in for auto window-anchoring. */
   auto_anchor: Record<string, boolean>;
+  /** Launch the app at login (FEAT-4). Mirrors the OS login item; the
+   * `set_launch_at_login` command toggles both the OS item and this flag. */
+  launch_at_login: boolean;
+  /** Whether the background GitHub-release update notifier runs (FEAT-5).
+   * Defaults true. */
+  auto_update_check: boolean;
+  /**
+   * Last release version we notified about, so the daily check doesn't repeat
+   * (FEAT-5). Rust serializes with `skip_serializing_if = Option::is_none`, so
+   * the key is ABSENT (→ `undefined`) until the first notification. Managed by
+   * the backend; the UI never writes it. */
+  last_notified_version?: string | null;
 }
 
 /**

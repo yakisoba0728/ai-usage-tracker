@@ -197,6 +197,13 @@
     "sort": { "custom": "사용자 지정", "usage": "사용량", "name": "이름" },
     "showOffline": "오프라인 계정 표시",
     "showOfflineDesc": "연결이 끊긴 제공자를 모니터에 계속 표시합니다.",
+    "launchAtLogin": "로그인 시 실행",
+    "launchAtLoginDesc": "로그인하면 AI Usage Tracker를 자동으로 시작합니다.",
+    "autoUpdate": "자동 업데이트 확인",
+    "autoUpdateDesc": "매일 GitHub에서 새 릴리스를 확인하고 알려줍니다.",
+    "checkUpdates": "업데이트",
+    "checkUpdatesDesc": "지금 새 릴리스가 있는지 확인합니다.",
+    "checkUpdatesNow": "업데이트 확인",
     "providersTitle": "제공자",
     "providersDesc": "{{count}}개 제공자가 모니터링에 활성화됨.",
     "shownAs": "{{name}}(으)로 표시",
@@ -214,7 +221,11 @@
     "anchorSentFor": "{{name}}에 앵커 메시지를 보냈습니다.",
     "anchorFailedFor": "{{name}} 앵커 실패: {{error}}",
     "anchorAutoSentFor": "{{name}} 자동 앵커링 완료.",
-    "anchorAutoFailedFor": "{{name}} 자동 앵커링 실패: {{error}}"
+    "anchorAutoFailedFor": "{{name}} 자동 앵커링 실패: {{error}}",
+    "launchAtLoginFailed": "로그인 시 실행 설정을 변경하지 못했습니다: {{error}}",
+    "updateAvailable": "업데이트 가능: {{version}}.",
+    "upToDate": "최신 버전을 사용 중입니다.",
+    "updateCheckFailed": "업데이트 확인 실패: {{error}}"
   },
   "time": {
     "justNow": "방금 업데이트됨",

@@ -1,20 +1,5 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
-import {
-  Check,
-  Command,
-  Languages,
-  Loader2,
-  Plus,
-  RefreshCw,
-  Search,
-  Settings,
-} from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Check } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { ActionFeedbackOverlay } from "@/components/ActionFeedbackOverlay";
@@ -25,9 +10,13 @@ import { SettingsDialog, type SortBy } from "@/components/SettingsDialog";
 import { Toaster } from "@/components/Toaster";
 import { AccountSections } from "@/components/dashboard/AccountCard";
 import { AccountDetailDialog } from "@/components/dashboard/AccountDetailDialog";
+import { AccountToolbar } from "@/components/dashboard/AccountToolbar";
+import { LiveUpdatedAgo } from "@/components/dashboard/LiveUpdatedAgo";
+import { LoadingState } from "@/components/dashboard/LoadingState";
+import { MobileHeader } from "@/components/dashboard/MobileHeader";
+import { NoResults } from "@/components/dashboard/NoResults";
 import { storedAccountId } from "@/components/dashboard/helpers";
 import type { InspectorTab } from "@/components/dashboard/inspectorTabs";
-import { Button } from "@/components/ui/button";
 import { useNow } from "@/hooks/useNow";
 import { useSnapshot } from "@/hooks/useSnapshot";
 import { useAccountActions } from "@/hooks/useAccountActions";
@@ -37,11 +26,9 @@ import { useToasts } from "@/hooks/useToasts";
 import { getAccountAction } from "@/lib/accountActionState";
 import { buildAnchorToast } from "@/lib/anchorToast";
 import {
-  shouldShowNoResultsOfflineCta,
   transitionToAddAccount,
   transitionToSettings,
 } from "@/lib/dashboardState";
-import { formatUpdatedAgo } from "@/lib/format";
 import {
   buildAccountSections,
   selectVisibleServiceId,
@@ -460,151 +447,6 @@ export function Dashboard() {
       />
 
       <Toaster toasts={toasts} onDismiss={dismissToast} />
-    </div>
-  );
-}
-
-function MobileHeader({
-  refreshing,
-  onRefresh,
-  onOpenSettings,
-}: {
-  refreshing: boolean;
-  onRefresh: () => void;
-  onOpenSettings: () => void;
-}) {
-  const { t, i18n } = useTranslation();
-  const nextLang = i18n.resolvedLanguage === "ko" ? "en" : "ko";
-  return (
-    <header className="flex h-12 items-center justify-between border-b border-border px-4">
-      <div className="flex items-center gap-2 font-semibold">
-        <Command className="size-5 text-[#73b8f4]" />
-        AI Usage Tracker
-      </div>
-      <div className="flex items-center gap-1">
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => void i18n.changeLanguage(nextLang)}
-          aria-label={t("language.label")}
-          title={t(nextLang === "ko" ? "language.korean" : "language.english")}
-        >
-          <Languages className="size-4" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={onRefresh}
-          disabled={refreshing}
-          aria-label={t("common.refresh")}
-        >
-          <RefreshCw className={refreshing ? "size-4 animate-spin" : "size-4"} />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={onOpenSettings}
-          aria-label={t("common.settings")}
-        >
-          <Settings className="size-4" />
-        </Button>
-      </div>
-    </header>
-  );
-}
-
-function AccountToolbar({
-  query,
-  onQueryChange,
-  onAddAccount,
-}: {
-  query: string;
-  onQueryChange: (query: string) => void;
-  onAddAccount: () => void;
-}) {
-  const { t } = useTranslation();
-  const inputRef = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        inputRef.current?.focus();
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
-  return (
-    <div className="flex items-center gap-2 px-4 py-5">
-      <label className="relative min-w-0 flex-1">
-        <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-text-faint" />
-        <input
-          ref={inputRef}
-          value={query}
-          onChange={(event) => onQueryChange(event.target.value)}
-          placeholder={t("toolbar.searchPlaceholder")}
-          className="h-10 w-full rounded-lg border border-border bg-surface/60 pl-9 pr-12 text-sm text-text placeholder:text-text-faint outline-none transition-colors focus:border-border-strong focus:bg-surface"
-        />
-        <span className="num absolute right-3 top-1/2 -translate-y-1/2 rounded border border-border bg-surface-2 px-1.5 py-0.5 text-[10px] text-text-faint">
-          ⌘K
-        </span>
-      </label>
-
-      <Button
-        variant="outline"
-        size="default"
-        onClick={onAddAccount}
-        aria-label={t("toolbar.addAccount")}
-        className="h-10 gap-2 border-border bg-surface/80"
-      >
-        <Plus className="size-4" />
-        <span className="hidden sm:inline">{t("toolbar.addAccount")}</span>
-      </Button>
-    </div>
-  );
-}
-
-/**
- * Isolated per-second clock for the "Updated Xs ago" footer, so only this tiny
- * node re-renders each second instead of the whole dashboard tree.
- */
-function LiveUpdatedAgo({ fetchedAt }: { fetchedAt: number | null }) {
-  const { t } = useTranslation();
-  const now = useNow(1000);
-  return <>{formatUpdatedAgo(fetchedAt, now, t)}</>;
-}
-
-function LoadingState() {
-  const { t } = useTranslation();
-  return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-3 py-24 text-text-dim">
-      <Loader2 className="size-5 animate-spin" />
-      <span className="text-sm">{t("detail.loading")}</span>
-    </div>
-  );
-}
-
-function NoResults({
-  query,
-  onShowOffline,
-}: {
-  query: string;
-  onShowOffline: () => void;
-}) {
-  const { t } = useTranslation();
-  const showOfflineCta = shouldShowNoResultsOfflineCta(query);
-  return (
-    <div className="rounded-lg border border-border bg-surface/50 px-5 py-12 text-center">
-      <Search className="mx-auto mb-3 size-6 text-text-faint" />
-      <h2 className="text-sm font-semibold">{t("noResults.title")}</h2>
-      <p className="mt-1 text-sm text-text-faint">
-        {query ? t("noResults.hintQuery") : t("noResults.hintOffline")}
-      </p>
-      {showOfflineCta && (
-        <Button variant="secondary" size="sm" className="mt-4" onClick={onShowOffline}>
-          {t("noResults.showOffline")}
-        </Button>
-      )}
     </div>
   );
 }

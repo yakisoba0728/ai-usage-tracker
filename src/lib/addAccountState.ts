@@ -10,6 +10,19 @@ export interface AddAccountState {
   error: string | null;
 }
 
+/**
+ * Stale-request race guard. Each async login flow claims a monotonically
+ * increasing request id before its `await`; a switch, cancel, or dialog close
+ * bumps the live counter past it. A response is only acted on while its captured
+ * id is still the live one — a response whose id has been superseded is ignored.
+ */
+export function isCurrentLoginRequest(
+  requestId: number,
+  currentId: number,
+): boolean {
+  return requestId === currentId;
+}
+
 export function beginLoginRequest(
   state: AddAccountState,
   provider: Provider,

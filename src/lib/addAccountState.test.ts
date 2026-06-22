@@ -4,6 +4,7 @@ import {
   beginLoginRequest,
   cancelPendingLoginState,
   completeLogin,
+  isCurrentLoginRequest,
   receiveLoginInfo,
   selectProviderState,
   type AddAccountState,
@@ -71,6 +72,15 @@ describe("add account login state", () => {
     expect(result.state.selectedProvider).toBe("cursor");
     expect(result.state.busy).toBeNull();
     expect(result.state.pendingLoginProvider).toBeNull();
+  });
+
+  it("treats a login response as current only when its request id is still the live one", () => {
+    // A response is honored while its captured request id matches the live
+    // counter, and ignored once a newer request (provider switch / cancel /
+    // dialog close) has bumped the counter past it.
+    expect(isCurrentLoginRequest(3, 3)).toBe(true);
+    expect(isCurrentLoginRequest(2, 3)).toBe(false);
+    expect(isCurrentLoginRequest(4, 3)).toBe(false);
   });
 
   it("clears pending device-code state when cancelled", () => {

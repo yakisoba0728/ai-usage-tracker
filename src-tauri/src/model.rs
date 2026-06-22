@@ -387,4 +387,80 @@ mod tests {
         let v = serde_json::to_value(&u).unwrap();
         assert!(!v.as_object().unwrap().contains_key("raw_response"));
     }
+
+    /// Freezes the IPC command + event catalog — the frozen invariant (spec §3.2)
+    /// that makes the whole rewrite catchable. A rewrite that drops/renames a
+    /// command or event must FAIL a test, not slip through.
+    ///
+    /// Two pins, both load-bearing:
+    /// 1. The 12 commands are referenced by PATH below (`use crate::commands::…`),
+    ///    so removing/renaming a `#[tauri::command]` fn is a COMPILE error here —
+    ///    this mirrors the `tauri::generate_handler![…]` set in `lib.rs:122-135`.
+    /// 2. The expected command + event NAME sets are pinned as sorted constants,
+    ///    so adding/removing one is a deliberate, test-visible diff (and keeps the
+    ///    Rust side ↔ `src/lib/ipc.ts` in lockstep).
+    ///
+    /// CHUNK-2/3/4 ALLOWED DELTAS (the only intended changes — apply in their
+    /// owning chunk, with this test updated as the deliberate signal, NOT here):
+    ///   - Chunk 2: `anchor-result` payload gains `provider` + `label` (the EVENT
+    ///     NAME stays; only its payload shape grows).
+    ///   - Chunk 3: new command `rename_account`.
+    ///   - Chunk 4: new commands `set_launch_at_login`, `check_update_now`.
+    #[test]
+    fn ipc_command_and_event_catalog_is_frozen() {
+        // (1) Compile-time existence anchor: every command in the generate_handler!
+        // set must still exist as a referenceable path. Renaming/removing one
+        // breaks THIS line before any assertion runs.
+        #[allow(unused_imports)]
+        use crate::commands::{
+            add_session_key, cancel_login, get_config, get_usage, list_accounts, login_oauth,
+            refresh_account, refresh_now, remove_account, send_anchor_now, set_config, start_login,
+        };
+
+        // (2) The frozen catalog. Mirrors `lib.rs:122-135` (commands) and the six
+        // emitted/listened events (`usage-updated`, `provider-loading`,
+        // `anchor-result`, `refresh-result`, `login-complete`, `trigger-refresh`).
+        const COMMANDS: [&str; 12] = [
+            "add_session_key",
+            "cancel_login",
+            "get_config",
+            "get_usage",
+            "list_accounts",
+            "login_oauth",
+            "refresh_account",
+            "refresh_now",
+            "remove_account",
+            "send_anchor_now",
+            "set_config",
+            "start_login",
+        ];
+        const EVENTS: [&str; 6] = [
+            "anchor-result",
+            "login-complete",
+            "provider-loading",
+            "refresh-result",
+            "trigger-refresh",
+            "usage-updated",
+        ];
+
+        // Sorted + unique: the constant is the canonical, stable catalog. A
+        // duplicate or out-of-order entry means an accidental edit slipped in.
+        let assert_sorted_unique = |names: &[&str], what: &str| {
+            let mut sorted = names.to_vec();
+            sorted.sort_unstable();
+            sorted.dedup();
+            assert_eq!(
+                sorted.as_slice(),
+                names,
+                "{what} catalog must be sorted + de-duplicated (a diff here means a deliberate catalog change)"
+            );
+        };
+        assert_sorted_unique(&COMMANDS, "command");
+        assert_sorted_unique(&EVENTS, "event");
+
+        // Cardinality pins: exactly 12 commands (lib.rs generate_handler!) and 6
+        // events. Adding/removing one is a deliberate, reviewed change.
+        assert_eq!(COMMANDS.len(), 12, "exactly 12 IPC commands are frozen");
+        assert_eq!(EVENTS.len(), 6, "exactly 6 IPC events are frozen");
+    }
 }

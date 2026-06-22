@@ -352,6 +352,108 @@ mod tests {
         assert_eq!(arr, [true, true, false, true, true, true]);
     }
 
+    // ── Chunk-0 migration gate: pin the CURRENT on-disk config shape ─────────
+    //
+    // CHUNK-3 MIGRATION TARGET: today `custom_name` + `primary_window` (and
+    // `sort_index`) live in the per-PROVIDER `ProviderConfig` slot, indexed by
+    // provider — so all accounts of one provider share a single name/window
+    // (BUG-2 "rename-all"). Chunk 3 relocates `custom_name`/`primary_window` to a
+    // per-`service_id` `accounts: HashMap<String, AccountConfig>` and adds
+    // `schema_version`, running a one-time `migrate()` that seeds the accounts
+    // map from the old provider slots then clears them. These two tests are the
+    // load-bearing data-loss gate: they pin that a realistic OLD-shape config
+    // (no `schema_version`, no `accounts`) parses today WITHOUT resetting — so
+    // Chunk 3's migration test can prove old prefs are migrated, not wiped.
+
+    /// Characterization: a realistic v0 config (provider-level `custom_name` /
+    /// `primary_window` / `sort_index`, an `auto_anchor` map, and NO
+    /// `schema_version` / `accounts` fields) loads via the real `load_from`
+    /// path WITHOUT tripping the corrupt/invalid preserve-and-reset branch, and
+    /// the provider-level `custom_name` is readable at `providers[0].custom_name`.
+    /// Pins TODAY's behavior; the relocation is Chunk 3's job.
+    #[test]
+    fn config_v0_fixture_loads_without_data_loss_today() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let fixture = include_str!("../tests/config_v0_provider_level.json");
+
+        // Write the fixture to a temp path and load it through the production
+        // `load_from` (the same branch that would reset a config it can't parse).
+        let dir =
+            std::env::temp_dir().join(format!("ait_cfg_v0_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.json");
+        std::fs::write(&path, fixture).unwrap();
+
+        let cfg = AppConfig::load_from(&path);
+
+        // NOT reset: if the v0 shape failed to parse, `load_from` would have
+        // moved the file aside and returned defaults (poll_seconds 300, all
+        // slots default). Proving the real values survived proves no data loss.
+        assert_eq!(cfg.poll_seconds, 600, "v0 poll_seconds must survive load");
+        assert!(
+            path.exists(),
+            "a parseable v0 config must NOT be renamed away as corrupt/invalid"
+        );
+
+        // The provider-level customizations are readable as-is today.
+        assert_eq!(
+            cfg.providers[0].custom_name.as_deref(),
+            Some("Work Claude"),
+            "provider-level custom_name must load from the v0 slot"
+        );
+        assert_eq!(
+            cfg.providers[0].primary_window.as_deref(),
+            Some("Weekly"),
+            "provider-level primary_window must load from the v0 slot"
+        );
+        assert_eq!(cfg.providers[0].sort_index, 2);
+        assert!(!cfg.providers[2].enabled, "per-provider enabled survives");
+        assert_eq!(cfg.providers[2].notify_thresholds, vec![80, 100]);
+
+        // auto_anchor is already correctly keyed per service_id (the shape the
+        // migration mirrors) and must round-trip from the v0 file unchanged.
+        assert_eq!(
+            cfg.auto_anchor.get("stored:zai-1700000000"),
+            Some(&true)
+        );
+        assert_eq!(cfg.auto_anchor.get("auto:codex"), Some(&false));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A realistic current-shape `AppConfig` serializes → deserializes to an
+    /// equal value. Pins the round-trip so Chunk 3's reshape can't silently drop
+    /// a field. (`ProviderConfig` skips `None` `custom_name`/`primary_window` on
+    /// serialize, so we assert the meaningful fields rather than `Debug`-equality.)
+    #[test]
+    fn appconfig_roundtrips_current_shape() {
+        let mut cfg = AppConfig {
+            poll_seconds: 450,
+            ..Default::default()
+        };
+        cfg.providers[0].custom_name = Some("Work Claude".into());
+        cfg.providers[0].primary_window = Some("Weekly".into());
+        cfg.providers[0].sort_index = 2;
+        cfg.providers[2].enabled = false;
+        cfg.providers[2].notify_thresholds = vec![80, 100];
+        cfg.auto_anchor.insert("stored:zai-1".into(), true);
+
+        let json = serde_json::to_string_pretty(&cfg).unwrap();
+        let back: AppConfig = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(back.poll_seconds, cfg.poll_seconds);
+        assert_eq!(back.providers.len(), 6);
+        for (a, b) in cfg.providers.iter().zip(back.providers.iter()) {
+            assert_eq!(a.enabled, b.enabled);
+            assert_eq!(a.custom_name, b.custom_name);
+            assert_eq!(a.primary_window, b.primary_window);
+            assert_eq!(a.notify_thresholds, b.notify_thresholds);
+            assert_eq!(a.sort_index, b.sort_index);
+        }
+        assert_eq!(back.auto_anchor, cfg.auto_anchor);
+    }
+
     #[test]
     fn auto_anchor_defaults_empty_and_roundtrips() {
         let mut c = AppConfig::default();

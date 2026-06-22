@@ -86,6 +86,9 @@ async fn refresh_once_inner(
     // whose 5-hour window is empty (100% remaining), send one anchor message.
     let now_sec = chrono::Utc::now().timestamp();
     let auto = cfg.read().await.auto_anchor.clone();
+    // The stable per-install device id for the Claude web anchor — read once here
+    // (we already hold the config) and moved into each spawned task.
+    let device_id = super::device_id_for_anchor(cfg).await;
     for s in &snapshot.services {
         if auto.get(&s.id).copied().unwrap_or(false)
             && s.connected
@@ -99,7 +102,8 @@ async fn refresh_once_inner(
             let provider = s.provider;
             let label = s.account.clone();
             let app2 = app.clone();
-            tauri::async_runtime::spawn(auto_anchor_task(app2, id, provider, label));
+            let dev = device_id.clone();
+            tauri::async_runtime::spawn(auto_anchor_task(app2, id, provider, label, dev));
         }
     }
     // Tray shows the app icon only — no title text (per user request).
@@ -110,8 +114,14 @@ async fn refresh_once_inner(
 /// `spawn` closure so it's a named, reachable async fn (spec §7 note) — the
 /// move-captured values (`app`, `id`, `provider`, `label`) become its params,
 /// behavior-identical to the inline closure.
-async fn auto_anchor_task(app: AppHandle, id: String, provider: Provider, label: Option<String>) {
-    let res = crate::anchor::send(&id).await;
+async fn auto_anchor_task(
+    app: AppHandle,
+    id: String,
+    provider: Provider,
+    label: Option<String>,
+    device_id: String,
+) {
+    let res = crate::anchor::send(&id, &device_id).await;
     match &res {
         Ok(()) => eprintln!("anchor auto-fired {id}: ok"),
         Err(e) => {

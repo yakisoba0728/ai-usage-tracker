@@ -36,6 +36,7 @@
   ],
   "auto_anchor": {
     "stored:zai-1700000000": true,
-    "auto:codex": false
+    "auto:codex": false,
+    "auto:claude": true
   }
 }

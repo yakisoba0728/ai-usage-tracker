@@ -7,7 +7,10 @@ use std::path::{Path, PathBuf};
 
 /// The current on-disk config schema version. Bumped whenever `migrate()` gains
 /// a new step so the migration runs exactly once per upgrade.
-pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+/// - v1: per-provider name/window → per-account `accounts` map.
+/// - v2: Claude is session-key only (no OAuth `auto:claude` anchor) → drop any
+///   stale `auto:claude` key from `auto_anchor` (FEAT-2 / BUG-1).
+pub const CURRENT_SCHEMA_VERSION: u32 = 2;
 
 /// Per-provider customizable settings. Lives inside `AppConfig.providers`,
 /// indexed by canonical provider order. These are genuinely provider-level —
@@ -96,6 +99,13 @@ pub struct AppConfig {
     /// `v`. Empty/absent in old configs via serde default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_notified_version: Option<String>,
+    /// Stable per-install device id sent as `anthropic-device-id` on the
+    /// claude.ai web-chat anchor (FEAT-2). Generated ONCE (via
+    /// `ensure_device_id` at startup) and persisted so every anchor reuses the
+    /// same id (claude.ai associates a device with the session). `None` until
+    /// first generated; absent in old configs via serde default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
 }
 
 /// serde `default = ...` helper: a bool field that defaults to `true` when the
@@ -118,6 +128,7 @@ impl Default for AppConfig {
             launch_at_login: false,
             auto_update_check: true,
             last_notified_version: None,
+            device_id: None,
         }
     }
 }
@@ -251,29 +262,53 @@ impl AppConfig {
         lifted
     }
 
-    /// One-time, idempotent schema migration. Runs only when the loaded
-    /// `schema_version` is below the current target. v0→v1 seeds the per-account
-    /// `accounts` map from the legacy per-provider fields lifted from the raw
-    /// JSON, never overwriting an account entry the user already has.
+    /// One-time, idempotent schema migration. Each step is gated on the loaded
+    /// `schema_version` so it runs exactly once: a v0 config runs every step in
+    /// order; a v1 config runs only v1→v2.
     fn migrate(&mut self, legacy_accounts: Vec<(String, AccountConfig)>) {
         if self.schema_version >= CURRENT_SCHEMA_VERSION {
             return;
         }
         // v0 → v1: per-provider name/window → per-account `accounts`.
-        for (service_id, legacy) in legacy_accounts {
-            // Don't clobber a real entry that somehow already exists; merge the
-            // legacy fields into any blank slot instead.
-            let entry = self.accounts.entry(service_id).or_default();
-            if entry.custom_name.is_none() {
-                entry.custom_name = legacy.custom_name;
+        if self.schema_version < 1 {
+            for (service_id, legacy) in legacy_accounts {
+                // Don't clobber a real entry that somehow already exists; merge
+                // the legacy fields into any blank slot instead.
+                let entry = self.accounts.entry(service_id).or_default();
+                if entry.custom_name.is_none() {
+                    entry.custom_name = legacy.custom_name;
+                }
+                if entry.primary_window.is_none() {
+                    entry.primary_window = legacy.primary_window;
+                }
             }
-            if entry.primary_window.is_none() {
-                entry.primary_window = legacy.primary_window;
-            }
+            // Drop any entry that ended up with no customization (defensive).
+            self.accounts.retain(|_, a| !a.is_empty());
         }
-        // Drop any entry that ended up with no customization (defensive).
-        self.accounts.retain(|_, a| !a.is_empty());
+        // v1 → v2: Claude is session-key only — the OAuth `auto:claude` anchor no
+        // longer exists, so drop any stale opt-in key (FEAT-2 / BUG-1). A real
+        // `stored:<id>` Claude anchor key is untouched.
+        if self.schema_version < 2 {
+            self.auto_anchor.remove("auto:claude");
+        }
         self.schema_version = CURRENT_SCHEMA_VERSION;
+    }
+
+    /// Ensure a stable per-install `device_id` exists, generating + persisting one
+    /// on first call (FEAT-2: the `anthropic-device-id` for the claude.ai web
+    /// anchor). Idempotent — returns the existing id unchanged. Returns the id so
+    /// the caller can use it immediately. A persist failure is non-fatal (the id
+    /// stays in memory for this run; logged, not surfaced).
+    pub fn ensure_device_id(&mut self) -> String {
+        if let Some(id) = self.device_id.as_ref().filter(|s| !s.trim().is_empty()) {
+            return id.clone();
+        }
+        let id = crate::providers::claude::web::uuid_v4();
+        self.device_id = Some(id.clone());
+        if let Err(e) = self.save() {
+            eprintln!("config: failed to persist device_id: {e}");
+        }
+        id
     }
 
     fn preserve_invalid(path: &Path, reason: &dyn std::fmt::Display, suffix: &str) {
@@ -564,21 +599,33 @@ mod tests {
         assert!(!cfg.providers[2].enabled, "per-provider enabled survives");
         assert_eq!(cfg.providers[2].notify_thresholds, vec![80, 100]);
 
-        // The migration bumps schema_version so it runs exactly once.
-        assert_eq!(cfg.schema_version, 1, "migration must bump schema_version");
+        // The migration bumps schema_version to the current target so it runs
+        // exactly once.
+        assert_eq!(
+            cfg.schema_version, CURRENT_SCHEMA_VERSION,
+            "migration must bump schema_version to current"
+        );
 
-        // auto_anchor is already correctly keyed per service_id and must
-        // round-trip from the v0 file unchanged.
+        // auto_anchor: the per-service_id keys round-trip from the v0 file
+        // unchanged, EXCEPT the now-defunct `auto:claude` (Claude is session-key
+        // only) which the v1→v2 step drops (FEAT-2 / BUG-1).
         assert_eq!(cfg.auto_anchor.get("stored:zai-1700000000"), Some(&true));
         assert_eq!(cfg.auto_anchor.get("auto:codex"), Some(&false));
+        assert_eq!(
+            cfg.auto_anchor.get("auto:claude"),
+            None,
+            "the defunct auto:claude anchor key must be dropped on migration"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A config already at schema_version 1 is NEVER re-migrated, even if a stray
-    /// legacy provider-level field is still present in the JSON: the user's
-    /// current `accounts` map wins and the legacy field is simply ignored (it has
-    /// no field on the typed struct). Guards against a double-migration clobber.
+    /// A config already at schema_version 1 must NEVER have its accounts map
+    /// re-seeded from a stray legacy provider-level field still present in the
+    /// JSON: the v0→v1 step is gated below schema_version 1, so the user's
+    /// current `accounts` map wins and the legacy field is ignored. (The later
+    /// v1→v2 step still runs, but only touches `auto_anchor`.) Guards against a
+    /// double-migration clobber of `accounts`.
     #[test]
     fn already_migrated_config_is_not_re_migrated() {
         let raw = serde_json::json!({
@@ -645,7 +692,79 @@ mod tests {
             Some("Weekly"),
             "but a blank field is filled from the legacy slot"
         );
-        assert_eq!(cfg.schema_version, 1);
+        assert_eq!(cfg.schema_version, CURRENT_SCHEMA_VERSION);
+    }
+
+    /// v1 → v2 (FEAT-2 / BUG-1): a config at schema_version 1 that still carries
+    /// the now-defunct `auto:claude` anchor opt-in has it dropped, while a real
+    /// `stored:<id>` Claude anchor and other providers' keys survive. The
+    /// accounts map is NOT re-seeded (v0→v1 step is gated below v1).
+    #[test]
+    fn migration_v1_to_v2_drops_defunct_auto_claude_anchor() {
+        let raw = serde_json::json!({
+            "schema_version": 1,
+            "poll_seconds": 300,
+            "providers": [
+                { "enabled": true, "notify_thresholds": [50], "sort_index": 0 },
+                { "enabled": true, "notify_thresholds": [50], "sort_index": 1 },
+                { "enabled": true, "notify_thresholds": [50], "sort_index": 2 },
+                { "enabled": true, "notify_thresholds": [50], "sort_index": 3 },
+                { "enabled": true, "notify_thresholds": [50], "sort_index": 4 },
+                { "enabled": true, "notify_thresholds": [50], "sort_index": 5 }
+            ],
+            "accounts": {},
+            "auto_anchor": {
+                "auto:claude": true,
+                "stored:claude-abc": true,
+                "auto:codex": false
+            }
+        });
+        let lifted = AppConfig::lift_legacy_provider_fields(&raw);
+        let mut cfg: AppConfig = serde_json::from_value(raw).unwrap();
+        cfg.migrate(lifted);
+
+        assert_eq!(
+            cfg.auto_anchor.get("auto:claude"),
+            None,
+            "defunct auto:claude must be dropped"
+        );
+        assert_eq!(
+            cfg.auto_anchor.get("stored:claude-abc"),
+            Some(&true),
+            "a real stored Claude anchor opt-in must survive"
+        );
+        assert_eq!(cfg.auto_anchor.get("auto:codex"), Some(&false));
+        assert_eq!(cfg.schema_version, CURRENT_SCHEMA_VERSION);
+    }
+
+    /// `ensure_device_id` generates a stable v4 id on first call and returns the
+    /// SAME id (no regeneration) on subsequent calls.
+    #[test]
+    fn ensure_device_id_generates_once_and_is_stable() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Redirect the persist target so the generated id doesn't touch the real
+        // config (ensure_device_id calls save()).
+        let dir = std::env::temp_dir().join(format!("ait_devid_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("AIT_CONFIG_PATH", dir.join("config.json"));
+
+        let mut cfg = AppConfig::default();
+        assert!(cfg.device_id.is_none());
+        let id1 = cfg.ensure_device_id();
+        assert!(!id1.is_empty());
+        assert_eq!(cfg.device_id.as_deref(), Some(id1.as_str()));
+        // v4 shape (8-4-4-4-12).
+        assert_eq!(
+            id1.split('-').map(|p| p.len()).collect::<Vec<_>>(),
+            vec![8, 4, 4, 4, 12]
+        );
+        // Idempotent: a second call returns the same id, no regeneration.
+        let id2 = cfg.ensure_device_id();
+        assert_eq!(id1, id2, "device_id must be stable across calls");
+
+        std::env::remove_var("AIT_CONFIG_PATH");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// ISOLATION GATE (D2.2): two distinct accounts of the SAME provider (Claude)

@@ -118,7 +118,11 @@ pub fn remove(id: &str) -> bool {
     accounts.retain(|c| c.id != id);
     let changed = accounts.len() != before;
     if changed {
-        let _ = persist_accounts(&accounts);
+        // Don't swallow a write failure (same silent-failure class as B-2): a
+        // removed account would otherwise reappear on the next load with no trace.
+        if let Err(e) = persist_accounts(&accounts) {
+            eprintln!("store: failed to persist after removing {id}: {e}");
+        }
     }
     changed
 }

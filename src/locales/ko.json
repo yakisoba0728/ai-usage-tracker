@@ -209,11 +209,13 @@
     "updatedSeconds": "{{count}}초 전 업데이트",
     "updatedMinutes": "{{m}}분 {{s}}초 전 업데이트",
     "updatedHours": "{{h}}시간 {{m}}분 전 업데이트",
+    "updatedDays": "{{d}}일 {{h}}시간 전 업데이트",
     "awaiting": "첫 업데이트 대기 중…",
     "agoJustNow": "방금",
     "agoSeconds": "{{count}}초 전",
     "agoMinutes": "{{m}}분 {{s}}초 전",
     "agoHours": "{{h}}시간 {{m}}분 전",
+    "agoDays": "{{d}}일 {{h}}시간 전",
     "reset": {
       "soon": "곧",
       "minutes": "{{m}}분",

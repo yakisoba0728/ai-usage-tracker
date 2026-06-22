@@ -122,6 +122,19 @@ describe("formatUpdatedAgo", () => {
       'time.agoSeconds:{"count":30}',
     );
   });
+  it("has a day tier past 24h instead of unbounded hours (F-8)", () => {
+    const ms = nowMs + 50 * 60 * 60 * 1000; // 50h later → 2d 2h
+    expect(formatUpdatedAgo(fetchedAt, ms, t)).toBe(
+      'time.updatedDays:{"d":2,"h":2}',
+    );
+    expect(formatUpdatedAgo(fetchedAt, ms, t, { prefix: false })).toBe(
+      'time.agoDays:{"d":2,"h":2}',
+    );
+    // Just under a day still uses the hours tier.
+    expect(formatUpdatedAgo(fetchedAt, nowMs + 23 * 60 * 60 * 1000, t)).toBe(
+      'time.updatedHours:{"h":23,"m":0}',
+    );
+  });
 });
 
 describe("formatServiceError", () => {

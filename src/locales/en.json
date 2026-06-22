@@ -209,11 +209,13 @@
     "updatedSeconds": "Updated {{count}}s ago",
     "updatedMinutes": "Updated {{m}}m {{s}}s ago",
     "updatedHours": "Updated {{h}}h {{m}}m ago",
+    "updatedDays": "Updated {{d}}d {{h}}h ago",
     "awaiting": "Awaiting first update…",
     "agoJustNow": "just now",
     "agoSeconds": "{{count}}s ago",
     "agoMinutes": "{{m}}m {{s}}s ago",
     "agoHours": "{{h}}h {{m}}m ago",
+    "agoDays": "{{d}}d {{h}}h ago",
     "reset": {
       "soon": "soon",
       "minutes": "{{m}}m",

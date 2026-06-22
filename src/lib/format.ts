@@ -110,8 +110,14 @@ export function formatUpdatedAgo(
   }
   const hours = Math.floor(mins / 60);
   const remM = mins % 60;
-  return t(prefix ? "time.updatedHours" : "time.agoHours", {
-    h: hours,
-    m: remM,
-  });
+  if (hours < 24) {
+    return t(prefix ? "time.updatedHours" : "time.agoHours", {
+      h: hours,
+      m: remM,
+    });
+  }
+  // Day tier so a long-stale timestamp doesn't render as unbounded hours (F-8).
+  const days = Math.floor(hours / 24);
+  const remH = hours % 24;
+  return t(prefix ? "time.updatedDays" : "time.agoDays", { d: days, h: remH });
 }

@@ -133,7 +133,10 @@ mod tests {
 
     #[test]
     fn normalize_session_key_extracts_bare_value() {
-        assert_eq!(normalize_session_key("sk-ant-sid01-raw"), "sk-ant-sid01-raw");
+        assert_eq!(
+            normalize_session_key("sk-ant-sid01-raw"),
+            "sk-ant-sid01-raw"
+        );
         assert_eq!(
             normalize_session_key("Cookie: other=1; sessionKey=sk-ant-sid01-c; x=2"),
             "sk-ant-sid01-c"

@@ -81,7 +81,12 @@ mod tests {
 
     #[test]
     fn manual_success_names_provider_and_account() {
-        let n = anchor_notification(Provider::Claude, Some("person@example.invalid"), true, false);
+        let n = anchor_notification(
+            Provider::Claude,
+            Some("person@example.invalid"),
+            true,
+            false,
+        );
         assert_eq!(n.title, "Anchor sent");
         assert_eq!(
             n.body,
@@ -120,7 +125,10 @@ mod tests {
         // A blank/whitespace account is treated as absent (no empty parens).
         let blank = anchor_notification(Provider::Claude, Some("   "), true, true);
         assert_eq!(blank.body, "Auto-anchored Claude.");
-        assert!(!blank.body.contains("("), "no empty parentheses for a blank account");
+        assert!(
+            !blank.body.contains("("),
+            "no empty parentheses for a blank account"
+        );
     }
 
     #[test]

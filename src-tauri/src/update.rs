@@ -183,7 +183,8 @@ pub async fn run_update_check(
     // Suppress a repeat notification for a release we've already flagged (only on
     // the automatic path; a manual check always re-notifies so the user gets
     // feedback from the button press).
-    let already_notified = cfg.read().await.last_notified_version.as_deref() == Some(&update.version);
+    let already_notified =
+        cfg.read().await.last_notified_version.as_deref() == Some(&update.version);
     if force || !already_notified {
         notify_update_available(app, &update);
     }
@@ -225,7 +226,10 @@ mod tests {
     #[test]
     fn newer_patch_minor_and_major_are_detected() {
         assert!(version_is_newer("0.1.1", "0.1.0"), "newer patch");
-        assert!(version_is_newer("0.2.0", "0.1.9"), "newer minor beats patch");
+        assert!(
+            version_is_newer("0.2.0", "0.1.9"),
+            "newer minor beats patch"
+        );
         assert!(version_is_newer("1.0.0", "0.9.9"), "newer major beats all");
     }
 
@@ -241,7 +245,10 @@ mod tests {
     fn leading_v_prefix_is_ignored_on_either_side() {
         assert!(version_is_newer("v0.2.0", "0.1.0"), "v-prefixed candidate");
         assert!(version_is_newer("0.2.0", "v0.1.0"), "v-prefixed current");
-        assert!(!version_is_newer("v0.1.0", "v0.1.0"), "both v-prefixed, equal");
+        assert!(
+            !version_is_newer("v0.1.0", "v0.1.0"),
+            "both v-prefixed, equal"
+        );
         assert!(version_is_newer("V1.0.0", "v0.9.0"), "uppercase V too");
     }
 
@@ -270,9 +277,18 @@ mod tests {
     fn malformed_segments_coerce_to_zero_and_dont_read_as_newer() {
         // A non-numeric / pre-release-ish tag must not crash and must not be
         // treated as artificially large. "1.2.0-rc1" → 1.2.0 (leading digits).
-        assert!(!version_is_newer("1.2.0-rc1", "1.2.0"), "rc suffix == base, not newer");
-        assert!(version_is_newer("1.3.0-rc1", "1.2.0"), "newer minor with rc suffix");
-        assert!(!version_is_newer("garbage", "0.1.0"), "wholly non-numeric → 0.0.0");
+        assert!(
+            !version_is_newer("1.2.0-rc1", "1.2.0"),
+            "rc suffix == base, not newer"
+        );
+        assert!(
+            version_is_newer("1.3.0-rc1", "1.2.0"),
+            "newer minor with rc suffix"
+        );
+        assert!(
+            !version_is_newer("garbage", "0.1.0"),
+            "wholly non-numeric → 0.0.0"
+        );
     }
 
     #[test]

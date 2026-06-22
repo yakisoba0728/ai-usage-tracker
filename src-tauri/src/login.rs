@@ -8,6 +8,9 @@
 //! (Cloudflare-blocked) and Cursor (no public client_id) are not supported
 //! here either.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, LazyLock, Mutex};
+
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 
@@ -35,6 +38,52 @@ struct LoginResult {
     ok: bool,
     label: Option<String>,
     error: Option<String>,
+}
+
+static DEVICE_ACTIVE: LazyLock<Mutex<Option<Arc<AtomicBool>>>> = LazyLock::new(|| Mutex::new(None));
+
+pub fn cancel() {
+    if let Ok(guard) = DEVICE_ACTIVE.lock() {
+        if let Some(flag) = guard.as_ref() {
+            flag.store(true, Ordering::SeqCst);
+        }
+    }
+}
+
+fn install_device_cancel_flag(new: Arc<AtomicBool>) {
+    if let Ok(mut guard) = DEVICE_ACTIVE.lock() {
+        if let Some(prev) = guard.take() {
+            prev.store(true, Ordering::SeqCst);
+        }
+        *guard = Some(new);
+    }
+}
+
+struct DeviceActiveGuard(Arc<AtomicBool>);
+
+impl Drop for DeviceActiveGuard {
+    fn drop(&mut self) {
+        if let Ok(mut guard) = DEVICE_ACTIVE.lock() {
+            if guard.as_ref().is_some_and(|cur| Arc::ptr_eq(cur, &self.0)) {
+                *guard = None;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+fn reset_device_cancel_for_test() {
+    if let Ok(mut guard) = DEVICE_ACTIVE.lock() {
+        *guard = None;
+    }
+}
+
+#[cfg(test)]
+fn device_cancel_is_clear_for_test() -> bool {
+    DEVICE_ACTIVE
+        .lock()
+        .map(|guard| guard.is_none())
+        .unwrap_or(false)
 }
 
 /// Request a device code and spawn the background poll. Returns what the UI
@@ -86,13 +135,19 @@ async fn read<T: DeserializeOwned>(resp: reqwest::Response, url: &str) -> Result
     if !status.is_success() {
         return Err(format!(
             "{url} ({status}): {}",
-            text.chars().take(200).collect::<String>()
+            crate::util::scrub_sensitive_text(&text)
+                .chars()
+                .take(200)
+                .collect::<String>()
         ));
     }
     serde_json::from_str(&text).map_err(|e| {
         format!(
             "parse {url}: {e} (body was: {})",
-            text.chars().take(200).collect::<String>()
+            crate::util::scrub_sensitive_text(&text)
+                .chars()
+                .take(200)
+                .collect::<String>()
         )
     })
 }
@@ -170,8 +225,11 @@ async fn start_codex(
         expires_in: 900,
     };
     let app2 = app.clone();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    install_device_cancel_flag(cancelled.clone());
     tauri::async_runtime::spawn(async move {
-        let res = poll_codex(http, r.device_auth_id, r.user_code, interval).await;
+        let _active = DeviceActiveGuard(cancelled.clone());
+        let res = poll_codex(http, r.device_auth_id, r.user_code, interval, cancelled).await;
         finish(&app2, provider, res);
     });
     Ok(info)
@@ -182,10 +240,12 @@ async fn poll_codex(
     device_auth_id: String,
     user_code: String,
     interval: u64,
+    cancelled: Arc<AtomicBool>,
 ) -> Result<StoredCredential, String> {
     let api = format!("{CODEX_ISSUER}/api/accounts");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(POLL_MAX_SECS);
     let auth = loop {
+        check_cancelled(&cancelled)?;
         let body = serde_json::json!({ "device_auth_id": device_auth_id, "user_code": user_code });
         let resp = http
             .post(format!("{api}/deviceauth/token"))
@@ -201,7 +261,7 @@ async fn poll_codex(
         if (status.as_u16() == 403 || status.as_u16() == 404)
             && std::time::Instant::now() < deadline
         {
-            tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
+            sleep_or_cancel(interval, &cancelled).await?;
             continue;
         }
         return Err(format!("device auth ended ({status})"));
@@ -301,8 +361,11 @@ async fn start_github(
         expires_in: 900,
     };
     let app2 = app.clone();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    install_device_cancel_flag(cancelled.clone());
     tauri::async_runtime::spawn(async move {
-        let res = poll_github(http, r.device_code, r.user_code, interval).await;
+        let _active = DeviceActiveGuard(cancelled.clone());
+        let res = poll_github(http, r.device_code, r.user_code, interval, cancelled).await;
         finish(&app2, provider, res);
     });
     Ok(info)
@@ -313,9 +376,11 @@ async fn poll_github(
     device_code: String,
     _user_code: String,
     interval: u64,
+    cancelled: Arc<AtomicBool>,
 ) -> Result<StoredCredential, String> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(POLL_MAX_SECS);
     let token = loop {
+        check_cancelled(&cancelled)?;
         let resp = http
             .post("https://github.com/login/oauth/access_token")
             .form(&[
@@ -347,7 +412,7 @@ async fn poll_github(
                 } else {
                     0
                 };
-                tokio::time::sleep(std::time::Duration::from_secs(interval + extra)).await;
+                sleep_or_cancel(interval + extra, &cancelled).await?;
                 continue;
             }
             Some(e) => return Err(format!("github device: {e}")),
@@ -384,6 +449,22 @@ async fn poll_github(
     })
 }
 
+fn check_cancelled(cancelled: &AtomicBool) -> Result<(), String> {
+    if cancelled.load(Ordering::SeqCst) {
+        Err("cancelled".into())
+    } else {
+        Ok(())
+    }
+}
+
+async fn sleep_or_cancel(secs: u64, cancelled: &AtomicBool) -> Result<(), String> {
+    for _ in 0..secs.max(1) {
+        check_cancelled(cancelled)?;
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    check_cancelled(cancelled)
+}
+
 // Gemini used to live here as a device-code flow, but Google's installed-app
 // client_id (the one gemini-cli ships) rejects the device-code grant with
 // `invalid_client: Invalid client type`. Gemini now uses loopback OAuth in
@@ -412,13 +493,13 @@ mod tests {
     fn codex_credential_sets_expiry_from_access_jwt_and_extracts_identity() {
         let access = fake_jwt(serde_json::json!({ "exp": 1_700_000_000_i64 }));
         let id_token = fake_jwt(serde_json::json!({
-            "email": "u@x.com",
+            "email": "codex-login@example.invalid",
             "https://api.openai.com/auth": { "chatgpt_account_id": "acct-9" },
         }));
         let cred = codex_credential(access, Some("rt".into()), Some(id_token));
         // exp seconds → epoch ms (re-enables the proactive-refresh gate — B-4).
         assert_eq!(cred.expires_at, 1_700_000_000_000);
-        assert_eq!(cred.label, "u@x.com");
+        assert_eq!(cred.label, "codex-login@example.invalid");
         assert_eq!(cred.account_id.as_deref(), Some("acct-9"));
         assert_eq!(cred.refresh_token.as_deref(), Some("rt"));
         assert_eq!(cred.provider, Provider::Codex);
@@ -444,5 +525,44 @@ mod tests {
                 "grant_type=authorization_code&code=auth-code&client_id={CODEX_CLIENT_ID}&redirect_uri=https%3A%2F%2Fauth.openai.com%2Fdeviceauth%2Fcallback&code_verifier=verifier"
             )
         );
+    }
+
+    static DEVICE_ACTIVE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn device_cancel_flag_lifecycle() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let _g = DEVICE_ACTIVE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        reset_device_cancel_for_test();
+
+        let first = Arc::new(AtomicBool::new(false));
+        install_device_cancel_flag(first.clone());
+        let second = Arc::new(AtomicBool::new(false));
+        install_device_cancel_flag(second.clone());
+        assert!(
+            first.load(Ordering::SeqCst),
+            "starting a new device-code login cancels the previous poll"
+        );
+        assert!(!second.load(Ordering::SeqCst));
+
+        cancel();
+        assert!(
+            second.load(Ordering::SeqCst),
+            "cancel_login must cancel the active device-code poll"
+        );
+
+        let owned = Arc::new(AtomicBool::new(false));
+        install_device_cancel_flag(owned.clone());
+        drop(DeviceActiveGuard(owned));
+        assert!(
+            device_cancel_is_clear_for_test(),
+            "the owning poll clears the active device-code flag on exit"
+        );
+
+        reset_device_cancel_for_test();
     }
 }

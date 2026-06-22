@@ -144,6 +144,7 @@ function DetailPanelContent({
   const summary = buildInspectorSummary(service, config);
   const accountId = storedAccountId(service);
   const allWindows = allServiceWindows(service);
+  const tabBaseId = `detail-${service.id.replace(/[^A-Za-z0-9_-]/g, "-")}`;
 
   const moreRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -194,6 +195,46 @@ function DetailPanelContent({
         triggerRef.current?.focus();
         break;
     }
+  }
+
+  function onTabsKeyDown(e: KeyboardEvent<HTMLDivElement>) {
+    const tabs = Array.from(
+      e.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'),
+    );
+    if (tabs.length === 0) return;
+    const idx = tabs.findIndex((el) => el === document.activeElement);
+    let nextIndex: number;
+    switch (e.key) {
+      case "ArrowRight":
+        nextIndex = (idx + 1) % tabs.length;
+        break;
+      case "ArrowLeft":
+        nextIndex = (idx - 1 + tabs.length) % tabs.length;
+        break;
+      case "Home":
+        nextIndex = 0;
+        break;
+      case "End":
+        nextIndex = tabs.length - 1;
+        break;
+      default:
+        return;
+    }
+    e.preventDefault();
+    const next = tabs[nextIndex];
+    next?.focus();
+    const nextTab = next?.dataset.tabId as InspectorTab | undefined;
+    if (nextTab) onTabChange(nextTab);
+  }
+
+  function openAddFromMenu() {
+    onMoreOpenChange(false);
+    onOpenAdd();
+  }
+
+  function openSettingsFromMenu() {
+    onMoreOpenChange(false);
+    onOpenSettings();
   }
 
   return (
@@ -253,10 +294,10 @@ function DetailPanelContent({
                 <MenuItem icon={<RefreshCw className={refreshing ? "size-4 animate-spin" : "size-4"} />} onClick={onRefresh}>
                   {t("detail.menu.refresh")}
                 </MenuItem>
-                <MenuItem icon={<Cloud className="size-4" />} onClick={onOpenAdd}>
+                <MenuItem icon={<Cloud className="size-4" />} onClick={openAddFromMenu}>
                   {t("detail.menu.reauth")}
                 </MenuItem>
-                <MenuItem icon={<Settings className="size-4" />} onClick={onOpenSettings}>
+                <MenuItem icon={<Settings className="size-4" />} onClick={openSettingsFromMenu}>
                   {t("detail.menu.settings")}
                 </MenuItem>
                 <MenuItem
@@ -272,11 +313,22 @@ function DetailPanelContent({
           </div>
         </div>
 
-        <div className="mt-5 flex gap-5 overflow-x-auto">
+        <div
+          role="tablist"
+          aria-label={t("detail.srDesc")}
+          onKeyDown={onTabsKeyDown}
+          className="mt-5 flex gap-5 overflow-x-auto"
+        >
           {INSPECTOR_TABS.map((id) => (
             <button
               key={id}
               type="button"
+              id={`${tabBaseId}-tab-${id}`}
+              role="tab"
+              aria-selected={tab === id}
+              aria-controls={`${tabBaseId}-panel-${id}`}
+              tabIndex={tab === id ? 0 : -1}
+              data-tab-id={id}
               onClick={() => onTabChange(id)}
               className={cn(
                 "border-b-2 pb-3 text-sm font-medium transition-colors",
@@ -291,7 +343,12 @@ function DetailPanelContent({
         </div>
       </div>
 
-      <div className="px-5 py-5">
+      <div
+        id={`${tabBaseId}-panel-${tab}`}
+        role="tabpanel"
+        aria-labelledby={`${tabBaseId}-tab-${tab}`}
+        className="px-5 py-5"
+      >
         {tab === "limits" && (
           <LimitsTab windows={allWindows} nowMs={nowMs} />
         )}

@@ -108,7 +108,10 @@ fn sanitize_error_body(status: u16, body: &str) -> String {
             _ => "unexpected response".to_string(),
         }
     } else {
-        body.chars().take(200).collect()
+        crate::util::scrub_sensitive_text(body)
+            .chars()
+            .take(200)
+            .collect()
     }
 }
 
@@ -152,6 +155,32 @@ mod tests {
         );
         let long = "x".repeat(500);
         assert_eq!(sanitize_error_body(400, &long).chars().count(), 200);
+    }
+
+    #[test]
+    fn redacts_sensitive_values_from_non_html_bodies() {
+        let body = r#"{"error":"bad token sk-ant-secret for person@example.invalid","access_token":"gho_secret","sessionKey":"sk-ant-session"}"#;
+        let sanitized = sanitize_error_body(400, body);
+        assert!(
+            !sanitized.contains("person@example.invalid"),
+            "email leaked: {sanitized}"
+        );
+        assert!(
+            !sanitized.contains("sk-ant-secret"),
+            "token leaked: {sanitized}"
+        );
+        assert!(
+            !sanitized.contains("gho_secret"),
+            "access token leaked: {sanitized}"
+        );
+        assert!(
+            !sanitized.contains("sk-ant-session"),
+            "session key leaked: {sanitized}"
+        );
+        assert!(
+            sanitized.contains("[redacted]"),
+            "scrubbed body should keep context with redaction markers: {sanitized}"
+        );
     }
 
     // ── Live HTTP behavior against a local mock server (shared by every

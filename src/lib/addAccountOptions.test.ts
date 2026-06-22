@@ -1,8 +1,19 @@
 import { describe, expect, it } from "vitest";
 
-import { authOptionsForProvider } from "@/lib/addAccountOptions";
+import {
+  ADD_ACCOUNT_PROVIDERS,
+  authOptionsForProvider,
+} from "@/lib/addAccountOptions";
+import { PROVIDER_ORDER } from "@/lib/providers";
 
 describe("add account options", () => {
+  it("lists every provider with at least one add-account option", () => {
+    expect(ADD_ACCOUNT_PROVIDERS).toEqual(PROVIDER_ORDER);
+    for (const provider of ADD_ACCOUNT_PROVIDERS) {
+      expect(authOptionsForProvider(provider).length).toBeGreaterThan(0);
+    }
+  });
+
   it("shows only supported add methods for each provider", () => {
     expect(authOptionsForProvider("claude")).toEqual([
       "session-key",

@@ -172,7 +172,7 @@ fn window_label(e: &LimitEntry, slot: Slot) -> Option<String> {
 fn entry_to_window(e: &LimitEntry, slot: Slot) -> Option<LimitWindow> {
     let label = window_label(e, slot)?;
     let limit = e.usage.or(e.total);
-    let used = e.current_value.or_else(|| match (e.usage, e.remaining) {
+    let used = e.current_value.or_else(|| match (limit, e.remaining) {
         (Some(u), Some(r)) => Some((u - r).max(0.0)),
         _ => None,
     });
@@ -183,7 +183,10 @@ fn entry_to_window(e: &LimitEntry, slot: Slot) -> Option<LimitWindow> {
             (Some(u), Some(l)) if l > 0.0 => Some((u / l * 100.0) as f32),
             _ => None,
         });
-    let resets_at = e.next_reset_time.filter(|&ms| ms > 0).map(|ms| ms / 1000);
+    let resets_at = e.next_reset_time.filter(|&t| t > 0).map(normalize_epoch_ms);
+    if used_percent.is_none() && resets_at.is_none() && used.is_none() && limit.is_none() {
+        return None;
+    }
     Some(LimitWindow {
         label,
         used_percent,
@@ -275,7 +278,7 @@ fn normalize_epoch_ms(n: i64) -> i64 {
 /// Pure: build the 100%-used window surfaced when the plan is exhausted.
 fn exhausted_window(code: i64, data: Option<&Value>) -> LimitWindow {
     let label = if code == CODE_PERIOD_EXHAUSTED {
-        "Weekly"
+        "Period"
     } else {
         "5-hour"
     };
@@ -493,6 +496,55 @@ mod tests {
     }
 
     #[test]
+    fn used_derives_from_total_minus_remaining_when_usage_absent() {
+        let e = LimitEntry {
+            limit_type: Some("Weekly Token".into()),
+            raw_type: Some("TOKENS_LIMIT".into()),
+            unit: Some(6),
+            usage: None,
+            total: Some(1000.0),
+            current_value: None,
+            remaining: Some(250.0),
+            percentage: None,
+            ..Default::default()
+        };
+        let lw = entry_to_window(&e, classify(&e)).unwrap();
+        assert_eq!(lw.limit, Some(1000.0));
+        assert_eq!(lw.used, Some(750.0));
+        assert_eq!(lw.used_percent, Some(75.0));
+    }
+
+    #[test]
+    fn next_reset_time_accepts_seconds_and_milliseconds() {
+        let mut e = LimitEntry {
+            limit_type: Some("5h Token".into()),
+            raw_type: Some("TOKENS_LIMIT".into()),
+            unit: Some(3),
+            usage: Some(100.0),
+            current_value: Some(25.0),
+            next_reset_time: Some(1_781_897_705),
+            ..Default::default()
+        };
+        let seconds = entry_to_window(&e, classify(&e)).unwrap();
+        assert_eq!(seconds.resets_at, Some(1_781_897_705));
+
+        e.next_reset_time = Some(1_781_897_705_337);
+        let millis = entry_to_window(&e, classify(&e)).unwrap();
+        assert_eq!(millis.resets_at, Some(1_781_897_705));
+    }
+
+    #[test]
+    fn blank_limit_entry_is_not_emitted() {
+        let e = LimitEntry {
+            limit_type: Some("5h Token".into()),
+            raw_type: Some("TOKENS_LIMIT".into()),
+            unit: Some(3),
+            ..Default::default()
+        };
+        assert!(entry_to_window(&e, classify(&e)).is_none());
+    }
+
+    #[test]
     fn exhausted_1308_window_carries_next_flush_time() {
         let flush_ms: i64 = 1_712_956_800_000;
         let raw = serde_json::json!({
@@ -512,7 +564,7 @@ mod tests {
             "data": { "next_flush_time": "2024-04-12 00:00:00" }
         });
         let lw = exhausted_window(1310, raw.get("data"));
-        assert_eq!(lw.label, "Weekly");
+        assert_eq!(lw.label, "Period");
         assert_eq!(lw.used_percent, Some(100.0));
         assert_eq!(lw.resets_at, Some(1_712_880_000)); // 2024-04-12 00:00:00 UTC
     }

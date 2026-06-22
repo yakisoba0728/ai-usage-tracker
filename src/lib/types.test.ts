@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type {
   AppConfig,
   LimitWindow,
+  ProviderLoadingPayload,
   ServiceError,
   ServiceUsage,
 } from "@/lib/types";
@@ -29,11 +30,10 @@ describe("IPC contract shape", () => {
       provider: "claude",
       connected: true,
       plan: "Max",
-      account: "a@b.c",
+      account: "person@example.invalid",
       error: null,
       windows: [window],
       detail_windows: [],
-      raw_response: "{}",
     };
 
     expect(Object.keys(service).sort()).toEqual([
@@ -44,7 +44,6 @@ describe("IPC contract shape", () => {
       "id",
       "plan",
       "provider",
-      "raw_response",
       "source",
       "windows",
     ]);
@@ -89,6 +88,15 @@ describe("IPC contract shape", () => {
     };
     expect(Object.keys(config).sort()).toEqual(["auto_anchor", "poll_seconds", "providers"]);
     expect(config.providers).toHaveLength(6);
+  });
+
+  it("ProviderLoadingPayload targets one service id, not every provider card", () => {
+    const loading: ProviderLoadingPayload = {
+      id: "stored:claude-work",
+      provider: "claude",
+    };
+
+    expect(Object.keys(loading).sort()).toEqual(["id", "provider"]);
   });
 });
 

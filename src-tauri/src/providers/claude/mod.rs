@@ -16,6 +16,10 @@ mod web;
 const API_BASE: &str = "https://api.anthropic.com";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
+pub(crate) fn normalize_session_key(input: &str) -> String {
+    web::session_key_cookie_value(input)
+}
+
 struct ResolvedCreds {
     access_token: String,
     refresh_token: Option<String>,
@@ -267,6 +271,8 @@ const CLAUDE_TOKEN_URL_FALLBACK: &str = "https://api.anthropic.com/v1/oauth/toke
 const CLAUDE_OAUTH_SCOPES: &str =
     "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
 
+static AUTO_REFRESH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[derive(serde::Deserialize)]
 struct Refreshed {
     access_token: String,
@@ -405,6 +411,83 @@ fn write_back(
     keychain_write::write_creds(&s)
 }
 
+fn auto_creds_expired(creds: &ResolvedCreds, now_ms: i64) -> bool {
+    creds.expires_at > 0 && creds.expires_at < now_ms
+}
+
+async fn refresh_auto_if_expired(
+    http: &reqwest::Client,
+    creds: ResolvedCreds,
+) -> Result<ResolvedCreds, ProviderError> {
+    if !auto_creds_expired(&creds, chrono::Utc::now().timestamp_millis()) {
+        return Ok(creds);
+    }
+
+    let _guard = AUTO_REFRESH_LOCK.lock().await;
+    let blob = crate::secrets::read_claude_creds_json()?;
+    let mut latest = resolve_creds(blob.clone())?;
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    if !auto_creds_expired(&latest, now_ms) {
+        return Ok(latest);
+    }
+    refresh_auto_locked(http, &blob, &mut latest, now_ms).await
+}
+
+async fn refresh_auto_after_usage_auth_failure(
+    http: &reqwest::Client,
+    previous_access_token: &str,
+) -> Result<ResolvedCreds, ProviderError> {
+    let _guard = AUTO_REFRESH_LOCK.lock().await;
+    let blob = crate::secrets::read_claude_creds_json()?;
+    let mut latest = resolve_creds(blob.clone())?;
+    if latest.access_token != previous_access_token {
+        return Ok(latest);
+    }
+    refresh_auto_locked(
+        http,
+        &blob,
+        &mut latest,
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .await
+}
+
+async fn refresh_auto_locked(
+    http: &reqwest::Client,
+    blob: &serde_json::Value,
+    creds: &mut ResolvedCreds,
+    now_ms: i64,
+) -> Result<ResolvedCreds, ProviderError> {
+    let rt = creds
+        .refresh_token
+        .clone()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            ProviderError::Expired("Claude Code token expired — run `claude` to refresh.".into())
+        })?;
+    let fresh = refresh_oauth(http, &rt).await.map_err(|_| {
+        ProviderError::Expired(
+            "Claude Code token expired and refresh failed — run `claude` to re-authenticate."
+                .into(),
+        )
+    })?;
+    let exp = fresh
+        .expires_in
+        .map(|s| now_ms + (s as i64) * 1000)
+        .unwrap_or(0);
+    write_back(blob, &fresh.access_token, &fresh.refresh_token, exp)?;
+    creds.access_token = fresh.access_token;
+    creds.refresh_token = Some(fresh.refresh_token);
+    creds.expires_at = exp;
+    Ok(ResolvedCreds {
+        access_token: creds.access_token.clone(),
+        refresh_token: creds.refresh_token.clone(),
+        expires_at: creds.expires_at,
+        subscription_type: creds.subscription_type.clone(),
+        rate_limit_tier: creds.rate_limit_tier.clone(),
+    })
+}
+
 #[async_trait]
 impl crate::providers::ProviderApi for ClaudeProvider {
     fn key(&self) -> Provider {
@@ -413,58 +496,21 @@ impl crate::providers::ProviderApi for ClaudeProvider {
 
     async fn fetch(&self) -> Result<ServiceUsage, ProviderError> {
         let blob = crate::secrets::read_claude_creds_json()?;
-        let mut creds = resolve_creds(blob.clone())?;
-        let now_ms = chrono::Utc::now().timestamp_millis();
+        let creds = resolve_creds(blob.clone())?;
         // Auto-refresh when expired. The refresh rotates tokens and writes the
         // new pair back to the keychain so the CLI and app stay in sync.
-        if creds.expires_at > 0 && creds.expires_at < now_ms {
-            let rt = creds.refresh_token.clone().filter(|s| !s.is_empty());
-            if let Some(rt) = rt {
-                match refresh_oauth(&self.http, &rt).await {
-                    Ok(fresh) => {
-                        let exp = fresh
-                            .expires_in
-                            .map(|s| now_ms + (s as i64) * 1000)
-                            .unwrap_or(0);
-                        if let Err(e) =
-                            write_back(&blob, &fresh.access_token, &fresh.refresh_token, exp)
-                        {
-                            eprintln!("claude: failed to persist refreshed token: {e}");
-                        }
-                        creds.access_token = fresh.access_token;
-                        creds.refresh_token = Some(fresh.refresh_token);
-                    }
-                    Err(_) => {
-                        return Err(ProviderError::Expired(
-                            "Claude Code token expired and refresh failed — run `claude` to re-authenticate.".into(),
-                        ));
-                    }
-                }
-            } else {
-                return Err(ProviderError::Expired(
-                    "Claude Code token expired — run `claude` to refresh.".into(),
-                ));
-            }
-        }
+        let creds = refresh_auto_if_expired(&self.http, creds).await?;
         // Fetch usage. Only refresh on an auth failure; a 429 is a real quota
         // signal and must not burn Claude Code's rotating refresh token.
         let plan = format_plan(&creds.rate_limit_tier, &creds.subscription_type);
         match fetch_with(&self.http, &creds.access_token, plan.clone(), None).await {
-            Err(err @ ProviderError::Status { status, .. })
+            Err(ProviderError::Status { status, .. })
                 if should_refresh_local_cli_after_usage_status(status) =>
             {
-                let Some(rt) = creds.refresh_token.clone().filter(|s| !s.is_empty()) else {
-                    return Err(err);
-                };
-                let fresh = refresh_oauth(&self.http, &rt).await?;
-                let exp = fresh
-                    .expires_in
-                    .map(|s| now_ms + (s as i64) * 1000)
-                    .unwrap_or(0);
-                if let Err(e) = write_back(&blob, &fresh.access_token, &fresh.refresh_token, exp) {
-                    eprintln!("claude: failed to persist refreshed token: {e}");
-                }
-                fetch_with(&self.http, &fresh.access_token, plan, None).await
+                let refreshed =
+                    refresh_auto_after_usage_auth_failure(&self.http, &creds.access_token).await?;
+                let plan = format_plan(&refreshed.rate_limit_tier, &refreshed.subscription_type);
+                fetch_with(&self.http, &refreshed.access_token, plan, None).await
             }
             other => other,
         }
@@ -652,7 +698,7 @@ mod tests {
         let cred = crate::store::StoredCredential {
             id: "id1".into(),
             provider: crate::model::Provider::Claude,
-            label: "user@example.com".into(),
+            label: "claude-stored@example.invalid".into(),
             access_token: "old-access".into(),
             refresh_token: Some("old-refresh".into()),
             expires_at: 1000,
@@ -672,7 +718,7 @@ mod tests {
         // preserved
         assert_eq!(out.id, "id1");
         assert_eq!(out.provider, crate::model::Provider::Claude);
-        assert_eq!(out.label, "user@example.com");
+        assert_eq!(out.label, "claude-stored@example.invalid");
         assert_eq!(out.id_token.as_deref(), Some("idt"));
         assert_eq!(out.account_id.as_deref(), Some("acct"));
     }

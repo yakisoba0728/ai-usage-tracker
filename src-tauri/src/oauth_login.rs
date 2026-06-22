@@ -262,10 +262,13 @@ fn run_server(server: Server, ctx: RunCtx) {
                         continue;
                     }
                     CallbackAction::Error(err) => {
-                        let _ = req.respond(
-                            Response::from_string(format!("OAuth error: {err}"))
-                                .with_status_code(400),
-                        );
+                        let mut response =
+                            Response::from_string(error_html(&format!("OAuth error: {err}")))
+                                .with_status_code(400);
+                        for header in html_security_headers() {
+                            response = response.with_header(header);
+                        }
+                        let _ = req.respond(response);
                         return emit_err(&app, provider, format!("provider error: {err}"));
                     }
                     CallbackAction::MissingCode => {
@@ -274,15 +277,11 @@ fn run_server(server: Server, ctx: RunCtx) {
                         continue;
                     }
                     CallbackAction::Code(code) => {
-                        let _ = req.respond(
-                            Response::from_string(SUCCESS_HTML).with_header(
-                                tiny_http::Header::from_bytes(
-                                    b"Content-Type".as_ref(),
-                                    b"text/html; charset=utf-8".as_ref(),
-                                )
-                                .unwrap(),
-                            ),
-                        );
+                        let mut response = Response::from_string(success_html());
+                        for header in html_security_headers() {
+                            response = response.with_header(header);
+                        }
+                        let _ = req.respond(response);
                         got_code = Some(code);
                     }
                 }
@@ -304,7 +303,10 @@ fn run_server(server: Server, ctx: RunCtx) {
         None,
     )) {
         Ok(t) => {
-            let cred = build_credential(provider, &t);
+            let cred = match build_credential(provider, &t) {
+                Ok(cred) => cred,
+                Err(e) => return emit_err(&app, provider, e),
+            };
             let label = cred.label.clone();
             match store::add(cred) {
                 Ok(_) => {
@@ -359,19 +361,24 @@ async fn exchange(
     if !status.is_success() {
         return Err(format!(
             "{token_url} ({status}): {}",
-            text.chars().take(200).collect::<String>()
+            crate::util::scrub_sensitive_text(&text)
+                .chars()
+                .take(200)
+                .collect::<String>()
         ));
     }
     serde_json::from_str::<Value>(&text).map_err(|e| format!("parse: {e}"))
 }
 
-fn build_credential(provider: Provider, tokens: &Value) -> StoredCredential {
+fn build_credential(provider: Provider, tokens: &Value) -> Result<StoredCredential, String> {
     let access_token = tokens
         .get("access_token")
         .or_else(|| tokens.get("accessToken"))
         .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .ok_or_else(|| "OAuth token response missing access_token".to_string())?;
     let refresh_token = tokens
         .get("refresh_token")
         .or_else(|| tokens.get("refreshToken"))
@@ -402,7 +409,7 @@ fn build_credential(provider: Provider, tokens: &Value) -> StoredCredential {
         _ => (format!("{provider:?} account"), None),
     };
 
-    StoredCredential {
+    Ok(StoredCredential {
         id: String::new(),
         provider,
         label,
@@ -411,7 +418,7 @@ fn build_credential(provider: Provider, tokens: &Value) -> StoredCredential {
         expires_at,
         id_token,
         account_id,
-    }
+    })
 }
 
 fn build_authorize_url(
@@ -468,10 +475,46 @@ fn emit_err(app: &AppHandle, provider: Provider, msg: String) {
     );
 }
 
-const SUCCESS_HTML: &str = r#"<!DOCTYPE html><html><head><meta charset="utf-8"><title>Logged in</title>
+fn html_security_headers() -> Vec<tiny_http::Header> {
+    [
+        ("Content-Type", "text/html; charset=utf-8"),
+        ("Cache-Control", "no-store"),
+        ("Pragma", "no-cache"),
+        ("Referrer-Policy", "no-referrer"),
+    ]
+    .into_iter()
+    .map(|(name, value)| tiny_http::Header::from_bytes(name.as_bytes(), value.as_bytes()).unwrap())
+    .collect()
+}
+
+fn success_html() -> String {
+    r#"<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="referrer" content="no-referrer"><title>Logged in</title>
 <style>body{font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#111827;color:#e5e7eb}
-.c{text-align:center}.ck{font-size:48px}</style></head>
-<body><div class="c"><div class="ck">✓</div><h1>Logged in</h1><p>You can close this tab and return to AI Usage Tracker.</p></div></body></html>"#;
+.c{text-align:center}.ck{font-size:48px}</style><script>history.replaceState(null,"",location.pathname);</script></head>
+<body><div class="c"><div class="ck">✓</div><h1>Logged in</h1><p>You can close this tab and return to AI Usage Tracker.</p></div></body></html>"#.to_string()
+}
+
+fn error_html(message: &str) -> String {
+    let escaped = escape_html(message);
+    format!(
+        r#"<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="referrer" content="no-referrer"><title>Login failed</title>
+<style>body{{font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#111827;color:#e5e7eb}}.c{{max-width:640px;text-align:center}}</style><script>history.replaceState(null,"",location.pathname);</script></head>
+<body><div class="c"><h1>Login failed</h1><p>{escaped}</p></div></body></html>"#
+    )
+}
+
+fn escape_html(s: &str) -> String {
+    s.chars()
+        .flat_map(|c| match c {
+            '&' => "&amp;".chars().collect::<Vec<_>>(),
+            '<' => "&lt;".chars().collect::<Vec<_>>(),
+            '>' => "&gt;".chars().collect::<Vec<_>>(),
+            '"' => "&quot;".chars().collect::<Vec<_>>(),
+            '\'' => "&#39;".chars().collect::<Vec<_>>(),
+            _ => vec![c],
+        })
+        .collect()
+}
 
 #[cfg(test)]
 mod tests {
@@ -523,6 +566,40 @@ mod tests {
             classify_callback(&params(&[("state", "S")]), "S"),
             CallbackAction::MissingCode
         );
+    }
+
+    #[test]
+    fn oauth_success_html_scrubs_query_and_blocks_referrers() {
+        let html = success_html();
+        assert!(
+            html.contains("history.replaceState"),
+            "query scrub missing: {html}"
+        );
+        assert!(html.contains("referrer") && html.contains("no-referrer"));
+        assert!(html.contains("Logged in"));
+    }
+
+    #[test]
+    fn oauth_error_html_escapes_provider_error() {
+        let html = error_html(r#"bad <script>alert("x")</script> & retry"#);
+        assert!(html.contains("&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;"));
+        assert!(html.contains("&amp; retry"));
+        assert!(!html.contains("<script>alert"));
+    }
+
+    #[test]
+    fn oauth_html_security_headers_disable_storage_and_referrers() {
+        let headers = html_security_headers();
+        let joined = headers
+            .iter()
+            .map(|h| format!("{}: {}", h.field, h.value))
+            .collect::<Vec<_>>()
+            .join("\n")
+            .to_ascii_lowercase();
+        assert!(joined.contains("cache-control: no-store"));
+        assert!(joined.contains("pragma: no-cache"));
+        assert!(joined.contains("referrer-policy: no-referrer"));
+        assert!(joined.contains("content-type: text/html; charset=utf-8"));
     }
 
     #[test]
@@ -580,7 +657,7 @@ mod tests {
     #[test]
     fn build_credential_extracts_codex_email_and_account_id() {
         let id_token = fake_jwt(serde_json::json!({
-            "email": "user@example.com",
+            "email": "codex-oauth@example.invalid",
             "https://api.openai.com/auth": { "chatgpt_account_id": "acct-123" },
         }));
         let tokens = serde_json::json!({
@@ -589,20 +666,32 @@ mod tests {
             "id_token": id_token,
             "expires_in": 3600,
         });
-        let cred = build_credential(Provider::Codex, &tokens);
+        let cred = build_credential(Provider::Codex, &tokens).unwrap();
         assert_eq!(cred.access_token, "at");
         assert_eq!(cred.refresh_token.as_deref(), Some("rt"));
-        assert_eq!(cred.label, "user@example.com");
+        assert_eq!(cred.label, "codex-oauth@example.invalid");
         assert_eq!(cred.account_id.as_deref(), Some("acct-123"));
         assert!(cred.expires_at > 0, "expires_in should set expires_at");
     }
 
     #[test]
+    fn build_credential_rejects_missing_access_token() {
+        let tokens = serde_json::json!({
+            "refresh_token": "rt",
+            "expires_in": 3600,
+        });
+
+        let err = build_credential(Provider::Codex, &tokens).unwrap_err();
+
+        assert!(err.contains("access_token"));
+    }
+
+    #[test]
     fn build_credential_uses_gemini_email_and_no_account_id() {
-        let id_token = fake_jwt(serde_json::json!({ "email": "me@gmail.com" }));
+        let id_token = fake_jwt(serde_json::json!({ "email": "gemini-oauth@example.invalid" }));
         let tokens = serde_json::json!({ "access_token": "g-at", "id_token": id_token });
-        let cred = build_credential(Provider::Gemini, &tokens);
-        assert_eq!(cred.label, "me@gmail.com");
+        let cred = build_credential(Provider::Gemini, &tokens).unwrap();
+        assert_eq!(cred.label, "gemini-oauth@example.invalid");
         assert_eq!(cred.account_id, None);
         assert_eq!(cred.expires_at, 0, "no expires_in → unknown expiry");
     }
@@ -610,7 +699,7 @@ mod tests {
     #[test]
     fn build_credential_falls_back_to_generic_label_without_id_token() {
         let tokens = serde_json::json!({ "access_token": "at" });
-        let cred = build_credential(Provider::Codex, &tokens);
+        let cred = build_credential(Provider::Codex, &tokens).unwrap();
         assert_eq!(cred.access_token, "at");
         assert_eq!(cred.label, "Codex account");
         assert_eq!(cred.account_id, None);

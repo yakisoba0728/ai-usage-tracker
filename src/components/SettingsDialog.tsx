@@ -15,7 +15,8 @@ import {
   DialogDescription,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { ProviderMark, PROVIDER_LABEL } from "@/components/ProviderMark";
+import { ProviderMark } from "@/components/ProviderMark";
+import { PROVIDER_LABEL } from "@/lib/providerMetadata";
 import { patchProviderConfig, PROVIDER_ORDER } from "@/lib/providers";
 import { cn } from "@/lib/utils";
 import type { AppConfig, Provider } from "@/lib/types";
@@ -125,6 +126,7 @@ export function SettingsDialog({
                   options={pollOptions}
                   onChange={(value) => patchConfig({ poll_seconds: value })}
                   disabled={config == null}
+                  ariaLabel={t("settings.refreshInterval")}
                 />
               </SettingsRow>
               <SettingsRow
@@ -140,6 +142,7 @@ export function SettingsDialog({
                   ]}
                   value={sortBy}
                   onChange={onSortByChange}
+                  ariaLabel={t("settings.sortList")}
                 />
               </SettingsRow>
               <SettingsRow
@@ -147,7 +150,11 @@ export function SettingsDialog({
                 label={t("settings.showOffline")}
                 description={t("settings.showOfflineDesc")}
               >
-                <Toggle checked={showOffline} onChange={onShowOfflineChange} />
+                <Toggle
+                  checked={showOffline}
+                  onChange={onShowOfflineChange}
+                  ariaLabel={t("settings.showOffline")}
+                />
               </SettingsRow>
             </Section>
 
@@ -173,6 +180,7 @@ export function SettingsDialog({
                       checked={config?.providers[index].enabled ?? false}
                       disabled={config == null}
                       onChange={(enabled) => toggleProvider(provider, enabled)}
+                      ariaLabel={PROVIDER_LABEL[provider]}
                     />
                   </SettingsRow>
                 ))}
@@ -246,16 +254,19 @@ function Toggle({
   checked,
   onChange,
   disabled,
+  ariaLabel,
 }: {
   checked: boolean;
   onChange: (checked: boolean) => void;
   disabled?: boolean;
+  ariaLabel: string;
 }) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
+      aria-label={ariaLabel}
       disabled={disabled}
       onClick={() => onChange(!checked)}
       className={cn(
@@ -278,17 +289,20 @@ function SelectValue({
   options,
   onChange,
   disabled,
+  ariaLabel,
 }: {
   value: number;
   options: { label: string; value: number }[];
   onChange: (value: number) => void;
   disabled?: boolean;
+  ariaLabel: string;
 }) {
   return (
     <label className="relative block">
       <select
         value={value}
         disabled={disabled}
+        aria-label={ariaLabel}
         onChange={(event) => onChange(Number(event.target.value))}
         className="h-8 appearance-none rounded-md border border-border bg-surface px-2.5 pr-7 text-xs text-text outline-none transition-colors focus:border-border-strong disabled:opacity-50"
       >
@@ -307,17 +321,25 @@ function Segmented<T extends string>({
   options,
   value,
   onChange,
+  ariaLabel,
 }: {
   options: { label: string; value: T }[];
   value: T;
   onChange: (value: T) => void;
+  ariaLabel: string;
 }) {
   return (
-    <div className="inline-flex rounded-md border border-border bg-canvas p-0.5">
+    <div
+      role="radiogroup"
+      aria-label={ariaLabel}
+      className="inline-flex rounded-md border border-border bg-canvas p-0.5"
+    >
       {options.map((option) => (
         <button
           key={option.value}
           type="button"
+          role="radio"
+          aria-checked={value === option.value}
           onClick={() => onChange(option.value)}
           className={cn(
             "rounded px-2 py-1.5 text-[11px] font-medium transition-colors",

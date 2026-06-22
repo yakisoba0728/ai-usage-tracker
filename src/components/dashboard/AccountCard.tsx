@@ -15,7 +15,7 @@ import { refreshAccount, sendAnchorNow } from "@/lib/ipc";
 import type { AccountRow, AccountSection } from "@/lib/inspectorModel";
 import { anchorSupported } from "@/lib/providers";
 import { severityToStatus } from "@/lib/status";
-import type { LimitWindow, Provider } from "@/lib/types";
+import type { LimitWindow } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 export function AccountSections({
@@ -28,7 +28,7 @@ export function AccountSections({
   sections: AccountSection[];
   selectedId: string | null;
   nowMs: number;
-  loadingProviders: Set<Provider>;
+  loadingProviders: Set<string>;
   onSelect: (id: string) => void;
 }) {
   const { t } = useTranslation();
@@ -51,7 +51,7 @@ export function AccountSections({
                 row={row}
                 nowMs={nowMs}
                 selected={selectedId === row.id}
-                loading={loadingProviders.has(row.service.provider)}
+                loading={loadingProviders.has(row.id)}
                 onSelect={onSelect}
               />
             ))}

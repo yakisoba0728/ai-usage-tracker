@@ -85,6 +85,9 @@ impl AppConfig {
     // ── Persistence ────────────────────────────────────────────────────────
 
     fn config_path() -> PathBuf {
+        if let Ok(path) = std::env::var("AIT_CONFIG_PATH") {
+            return PathBuf::from(path);
+        }
         if let Some(dir) = dirs::config_dir() {
             let app_dir = dir.join("ai-usage-tracker");
             let _ = std::fs::create_dir_all(&app_dir);
@@ -109,28 +112,47 @@ impl AppConfig {
             return Self::default(); // missing → defaults (expected first run)
         };
         match serde_json::from_str::<Self>(&text) {
-            Ok(cfg) => cfg,
+            Ok(cfg) => match cfg.validate() {
+                Ok(()) => cfg,
+                Err(e) => {
+                    Self::preserve_invalid(path, &e, "invalid");
+                    Self::default()
+                }
+            },
             Err(e) => {
-                // Corrupt, NOT missing (broken hand-edit, wrong-typed value, or a
-                // `providers` array of length != 6). Silently reverting to Default
-                // would wipe every per-provider pref + sort order + auto_anchor with
-                // no trace. Preserve the bad file as a recoverable .corrupt-* copy
-                // and log, then fall back to defaults (B-7).
-                eprintln!(
-                    "config: {} is corrupt ({e}); keeping a .corrupt-* copy and resetting to defaults",
-                    path.display()
-                );
-                let mut backup = path.as_os_str().to_owned();
-                backup.push(format!(".corrupt-{}", chrono::Utc::now().timestamp()));
-                let _ = std::fs::rename(path, std::path::PathBuf::from(backup));
+                let suffix = match e.classify() {
+                    serde_json::error::Category::Syntax | serde_json::error::Category::Eof => {
+                        "corrupt"
+                    }
+                    serde_json::error::Category::Data | serde_json::error::Category::Io => {
+                        "invalid"
+                    }
+                };
+                Self::preserve_invalid(path, &e, suffix);
                 Self::default()
             }
         }
     }
 
+    fn preserve_invalid(path: &Path, reason: &dyn std::fmt::Display, suffix: &str) {
+        // Corrupt or semantically invalid, NOT missing. Silently reverting to
+        // Default would wipe every per-provider pref + sort order + auto_anchor
+        // with no trace. Preserve the bad file as a recoverable sibling copy.
+        eprintln!(
+            "config: {} is invalid ({reason}); keeping a .corrupt-* copy and resetting to defaults",
+            path.display()
+        );
+        let mut backup = path.as_os_str().to_owned();
+        backup.push(format!(
+            ".{suffix}-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ));
+        let _ = std::fs::rename(path, std::path::PathBuf::from(backup));
+    }
+
     /// Persist to disk atomically.
-    pub fn save(&self) {
-        let _ = self.save_to(&Self::config_path());
+    pub fn save(&self) -> std::io::Result<()> {
+        self.save_to(&Self::config_path())
     }
 
     fn save_to(&self, path: &Path) -> std::io::Result<()> {
@@ -144,6 +166,9 @@ impl AppConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn load_from_missing_file_returns_default() {
@@ -191,6 +216,87 @@ mod tests {
             "a .corrupt-* backup of the bad config must exist"
         );
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_from_semantically_invalid_file_is_preserved_not_used() {
+        let dir =
+            std::env::temp_dir().join(format!("ait_cfg_invalid_semantic_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("config.json");
+        let cfg = AppConfig {
+            poll_seconds: 5,
+            ..Default::default()
+        };
+        std::fs::write(&p, serde_json::to_string(&cfg).unwrap()).unwrap();
+
+        let loaded = AppConfig::load_from(&p);
+
+        assert_eq!(loaded.poll_seconds, 300);
+        assert!(!p.exists(), "the invalid config.json was renamed away");
+        let preserved = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .any(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("config.json.invalid-")
+            });
+        assert!(
+            preserved,
+            "an .invalid-* backup of the invalid config must exist"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_reports_write_failure() {
+        let dir = std::env::temp_dir().join(format!("ait_cfg_save_dir_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let cfg = AppConfig::default();
+        let err = cfg.save_to(&dir).unwrap_err();
+
+        assert!(
+            matches!(
+                err.kind(),
+                std::io::ErrorKind::IsADirectory
+                    | std::io::ErrorKind::PermissionDenied
+                    | std::io::ErrorKind::AlreadyExists
+                    | std::io::ErrorKind::Other
+            ),
+            "unexpected error kind: {err:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_reports_config_path_write_failure() {
+        let _g = ENV_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("ait_cfg_save_path_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("AIT_CONFIG_PATH", &dir);
+
+        let err = AppConfig::default().save().unwrap_err();
+
+        assert!(
+            matches!(
+                err.kind(),
+                std::io::ErrorKind::IsADirectory
+                    | std::io::ErrorKind::PermissionDenied
+                    | std::io::ErrorKind::AlreadyExists
+                    | std::io::ErrorKind::Other
+            ),
+            "unexpected error kind: {err:?}"
+        );
+
+        std::env::remove_var("AIT_CONFIG_PATH");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

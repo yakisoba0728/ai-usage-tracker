@@ -80,12 +80,13 @@ fn normalize(resp: &QuotaResp) -> (Vec<LimitWindow>, Vec<LimitWindow>) {
             continue;
         }
         let label = b.model_id.clone().unwrap_or_else(|| "Gemini".into());
-        let used_percent = b.remaining_fraction.map(|f| ((1.0 - f) * 100.0) as f32);
+        let remaining_fraction = b.remaining_fraction.map(|f| f.clamp(0.0, 1.0));
+        let used_percent = remaining_fraction.map(|f| ((1.0 - f) * 100.0) as f32);
         // The live response carries no `remainingAmount`; the absolute limit
         // (e.g. 1500/day) isn't derivable from `remainingFraction` alone, so
         // `limit` stays `None`. Older hypothetical fixtures with
         // `remainingAmount` still compute it for back-compat.
-        let limit = match (&b.remaining_amount, b.remaining_fraction) {
+        let limit = match (&b.remaining_amount, remaining_fraction) {
             (Some(amt), Some(f)) if f > 0.0 => amt.parse::<f64>().ok().map(|r| r / f),
             _ => None,
         };
@@ -98,8 +99,18 @@ fn normalize(resp: &QuotaResp) -> (Vec<LimitWindow>, Vec<LimitWindow>) {
         });
     }
 
+    let restricted_notes: Vec<LimitWindow> = restricted
+        .into_iter()
+        .map(|model| LimitWindow {
+            label: format!("{model} (not on your tier)"),
+            used_percent: None,
+            resets_at: None,
+            used: None,
+            limit: None,
+        })
+        .collect();
     if real.is_empty() {
-        return (vec![], vec![]);
+        return (vec![], restricted_notes);
     }
     // Card headline = most-consumed real bucket (highest used_percent; ties
     // broken by first-seen so the order is stable).
@@ -120,15 +131,7 @@ fn normalize(resp: &QuotaResp) -> (Vec<LimitWindow>, Vec<LimitWindow>) {
         .map(|(_, w)| w.clone())
         .collect();
     // Tier-restricted models appended as labeled notes (no percent, no reset).
-    for model in restricted {
-        detail.push(LimitWindow {
-            label: format!("{model} (not on your tier)"),
-            used_percent: None,
-            resets_at: None,
-            used: None,
-            limit: None,
-        });
-    }
+    detail.extend(restricted_notes);
     (vec![headline], detail)
 }
 
@@ -373,11 +376,59 @@ mod tests {
         assert_eq!(detail[0].label, "gemini-2.5-flash");
     }
 
+    #[test]
+    fn normalize_clamps_remaining_fraction_to_usage_bounds() {
+        let reset = chrono::DateTime::parse_from_rfc3339("2026-06-20T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let q = QuotaResp {
+            buckets: vec![
+                Bucket {
+                    model_id: Some("over-remaining".into()),
+                    remaining_fraction: Some(1.2),
+                    remaining_amount: None,
+                    reset_time: Some(reset),
+                },
+                Bucket {
+                    model_id: Some("over-used".into()),
+                    remaining_fraction: Some(-0.5),
+                    remaining_amount: None,
+                    reset_time: Some(reset),
+                },
+            ],
+        };
+        let (ws, detail) = normalize(&q);
+        assert_eq!(ws[0].label, "over-used");
+        assert_eq!(ws[0].used_percent, Some(100.0));
+        assert_eq!(detail[0].label, "over-remaining");
+        assert_eq!(detail[0].used_percent, Some(0.0));
+    }
+
+    #[test]
+    fn normalize_preserves_restricted_only_buckets_as_detail_notes() {
+        let restricted_reset = chrono::DateTime::parse_from_rfc3339("1970-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let q = QuotaResp {
+            buckets: vec![Bucket {
+                model_id: Some("gemini-2.5-pro".into()),
+                remaining_fraction: Some(0.0),
+                remaining_amount: None,
+                reset_time: Some(restricted_reset),
+            }],
+        };
+        let (ws, detail) = normalize(&q);
+        assert!(ws.is_empty());
+        assert_eq!(detail.len(), 1);
+        assert_eq!(detail[0].label, "gemini-2.5-pro (not on your tier)");
+        assert_eq!(detail[0].used_percent, None);
+    }
+
     fn sample_stored(rt: Option<&str>) -> crate::store::StoredCredential {
         crate::store::StoredCredential {
             id: "abc".into(),
             provider: Provider::Gemini,
-            label: "me@example.com".into(),
+            label: "gemini-stored@example.invalid".into(),
             access_token: "old-at".into(),
             refresh_token: rt.map(str::to_string),
             expires_at: 1,
@@ -398,7 +449,7 @@ mod tests {
         // Preserved verbatim.
         assert_eq!(out.id, "abc");
         assert_eq!(out.provider, Provider::Gemini);
-        assert_eq!(out.label, "me@example.com");
+        assert_eq!(out.label, "gemini-stored@example.invalid");
         assert_eq!(out.id_token.as_deref(), Some("jwt-payload"));
         assert!(out.account_id.is_none());
         // Rotated.

@@ -75,13 +75,3 @@ export function ProviderMark({
   const Mark = MARKS[provider];
   return <Mark className={className} />;
 }
-
-/** Human label per provider — used in headers, modal titles, empty rows. */
-export const PROVIDER_LABEL: Record<Provider, string> = {
-  claude: "Claude",
-  codex: "Codex",
-  gemini: "Gemini",
-  copilot: "GitHub Copilot",
-  cursor: "Cursor",
-  zai: "z.ai Coding Plan",
-};

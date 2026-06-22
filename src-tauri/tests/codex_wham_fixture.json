@@ -1,7 +1,7 @@
 {
-  "user_id": "user-AN4YnthXvP3fqcEKDVKL9dhO",
-  "account_id": "user-AN4YnthXvP3fqcEKDVKL9dhO",
-  "email": "yakialli1@naver.com",
+  "user_id": "user_fixture_0001",
+  "account_id": "user_fixture_0001",
+  "email": "codex-user@example.invalid",
   "plan_type": "pro",
   "rate_limit": {
     "allowed": true,

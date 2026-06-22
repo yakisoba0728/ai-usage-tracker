@@ -44,6 +44,8 @@ struct CopilotUsageResp {
     #[serde(default)]
     quota_reset_date: Option<String>,
     #[serde(default)]
+    quota_reset_date_utc: Option<String>,
+    #[serde(default)]
     quota_snapshots: QuotaSnapshots,
 }
 
@@ -204,7 +206,11 @@ fn parse_reset_date(s: &str) -> Option<i64> {
 /// become labeled notes in `detail_windows` so the user can see what their
 /// plan includes without polluting the usage math.
 fn normalize(resp: &CopilotUsageResp) -> (Vec<LimitWindow>, Vec<LimitWindow>) {
-    let reset = resp.quota_reset_date.as_deref().and_then(parse_reset_date);
+    let reset = resp
+        .quota_reset_date
+        .as_deref()
+        .or(resp.quota_reset_date_utc.as_deref())
+        .and_then(parse_reset_date);
     let categories: [(&str, &Option<QuotaSnapshot>); 3] = [
         ("Chat", &resp.quota_snapshots.chat),
         (
@@ -228,7 +234,9 @@ fn normalize(resp: &CopilotUsageResp) -> (Vec<LimitWindow>, Vec<LimitWindow>) {
             });
             continue;
         }
-        let pct = q.percent_remaining.map(|r| (100.0 - r) as f32);
+        let pct = q
+            .percent_remaining
+            .map(|r| (100.0 - r).clamp(0.0, 100.0) as f32);
         // Reference uses `remaining`; older payloads carry `quota_remaining`.
         let remaining = q.remaining.or(q.quota_remaining);
         // Nothing displayable → don't emit a blank window that could sort to the
@@ -237,7 +245,8 @@ fn normalize(resp: &CopilotUsageResp) -> (Vec<LimitWindow>, Vec<LimitWindow>) {
             continue;
         }
         let used = match (q.entitlement, remaining) {
-            (Some(e), Some(r)) => Some(e - r),
+            (Some(e), Some(r)) if e >= 0.0 => Some((e - r).clamp(0.0, e)),
+            (Some(_), Some(r)) => Some((-r).max(0.0)),
             _ => None,
         };
         windows.push(LimitWindow {
@@ -370,6 +379,7 @@ mod tests {
             login: None,
             copilot_plan: Some("pro".into()),
             quota_reset_date: Some("2026-07-01T00:00:00Z".into()),
+            quota_reset_date_utc: None,
             quota_snapshots: QuotaSnapshots {
                 chat: Some(QuotaSnapshot {
                     entitlement: Some(300.0),
@@ -411,6 +421,7 @@ mod tests {
             login: None,
             copilot_plan: None,
             quota_reset_date: None,
+            quota_reset_date_utc: None,
             quota_snapshots: QuotaSnapshots {
                 chat: Some(QuotaSnapshot {
                     entitlement: None,
@@ -426,6 +437,62 @@ mod tests {
         let (ws, detail) = normalize(&resp);
         assert!(ws.is_empty(), "no displayable fields → no window");
         assert!(detail.is_empty());
+    }
+
+    #[test]
+    fn normalize_uses_quota_reset_date_utc_fallback() {
+        let v = serde_json::json!({
+            "quota_reset_date_utc": "2026-07-01T00:00:00.000Z",
+            "quota_snapshots": {
+                "premium_interactions": {
+                    "entitlement": 200,
+                    "remaining": 100,
+                    "percent_remaining": 50,
+                    "unlimited": false
+                }
+            }
+        });
+        let resp: CopilotUsageResp = serde_json::from_value(v).unwrap();
+        let (ws, _detail) = normalize(&resp);
+        assert_eq!(ws.len(), 1);
+        assert_eq!(ws[0].resets_at, Some(1_782_864_000));
+    }
+
+    #[test]
+    fn normalize_clamps_metered_used_and_percent() {
+        let resp = CopilotUsageResp {
+            login: None,
+            copilot_plan: None,
+            quota_reset_date: None,
+            quota_reset_date_utc: None,
+            quota_snapshots: QuotaSnapshots {
+                chat: Some(QuotaSnapshot {
+                    entitlement: Some(200.0),
+                    remaining: Some(250.0),
+                    quota_remaining: None,
+                    percent_remaining: Some(150.0),
+                    unlimited: Some(false),
+                }),
+                premium_interactions: Some(QuotaSnapshot {
+                    entitlement: Some(200.0),
+                    remaining: Some(-10.0),
+                    quota_remaining: None,
+                    percent_remaining: Some(-50.0),
+                    unlimited: Some(false),
+                }),
+                completions: None,
+            },
+        };
+        let (ws, detail) = normalize(&resp);
+        assert!(detail.is_empty());
+
+        let premium = ws.iter().find(|w| w.label == "Premium requests").unwrap();
+        assert_eq!(premium.used_percent, Some(100.0));
+        assert_eq!(premium.used, Some(200.0));
+
+        let chat = ws.iter().find(|w| w.label == "Chat").unwrap();
+        assert_eq!(chat.used_percent, Some(0.0));
+        assert_eq!(chat.used, Some(0.0));
     }
 
     #[test]

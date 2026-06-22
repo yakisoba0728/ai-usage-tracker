@@ -211,7 +211,7 @@ pub async fn send(service_id: &str) -> Result<(), ProviderError> {
         // Refresh an expired token before sending, so a manual "Anchor now" is
         // never weaker than the poll path (which refreshes via fetch_credential)
         // and doesn't 401 on a stale bearer (B-11).
-        let cred = crate::providers::refresh_if_expired(&http, &cred).await;
+        let cred = crate::providers::refresh_if_expired(&http, &cred).await?;
         return match cred.provider {
             Provider::Zai => send_zai(&http, &cred.access_token, ZAI_CHAT_URL).await,
             Provider::Claude => send_claude(&http, &cred.access_token, CLAUDE_MESSAGES_URL).await,

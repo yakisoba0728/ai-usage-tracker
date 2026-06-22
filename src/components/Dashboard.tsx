@@ -29,6 +29,12 @@ import type { InspectorTab } from "@/components/dashboard/inspectorTabs";
 import { Button } from "@/components/ui/button";
 import { useNow } from "@/hooks/useNow";
 import { useSnapshot } from "@/hooks/useSnapshot";
+import {
+  shouldProcessThresholdSnapshot,
+  shouldShowNoResultsOfflineCta,
+  transitionToAddAccount,
+  transitionToSettings,
+} from "@/lib/dashboardState";
 import { formatUpdatedAgo } from "@/lib/format";
 import {
   buildAccountSections,
@@ -43,11 +49,11 @@ import {
   setConfig,
 } from "@/lib/ipc";
 import {
-  providerConfigFor,
   providerDisplayName,
-  resolveHeadlineWindow,
 } from "@/lib/providers";
-import type { AppConfig } from "@/lib/types";
+import { scrubErrorText } from "@/lib/errorScrub";
+import { collectThresholdCrossings } from "@/lib/thresholdToasts";
+import type { AppConfig, UsageSnapshot } from "@/lib/types";
 
 export function Dashboard() {
   const { snapshot, loading, refreshing, error, loadingProviders, refresh } =
@@ -137,7 +143,7 @@ export function Dashboard() {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const toastIdRef = useRef(0);
   const prevPctRef = useRef<Map<string, number>>(new Map());
-  const lastProcessedRef = useRef<number | null>(null);
+  const lastProcessedThresholdSnapshotRef = useRef<UsageSnapshot | null>(null);
   const pushToast = useCallback((message: string) => {
     const id = ++toastIdRef.current;
     setToasts((t) => [...t, { id, message }]);
@@ -151,7 +157,13 @@ export function Dashboard() {
 
   useEffect(() => {
     const un = onAnchorResult((p) => {
-      pushToast(p.ok ? t("toast.anchorSent") : t("toast.anchorFailed", { error: p.detail ?? t("error.unknown") }));
+      pushToast(
+        p.ok
+          ? t("toast.anchorSent")
+          : t("toast.anchorFailed", {
+              error: scrubErrorText(p.detail ?? t("error.unknown")),
+            }),
+      );
     }).catch((e) => {
       console.error("subscribe anchor-result failed:", e);
       return undefined;
@@ -166,7 +178,11 @@ export function Dashboard() {
   useEffect(() => {
     const un = onRefreshResult((p) => {
       if (!p.ok) {
-        pushToast(t("toast.refreshFailed", { error: p.detail ?? t("error.unknown") }));
+        pushToast(
+          t("toast.refreshFailed", {
+            error: scrubErrorText(p.detail ?? t("error.unknown")),
+          }),
+        );
       }
     }).catch((e) => {
       console.error("subscribe refresh-result failed:", e);
@@ -179,33 +195,23 @@ export function Dashboard() {
 
   useEffect(() => {
     if (!snapshot || !config) return;
-    if (lastProcessedRef.current === snapshot.fetched_at) return;
-    lastProcessedRef.current = snapshot.fetched_at;
+    if (
+      !shouldProcessThresholdSnapshot(
+        lastProcessedThresholdSnapshotRef.current,
+        snapshot,
+      )
+    ) {
+      return;
+    }
+    lastProcessedThresholdSnapshotRef.current = snapshot;
 
-    const prev = prevPctRef.current;
-    for (const service of snapshot.services) {
-      const headline = resolveHeadlineWindow(service, config);
-      const pct = headline?.used_percent;
-      if (pct == null) {
-        prev.delete(service.id);
-        continue;
-      }
-      const previous = prev.get(service.id);
-      prev.set(service.id, pct);
-      if (previous == null) continue;
-      const thresholds =
-        providerConfigFor(config, service.provider)?.notify_thresholds ?? [];
-      const crossed = thresholds
-        .filter((threshold) => previous < threshold && pct >= threshold)
-        .sort((a, b) => b - a)[0];
-      if (crossed != null) {
-        pushToast(
-          t("toast.reached", {
-            provider: providerDisplayName(config, service.provider),
-            percent: Math.round(crossed),
-          }),
-        );
-      }
+    for (const crossing of collectThresholdCrossings(snapshot, config, prevPctRef.current)) {
+      pushToast(
+        t("toast.reached", {
+          provider: providerDisplayName(config, crossing.provider),
+          percent: Math.round(crossing.threshold),
+        }),
+      );
     }
   }, [snapshot, config, pushToast, t]);
 
@@ -223,9 +229,35 @@ export function Dashboard() {
       await refresh();
       pushToast(t("toast.removed"));
     } catch (e) {
-      pushToast(t("toast.removeFailed", { error: String(e) }));
+      pushToast(t("toast.removeFailed", { error: scrubErrorText(String(e)) }));
     }
   }
+
+  const openAddAccount = useCallback(() => {
+    const next = transitionToAddAccount({
+      addOpen,
+      settingsOpen,
+      detailOpen: openServiceId != null,
+      moreMenuOpen,
+    });
+    setMoreMenuOpen(next.moreMenuOpen);
+    if (!next.detailOpen) setOpenServiceId(null);
+    setSettingsOpen(next.settingsOpen);
+    setAddOpen(next.addOpen);
+  }, [addOpen, moreMenuOpen, openServiceId, settingsOpen]);
+
+  const openSettings = useCallback(() => {
+    const next = transitionToSettings({
+      addOpen,
+      settingsOpen,
+      detailOpen: openServiceId != null,
+      moreMenuOpen,
+    });
+    setMoreMenuOpen(next.moreMenuOpen);
+    if (!next.detailOpen) setOpenServiceId(null);
+    setAddOpen(next.addOpen);
+    setSettingsOpen(next.settingsOpen);
+  }, [addOpen, moreMenuOpen, openServiceId, settingsOpen]);
 
   return (
     <div className="min-h-dvh overflow-hidden bg-canvas text-text">
@@ -240,13 +272,13 @@ export function Dashboard() {
             <MobileHeader
               refreshing={refreshing}
               onRefresh={() => void refresh()}
-              onOpenSettings={() => setSettingsOpen(true)}
+              onOpenSettings={openSettings}
             />
 
             <AccountToolbar
               query={query}
               onQueryChange={setQuery}
-              onAddAccount={() => setAddOpen(true)}
+              onAddAccount={openAddAccount}
             />
 
             <div className="px-5 pb-2 pt-1 text-text-dim">
@@ -264,7 +296,7 @@ export function Dashboard() {
               ) : snapshot == null ? (
                 <ErrorState error={error ?? t("error.backendUnreachable")} />
               ) : !hasConfigured ? (
-                <EmptyState onAddAccount={() => setAddOpen(true)} />
+                <EmptyState onAddAccount={openAddAccount} />
               ) : accountSections.length === 0 ? (
                 <NoResults query={query} onShowOffline={() => setShowOffline(true)} />
               ) : (
@@ -313,8 +345,8 @@ export function Dashboard() {
         moreOpen={moreMenuOpen}
         onMoreOpenChange={setMoreMenuOpen}
         onRefresh={() => void refresh()}
-        onOpenAdd={() => setAddOpen(true)}
-        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenAdd={openAddAccount}
+        onOpenSettings={openSettings}
         onConfigChange={updateConfig}
         onRemove={handleRemoveSelected}
       />
@@ -338,7 +370,7 @@ export function Dashboard() {
           void refresh();
           pushToast(t("toast.scanning"));
         }}
-        onOpenAddAccount={() => setAddOpen(true)}
+        onOpenAddAccount={openAddAccount}
       />
 
       <Toaster toasts={toasts} onDismiss={dismissToast} />
@@ -474,6 +506,7 @@ function NoResults({
   onShowOffline: () => void;
 }) {
   const { t } = useTranslation();
+  const showOfflineCta = shouldShowNoResultsOfflineCta(query);
   return (
     <div className="rounded-lg border border-border bg-surface/50 px-5 py-12 text-center">
       <Search className="mx-auto mb-3 size-6 text-text-faint" />
@@ -481,9 +514,11 @@ function NoResults({
       <p className="mt-1 text-sm text-text-faint">
         {query ? t("noResults.hintQuery") : t("noResults.hintOffline")}
       </p>
-      <Button variant="secondary" size="sm" className="mt-4" onClick={onShowOffline}>
-        {t("noResults.showOffline")}
-      </Button>
+      {showOfflineCta && (
+        <Button variant="secondary" size="sm" className="mt-4" onClick={onShowOffline}>
+          {t("noResults.showOffline")}
+        </Button>
+      )}
     </div>
   );
 }

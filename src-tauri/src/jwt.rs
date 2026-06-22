@@ -80,10 +80,10 @@ mod tests {
     #[test]
     fn decodes_padded_payload() {
         // OpenAI-style base64url WITH padding
-        let payload = URL_SAFE.encode(br#"{"email":"a@b.c"}"#);
+        let payload = URL_SAFE.encode(br#"{"email":"jwt-user@example.invalid"}"#);
         let tok = format!("hdr.{payload}.sig");
         let v = jwt_payload(&tok).unwrap();
-        assert_eq!(v["email"], "a@b.c");
+        assert_eq!(v["email"], "jwt-user@example.invalid");
     }
 
     #[test]
@@ -94,11 +94,11 @@ mod tests {
     #[test]
     fn codex_identity_extracts_email_and_account_id() {
         let payload = URL_SAFE_NO_PAD.encode(
-            br#"{"email":"u@x.com","https://api.openai.com/auth":{"chatgpt_account_id":"acct-9"}}"#,
+            br#"{"email":"codex-jwt@example.invalid","https://api.openai.com/auth":{"chatgpt_account_id":"acct-9"}}"#,
         );
         let tok = format!("hdr.{payload}.sig");
         let (email, acct) = codex_identity(&tok);
-        assert_eq!(email.as_deref(), Some("u@x.com"));
+        assert_eq!(email.as_deref(), Some("codex-jwt@example.invalid"));
         assert_eq!(acct.as_deref(), Some("acct-9"));
 
         // Missing claims / undecodable tokens → (None, None).

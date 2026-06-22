@@ -22,6 +22,8 @@ struct CursorUsage {
     #[serde(default)]
     enabled: Option<bool>,
     #[serde(default)]
+    billing_cycle_end: Option<Value>,
+    #[serde(default)]
     plan_usage: Option<PlanUsage>,
 }
 
@@ -87,6 +89,18 @@ fn read_cursor_token() -> Result<String, ProviderError> {
     })
 }
 
+fn parse_epoch_seconds(v: &Value) -> Option<i64> {
+    let n = v
+        .as_i64()
+        .or_else(|| v.as_f64().map(|f| f as i64))
+        .or_else(|| v.as_str()?.trim().parse::<i64>().ok())?;
+    if n.abs() > 1_000_000_000_000 {
+        Some(n / 1000)
+    } else {
+        Some(n)
+    }
+}
+
 /// Pure: planUsage → window. Money is cents → dollars.
 fn normalize(u: &CursorUsage) -> Vec<LimitWindow> {
     if u.enabled == Some(false) {
@@ -108,19 +122,19 @@ fn normalize(u: &CursorUsage) -> Vec<LimitWindow> {
         })
         .or(p.total_spend);
     let limit_cents = p.limit;
-    let used_percent = p
-        .total_percent_used
-        .or_else(|| match (used_cents, limit_cents) {
-            (Some(u), Some(l)) if l > 0.0 => Some(u / l * 100.0),
-            _ => None,
-        });
+    let used_percent = match (used_cents, limit_cents) {
+        (Some(u), Some(l)) if l > 0.0 => Some(u / l * 100.0),
+        _ => None,
+    }
+    .or(p.total_percent_used);
     if used_cents.is_none() && limit_cents.is_none() && used_percent.is_none() {
         return vec![];
     }
+    let resets_at = u.billing_cycle_end.as_ref().and_then(parse_epoch_seconds);
     vec![LimitWindow {
         label: "Plan usage".into(),
         used_percent: used_percent.map(|x| x as f32),
-        resets_at: None,
+        resets_at,
         used: used_cents.map(|c| c / 100.0),
         limit: limit_cents.map(|c| c / 100.0),
     }]
@@ -180,13 +194,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn normalize_fixture_cents_to_dollars() {
+    fn normalize_fixture_cents_to_dollars_with_consistent_percent_and_reset() {
         let u: CursorUsage =
             serde_json::from_str(include_str!("../../tests/cursor_usage_fixture.json")).unwrap();
         let w = &normalize(&u)[0];
-        assert_eq!(w.used_percent, Some(15.48));
         assert_eq!(w.used, Some(232.22)); // 23222 cents -> $232.22
         assert_eq!(w.limit, Some(400.0)); // 40000 cents -> $400.00
+        let expected_pct = (232.22 / 400.0 * 100.0) as f32;
+        assert!((w.used_percent.unwrap() - expected_pct).abs() < 0.001);
+        assert_eq!(w.resets_at, Some(1_771_077_734)); // billingCycleEnd ms -> s
     }
 
     #[test]
@@ -195,6 +211,7 @@ mod tests {
         // matching parseDashboardPeriodUsage in cursor-usage-status.
         let u = CursorUsage {
             enabled: Some(true),
+            billing_cycle_end: None,
             plan_usage: Some(PlanUsage {
                 limit: Some(40000.0),
                 remaining: Some(10000.0),
@@ -211,6 +228,7 @@ mod tests {
         // remaining > limit must not produce a negative `used`.
         let u = CursorUsage {
             enabled: Some(true),
+            billing_cycle_end: None,
             plan_usage: Some(PlanUsage {
                 limit: Some(10000.0),
                 remaining: Some(30000.0),
@@ -226,6 +244,7 @@ mod tests {
         assert!(normalize(&CursorUsage::default()).is_empty());
         assert!(normalize(&CursorUsage {
             enabled: Some(false),
+            billing_cycle_end: None,
             plan_usage: None
         })
         .is_empty());

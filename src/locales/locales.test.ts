@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { PROVIDER_ORDER } from "@/lib/providers";
 import { SERVICE_ERROR_CODES } from "@/lib/types";
 import en from "@/locales/en.json";
 import ko from "@/locales/ko.json";
@@ -25,6 +26,17 @@ describe("locale catalogs", () => {
     for (const code of SERVICE_ERROR_CODES) {
       expect(en.error, `en missing error.${code}`).toHaveProperty(code);
       expect(ko.error, `ko missing error.${code}`).toHaveProperty(code);
+    }
+  });
+
+  it("every provider has Add Account copy in both catalogs", () => {
+    for (const provider of PROVIDER_ORDER) {
+      expect(en.addAccount.copy, `en missing addAccount.copy.${provider}`).toHaveProperty(
+        provider,
+      );
+      expect(ko.addAccount.copy, `ko missing addAccount.copy.${provider}`).toHaveProperty(
+        provider,
+      );
     }
   });
 });

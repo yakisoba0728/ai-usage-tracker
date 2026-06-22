@@ -101,7 +101,7 @@ For anything without a CLI, use **Add account** in the dashboard.
 pnpm tauri build      # → src-tauri/target/release/bundle/{macos/*.app, dmg/*.dmg, ... / Windows nsis·msi}
 ```
 
-The `tauri` npm script strips the ambient `CI` env var. Release signing / notarization is a separate, not-yet-configured pipeline.
+The `tauri` npm script is a cross-platform Node wrapper that strips the ambient `CI` env var before invoking the Tauri CLI. Release signing / notarization is a separate, not-yet-configured pipeline.
 
 ### Test
 
@@ -109,6 +109,8 @@ The `tauri` npm script strips the ambient `CI` env var. Release signing / notari
 cd src-tauri && cargo test --lib    # Rust unit tests
 pnpm test                           # frontend unit tests (vitest)
 pnpm exec tsc --noEmit              # type-check
+pnpm verify:runtime                 # lint + type-check + vitest + Rust unit tests
+pnpm verify:release                 # frontend build + debug Tauri no-bundle smoke
 ```
 
 CI (`.github/workflows/`) runs the frontend type-check + vitest, and `cargo test --lib` across a **macOS + Windows** matrix on every push/PR (`fmt`/`clippy` on macOS); `build-smoke.yml` does a debug `tauri build` on both.
@@ -116,7 +118,8 @@ CI (`.github/workflows/`) runs the frontend type-check + vitest, and `cargo test
 ## 🔒 Privacy & security
 
 - **On-device only.** No proxy, no telemetry. Each provider's URL/headers mirror its reference implementation; the app calls the real usage API directly.
-- **Tokens stay in Rust.** Access/refresh tokens are never sent to the webview (P0 invariant). User-added credentials live in a local `accounts.json` in the app's private config dir (plaintext at rest — the OS-keychain backing was dropped because the unsigned build re-prompted for the login password on every poll).
+- **Tokens stay in Rust.** Access/refresh tokens are never sent to the webview (P0 invariant). Provider raw responses are omitted from IPC by default; `AIT_DEBUG_RAW_RESPONSE=1` enables a redacted diagnostic copy.
+- **Plaintext account store.** User-added credentials live in a local `accounts.json` in the app config dir (plaintext at rest — the OS-keychain backing was dropped because the unsigned build re-prompted for the login password on every poll). On POSIX, the app writes the directory/file owner-only (`0700`/`0600`). On Windows, files inherit the user's profile/app-data ACL; the app does not currently rewrite Windows ACLs.
 - **Reuse-only client_ids.** In-app OAuth/refresh reuses each CLI's *public* `client_id`; the app registers no OAuth client of its own.
 - **Per-provider isolation.** One failing provider never breaks the others or the scheduler (`panic = "abort"` is deliberately not set).
 

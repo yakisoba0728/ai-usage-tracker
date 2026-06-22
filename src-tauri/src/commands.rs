@@ -1,16 +1,19 @@
 //! Tauri commands + the shared refresh routine + managed state stores.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::RwLock;
 
 use crate::config::AppConfig;
-use crate::model::{Provider, ServiceSource, UsageSnapshot};
+use crate::model::{auto_service_id, stored_service_id, Provider, ServiceSource, UsageSnapshot};
 use crate::providers::{fetch_all, ProviderApi};
 
 pub type SnapshotStore = Arc<RwLock<UsageSnapshot>>;
 pub type ConfigStore = Arc<RwLock<AppConfig>>;
+
+static SNAPSHOT_REFRESH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 pub fn empty_snapshot_store() -> SnapshotStore {
     Arc::new(RwLock::new(UsageSnapshot {
@@ -52,20 +55,38 @@ pub async fn refresh_once(
     cfg: &ConfigStore,
     snap: &SnapshotStore,
 ) -> UsageSnapshot {
+    let _guard = SNAPSHOT_REFRESH_LOCK.lock().await;
+    refresh_once_inner(app, cfg, snap).await
+}
+
+async fn refresh_once_inner(
+    app: &AppHandle,
+    cfg: &ConfigStore,
+    snap: &SnapshotStore,
+) -> UsageSnapshot {
     let providers = build_providers(&*cfg.read().await);
-    // Emit per-provider loading events so the frontend can show a shimmer on
-    // each card independently.
     for p in &providers {
-        let _ = app.emit("provider-loading", p.key());
+        emit_loading(app, &auto_service_id(p.key()), p.key());
     }
     let stored = crate::store::list();
     for cred in &stored {
-        let _ = app.emit("provider-loading", cred.provider);
+        emit_loading(app, &stored_service_id(&cred.id), cred.provider);
     }
     let mut services = fetch_all(providers).await;
-    for cred in &stored {
-        services.push(crate::providers::fetch_credential(cred).await);
+    let stored_results = futures::future::join_all(stored.iter().map(|cred| async move {
+        (
+            stored_service_id(&cred.id),
+            crate::providers::fetch_credential(cred).await,
+        )
+    }))
+    .await;
+    let active_stored = active_stored_service_ids();
+    for (id, service) in stored_results {
+        if active_stored.contains(&id) {
+            services.push(service);
+        }
     }
+    filter_deleted_stored_services(&mut services, &active_stored);
     // If a stored account connected for a provider, drop the auto-detect
     // failure for the same provider (the user's explicit Add-account wins).
     dedupe_services(&mut services);
@@ -133,7 +154,6 @@ fn five_hour_used(s: &crate::model::ServiceUsage) -> Option<f32> {
 /// Keeps all connected entries (multi-account support); only suppresses the
 /// redundant "auto-detect failed" error when a stored account succeeded.
 fn dedupe_services(services: &mut Vec<crate::model::ServiceUsage>) {
-    use std::collections::HashSet;
     let connected: HashSet<Provider> = services
         .iter()
         .filter(|s| s.connected)
@@ -142,6 +162,53 @@ fn dedupe_services(services: &mut Vec<crate::model::ServiceUsage>) {
     services.retain(|s| {
         s.connected || s.source != ServiceSource::Auto || !connected.contains(&s.provider)
     });
+}
+
+fn active_stored_service_ids() -> HashSet<String> {
+    crate::store::list()
+        .into_iter()
+        .map(|c| stored_service_id(&c.id))
+        .collect()
+}
+
+fn filter_deleted_stored_services(
+    services: &mut Vec<crate::model::ServiceUsage>,
+    active_stored: &HashSet<String>,
+) {
+    services.retain(|s| s.source != ServiceSource::Stored || active_stored.contains(&s.id));
+}
+
+fn loading_payload(id: &str, provider: Provider) -> serde_json::Value {
+    serde_json::json!({
+        "id": id,
+        "provider": provider,
+    })
+}
+
+fn emit_loading(app: &AppHandle, id: &str, provider: Provider) {
+    let _ = app.emit("provider-loading", loading_payload(id, provider));
+}
+
+fn refresh_result_payload(
+    service_id: &str,
+    result: Result<&crate::model::ServiceUsage, &String>,
+) -> serde_json::Value {
+    let (ok, detail) = match result {
+        Ok(service) if service.connected => (true, None),
+        Ok(service) => (
+            false,
+            service
+                .error
+                .as_ref()
+                .map(|e| e.detail.clone().unwrap_or_else(|| e.code.clone())),
+        ),
+        Err(err) => (false, Some(err.clone())),
+    };
+    serde_json::json!({
+        "id": service_id,
+        "ok": ok,
+        "detail": detail,
+    })
 }
 
 #[tauri::command]
@@ -171,7 +238,8 @@ pub async fn set_config(
 ) -> Result<(), String> {
     new.validate().map_err(|e| e.to_string())?;
     let poll = new.poll_seconds;
-    new.save();
+    new.save()
+        .map_err(|e| format!("could not save config: {e}"))?;
     *cfg.write().await = new;
     crate::scheduler::restart(&app, poll);
     Ok(())
@@ -200,7 +268,7 @@ pub async fn list_accounts() -> Result<Vec<crate::model::AccountInfo>, String> {
 
 #[tauri::command]
 pub async fn remove_account(id: String) -> Result<bool, String> {
-    Ok(crate::store::remove(&id))
+    crate::store::remove(&id)
 }
 
 /// Add an account by pasting a raw credential (Claude session key, or any
@@ -211,11 +279,15 @@ pub async fn add_session_key(
     key: String,
     label: Option<String>,
 ) -> Result<String, String> {
+    let access_token = match provider {
+        crate::model::Provider::Claude => crate::providers::claude::normalize_session_key(&key),
+        _ => key.trim().to_string(),
+    };
     let cred = crate::store::StoredCredential {
         id: String::new(),
         provider,
         label: label.unwrap_or_else(|| format!("{provider:?}")),
-        access_token: key,
+        access_token,
         refresh_token: None,
         expires_at: 0,
         id_token: None,
@@ -239,6 +311,7 @@ pub async fn login_oauth(
 #[tauri::command]
 pub fn cancel_login() {
     crate::oauth_login::cancel();
+    crate::login::cancel();
 }
 
 /// Send a minimal "anchor" message for one service to start its usage window.
@@ -271,13 +344,9 @@ pub async fn refresh_account(
     let result = refresh_account_once(&app, cfg.inner(), snap.inner(), &service_id).await;
     let _ = app.emit(
         "refresh-result",
-        serde_json::json!({
-            "id": service_id,
-            "ok": result.is_ok(),
-            "detail": result.as_ref().err().cloned(),
-        }),
+        refresh_result_payload(&service_id, result.as_ref()),
     );
-    result
+    result.map(|_| ())
 }
 
 async fn refresh_account_once(
@@ -285,15 +354,29 @@ async fn refresh_account_once(
     cfg: &ConfigStore,
     snap: &SnapshotStore,
     service_id: &str,
-) -> Result<(), String> {
-    use crate::model::auto_service_id;
+) -> Result<crate::model::ServiceUsage, String> {
+    let _guard = SNAPSHOT_REFRESH_LOCK.lock().await;
+    refresh_account_once_inner(app, cfg, snap, service_id).await
+}
+
+async fn refresh_account_once_inner(
+    app: &AppHandle,
+    cfg: &ConfigStore,
+    snap: &SnapshotStore,
+    service_id: &str,
+) -> Result<crate::model::ServiceUsage, String> {
     // Resolve the fresh ServiceUsage for this id.
     let fresh: Option<crate::model::ServiceUsage> = if service_id.starts_with("stored:") {
         let cred = crate::store::find_by_service_id(service_id);
         match cred {
             Some(c) => {
-                let _ = app.emit("provider-loading", c.provider);
-                Some(crate::providers::fetch_credential(&c).await)
+                emit_loading(app, service_id, c.provider);
+                let fresh = crate::providers::fetch_credential(&c).await;
+                if crate::store::find(&c.id).is_none() {
+                    remove_service_from_snapshot(app, snap, service_id).await;
+                    return Err(format!("account removed while refreshing: {service_id}"));
+                }
+                Some(fresh)
             }
             None => None,
         }
@@ -303,7 +386,7 @@ async fn refresh_account_once(
         let mut found = None;
         for p in providers {
             if auto_service_id(p.key()) == service_id {
-                let _ = app.emit("provider-loading", p.key());
+                emit_loading(app, service_id, p.key());
                 let mut batch = crate::providers::fetch_all(vec![p]).await;
                 found = batch.pop();
                 break;
@@ -315,6 +398,7 @@ async fn refresh_account_once(
         return Err(format!("unknown or disabled account: {service_id}"));
     };
     // Merge: replace the same-id entry (or push if absent), then emit.
+    let returned = fresh.clone();
     {
         let mut guard = snap.write().await;
         if let Some(slot) = guard.services.iter_mut().find(|s| s.id == fresh.id) {
@@ -326,7 +410,17 @@ async fn refresh_account_once(
     }
     let snapshot = snap.read().await.clone();
     let _ = app.emit("usage-updated", &snapshot);
-    Ok(())
+    Ok(returned)
+}
+
+async fn remove_service_from_snapshot(app: &AppHandle, snap: &SnapshotStore, service_id: &str) {
+    {
+        let mut guard = snap.write().await;
+        guard.services.retain(|s| s.id != service_id);
+        guard.fetched_at = chrono::Utc::now().timestamp();
+    }
+    let snapshot = snap.read().await.clone();
+    let _ = app.emit("usage-updated", &snapshot);
 }
 
 #[cfg(test)]
@@ -458,6 +552,63 @@ mod tests {
             .any(|s| s.id == "stored:zai-1" && !s.connected));
     }
 
+    #[test]
+    fn filter_deleted_stored_services_drops_missing_stored_accounts() {
+        let mut services = vec![
+            svc(
+                "auto:codex",
+                Provider::Codex,
+                ServiceSource::Auto,
+                true,
+                None,
+            ),
+            svc(
+                "stored:kept",
+                Provider::Claude,
+                ServiceSource::Stored,
+                true,
+                None,
+            ),
+            svc(
+                "stored:deleted",
+                Provider::Claude,
+                ServiceSource::Stored,
+                true,
+                None,
+            ),
+        ];
+        let current = std::collections::HashSet::from(["stored:kept".to_string()]);
+        filter_deleted_stored_services(&mut services, &current);
+
+        let ids: Vec<&str> = services.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, vec!["auto:codex", "stored:kept"]);
+    }
+
+    #[test]
+    fn refresh_result_payload_marks_disconnected_usage_failed() {
+        let disconnected = svc(
+            "stored:claude-1",
+            Provider::Claude,
+            ServiceSource::Stored,
+            false,
+            Some("not_logged_in"),
+        );
+
+        let payload = refresh_result_payload("stored:claude-1", Ok(&disconnected));
+
+        assert_eq!(payload["id"], "stored:claude-1");
+        assert_eq!(payload["ok"], false);
+        assert_eq!(payload["detail"], "not_logged_in");
+    }
+
+    #[test]
+    fn loading_payload_targets_exact_service_id() {
+        let payload = loading_payload("stored:claude-work", Provider::Claude);
+
+        assert_eq!(payload["id"], "stored:claude-work");
+        assert_eq!(payload["provider"], "claude");
+    }
+
     // Silence unused-field warning (LimitWindow is required by the struct but
     // the test helper doesn't use it directly).
     #[test]
@@ -534,5 +685,36 @@ mod tests {
                 Provider::Zai,
             ],
         );
+    }
+
+    #[test]
+    fn add_claude_session_key_persists_only_session_key_cookie_value() {
+        let _guard = crate::store::STORE_TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let path = std::env::temp_dir().join(format!(
+            "ait_commands_session_cookie_{}.json",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        std::env::set_var("AIT_ACCOUNTS_PATH", &path);
+
+        let id = tauri::async_runtime::block_on(add_session_key(
+            Provider::Claude,
+            "Cookie: other=not-this; sessionKey=sk-ant-sid01-session; x=also-not-this".into(),
+            Some("Claude web".into()),
+        ))
+        .unwrap();
+
+        let loaded = crate::store::load();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].id, id);
+        assert_eq!(loaded[0].access_token, "sk-ant-sid01-session");
+        assert!(!loaded[0].access_token.contains("other=not-this"));
+        assert!(!loaded[0].access_token.contains("also-not-this"));
+
+        let _ = crate::store::remove(&id);
+        std::env::remove_var("AIT_ACCOUNTS_PATH");
+        let _ = std::fs::remove_file(&path);
     }
 }

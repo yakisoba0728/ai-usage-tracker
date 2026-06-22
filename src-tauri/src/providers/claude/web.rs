@@ -133,7 +133,7 @@ pub(crate) async fn fetch_with_session_key(
     })
 }
 
-fn session_key_cookie_value(input: &str) -> String {
+pub(super) fn session_key_cookie_value(input: &str) -> String {
     let trimmed = input.trim();
     let payload = trimmed
         .strip_prefix("Cookie:")
@@ -185,6 +185,6 @@ mod tests {
             .iter()
             .find_map(|m| m.account.as_ref())
             .and_then(|a| a.email_address.clone());
-        assert_eq!(email.as_deref(), Some("user@example.com"));
+        assert_eq!(email.as_deref(), Some("claude-user@example.invalid"));
     }
 }

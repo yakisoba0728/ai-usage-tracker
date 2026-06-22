@@ -48,6 +48,8 @@ struct Tokens {
     account_id: Option<String>,
 }
 
+static AUTO_REFRESH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[derive(Deserialize, Default)]
 struct WhamUsage {
     #[serde(default)]
@@ -89,7 +91,7 @@ struct AdditionalLimit {
 #[derive(Deserialize, Default)]
 struct Credits {
     #[serde(default)]
-    balance: Option<String>,
+    balance: Option<Value>,
     #[serde(default)]
     has_credits: Option<bool>,
     #[serde(default)]
@@ -151,12 +153,27 @@ fn access_needs_refresh(access_token: &str, now_sec: i64) -> bool {
 fn apply_auth_refresh(mut auth: Value, fresh: &Refreshed, refreshed_at: &str) -> Option<Value> {
     let access = fresh.access_token.as_ref()?;
     let tokens = auth.get_mut("tokens")?.as_object_mut()?;
+    let account_id = fresh
+        .id_token
+        .as_deref()
+        .or_else(|| tokens.get("id_token").and_then(|v| v.as_str()))
+        .and_then(|jwt| crate::jwt::codex_identity(jwt).1);
     tokens.insert("access_token".into(), serde_json::json!(access));
     if let Some(id_token) = &fresh.id_token {
         tokens.insert("id_token".into(), serde_json::json!(id_token));
+        if !tokens.contains_key("account_id") {
+            if let Some(account_id) = crate::jwt::codex_identity(id_token).1 {
+                tokens.insert("account_id".into(), serde_json::json!(account_id));
+            }
+        }
     }
     if let Some(refresh_token) = &fresh.refresh_token {
         tokens.insert("refresh_token".into(), serde_json::json!(refresh_token));
+    }
+    if !tokens.contains_key("account_id") {
+        if let Some(account_id) = account_id {
+            tokens.insert("account_id".into(), serde_json::json!(account_id));
+        }
     }
     if let Some(obj) = auth.as_object_mut() {
         obj.insert("last_refresh".into(), serde_json::json!(refreshed_at));
@@ -166,6 +183,9 @@ fn apply_auth_refresh(mut auth: Value, fresh: &Refreshed, refreshed_at: &str) ->
 
 fn push_window(ws: &mut Vec<LimitWindow>, label: &str, w: &Option<RateWindow>) {
     if let Some(w) = w {
+        if w.used_percent.is_none() && w.reset_at.is_none() {
+            return;
+        }
         ws.push(LimitWindow {
             label: label.into(),
             used_percent: w.used_percent.map(|x| x as f32),
@@ -174,6 +194,20 @@ fn push_window(ws: &mut Vec<LimitWindow>, label: &str, w: &Option<RateWindow>) {
             limit: None,
         });
     }
+}
+
+fn parse_number(v: &Value) -> Option<f64> {
+    v.as_f64()
+        .or_else(|| v.as_str()?.trim().parse::<f64>().ok())
+}
+
+fn account_id_for_tokens(tokens: &Tokens) -> Option<String> {
+    tokens.account_id.clone().or_else(|| {
+        tokens
+            .id_token
+            .as_deref()
+            .and_then(|jwt| crate::jwt::codex_identity(jwt).1)
+    })
 }
 
 /// Pure: primary windows (5h/Weekly) + detail windows (Spark / code-review / credits / resets).
@@ -202,7 +236,7 @@ fn normalize(u: &WhamUsage) -> (Vec<LimitWindow>, Vec<LimitWindow>) {
         push_window(&mut detail, "Code review · Weekly", &rl.secondary_window);
     }
     if let Some(c) = &u.credits {
-        let bal = c.balance.as_deref().and_then(|b| b.parse::<f64>().ok());
+        let bal = c.balance.as_ref().and_then(parse_number);
         if c.unlimited == Some(true) {
             detail.push(LimitWindow {
                 label: "Credits (unlimited)".into(),
@@ -248,40 +282,58 @@ impl crate::providers::ProviderApi for CodexProvider {
     }
 
     async fn fetch(&self) -> Result<ServiceUsage, ProviderError> {
-        let (auth, mut t) = read_auth()?;
-        if access_needs_refresh(&t.access_token, chrono::Utc::now().timestamp()) {
-            let rt = t
-                .refresh_token
-                .as_ref()
-                .filter(|s| !s.is_empty())
-                .ok_or_else(|| ProviderError::Expired(
-                    "Codex token expired and auth.json has no refresh_token — run `codex login`.".into(),
-                ))?;
-            let fresh = refresh_oauth(&self.http, rt).await?;
-            if fresh.access_token.is_none() {
-                return Err(ProviderError::Parse(
-                    "codex refresh: missing access_token".into(),
-                ));
-            }
-            if let Some(updated) =
-                apply_auth_refresh(auth, &fresh, &chrono::Utc::now().to_rfc3339())
-            {
-                if let Err(e) = write_auth(&updated) {
-                    eprintln!("codex: failed to persist refreshed auth.json: {e}");
-                }
-                if let Some(access_token) = fresh.access_token {
-                    t.access_token = access_token;
-                }
-                if let Some(id_token) = fresh.id_token {
-                    t.id_token = Some(id_token);
-                }
-                if let Some(refresh_token) = fresh.refresh_token {
-                    t.refresh_token = Some(refresh_token);
-                }
-            }
-        }
-        fetch_with(&self.http, &t.access_token, t.account_id.as_deref(), None).await
+        let (_, t) = read_auth()?;
+        let t = refresh_auto_auth_if_needed(&self.http, t).await?;
+        let account_id = account_id_for_tokens(&t);
+        fetch_with(&self.http, &t.access_token, account_id.as_deref(), None).await
     }
+}
+
+async fn refresh_auto_auth_if_needed(
+    http: &reqwest::Client,
+    tokens: Tokens,
+) -> Result<Tokens, ProviderError> {
+    if !access_needs_refresh(&tokens.access_token, chrono::Utc::now().timestamp()) {
+        return Ok(tokens);
+    }
+
+    let _guard = AUTO_REFRESH_LOCK.lock().await;
+    let (auth, mut latest) = read_auth()?;
+    if !access_needs_refresh(&latest.access_token, chrono::Utc::now().timestamp()) {
+        return Ok(latest);
+    }
+    let rt = latest
+        .refresh_token
+        .as_ref()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            ProviderError::Expired(
+                "Codex token expired and auth.json has no refresh_token — run `codex login`."
+                    .into(),
+            )
+        })?;
+    let fresh = refresh_oauth(http, rt).await?;
+    if fresh.access_token.is_none() {
+        return Err(ProviderError::Parse(
+            "codex refresh: missing access_token".into(),
+        ));
+    }
+    let updated =
+        apply_auth_refresh(auth, &fresh, &chrono::Utc::now().to_rfc3339()).ok_or_else(|| {
+            ProviderError::Parse("codex refresh: auth.json has no tokens object".into())
+        })?;
+    write_auth(&updated)?;
+    if let Some(access_token) = fresh.access_token {
+        latest.access_token = access_token;
+    }
+    if let Some(id_token) = fresh.id_token {
+        latest.id_token = Some(id_token);
+    }
+    if let Some(refresh_token) = fresh.refresh_token {
+        latest.refresh_token = Some(refresh_token);
+    }
+    latest.account_id = account_id_for_tokens(&latest);
+    Ok(latest)
 }
 
 /// Fetch Codex usage given an explicit token (used for manually-added accounts).
@@ -361,13 +413,19 @@ fn build_refreshed_cred(
         .or_else(|| new_id_token.as_deref().and_then(crate::jwt::jwt_exp))
         .map(|s| s * 1000)
         .unwrap_or(0);
-    crate::store::rotate_credential(
+    let mut out = crate::store::rotate_credential(
         cred,
         new_access,
         fresh.refresh_token.clone(),
         fresh.id_token.clone(),
         expires_at,
-    )
+    );
+    if out.account_id.is_none() {
+        out.account_id = new_id_token
+            .as_deref()
+            .and_then(|jwt| crate::jwt::codex_identity(jwt).1);
+    }
+    out
 }
 
 async fn refresh_oauth(
@@ -470,6 +528,39 @@ mod tests {
     }
 
     #[test]
+    fn normalize_accepts_numeric_credit_balance() {
+        let u: WhamUsage = serde_json::from_value(serde_json::json!({
+            "credits": {
+                "has_credits": true,
+                "unlimited": false,
+                "balance": 9.99
+            }
+        }))
+        .unwrap();
+        let (_ws, detail) = normalize(&u);
+        let credits = detail
+            .iter()
+            .find(|w| w.label.starts_with("Credits balance"))
+            .unwrap();
+        assert_eq!(credits.label, "Credits balance: $9.99");
+        assert_eq!(credits.used, None);
+    }
+
+    #[test]
+    fn normalize_skips_blank_rate_limit_windows() {
+        let u = WhamUsage {
+            rate_limit: Some(RateLimit {
+                primary_window: Some(RateWindow::default()),
+                secondary_window: None,
+            }),
+            ..Default::default()
+        };
+        let (ws, detail) = normalize(&u);
+        assert!(ws.is_empty());
+        assert!(detail.is_empty());
+    }
+
+    #[test]
     fn reads_tokens_from_fixture() {
         let v: Value =
             serde_json::from_str(include_str!("../../tests/codex_auth_fixture.json")).unwrap();
@@ -481,16 +572,20 @@ mod tests {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
 
-    fn jwt_with_exp(exp: i64) -> String {
-        let payload = URL_SAFE_NO_PAD.encode(format!(r#"{{"exp":{exp}}}"#));
+    fn jwt_with_claims(claims: serde_json::Value) -> String {
+        let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).unwrap());
         format!("hdr.{payload}.sig")
+    }
+
+    fn jwt_with_exp(exp: i64) -> String {
+        jwt_with_claims(serde_json::json!({ "exp": exp }))
     }
 
     fn stored(id: &str) -> crate::store::StoredCredential {
         crate::store::StoredCredential {
             id: id.into(),
             provider: Provider::Codex,
-            label: "me@x.com".into(),
+            label: "codex-stored@example.invalid".into(),
             access_token: "old.at".into(),
             refresh_token: Some("old.rt".into()),
             expires_at: 0,
@@ -522,12 +617,35 @@ mod tests {
         let out = build_refreshed_cred(&stored("acc-1"), &fresh);
         assert_eq!(out.id, "acc-1");
         assert_eq!(out.provider, Provider::Codex);
-        assert_eq!(out.label, "me@x.com");
+        assert_eq!(out.label, "codex-stored@example.invalid");
         assert_eq!(out.account_id.as_deref(), Some("acct-1"));
         assert_eq!(out.access_token, access_token);
         assert_eq!(out.refresh_token.as_deref(), Some("new.rt"));
         assert_eq!(out.id_token.as_deref(), Some("new.id"));
         assert_eq!(out.expires_at, 1_700_000_000_000); // exp → epoch ms
+    }
+
+    #[test]
+    fn build_refreshed_cred_derives_missing_account_id_from_id_token() {
+        let id_token = jwt_with_claims(serde_json::json!({
+            "https://api.openai.com/auth": { "chatgpt_account_id": "acct-from-id-token" },
+        }));
+        let mut cred = stored("acc-1");
+        cred.account_id = None;
+        cred.id_token = Some(id_token);
+        let fresh = Refreshed {
+            id_token: None,
+            access_token: Some(jwt_with_exp(1_700_000_000)),
+            refresh_token: Some("new.rt".into()),
+        };
+
+        let out = build_refreshed_cred(&cred, &fresh);
+
+        assert_eq!(
+            out.account_id.as_deref(),
+            Some("acct-from-id-token"),
+            "stored Codex refresh must backfill ChatGPT-Account-Id from id_token"
+        );
     }
 
     #[test]
@@ -556,6 +674,46 @@ mod tests {
         };
         let out = build_refreshed_cred(&stored("acc-1"), &fresh);
         assert_eq!(out.expires_at, 2_000_000_000_000);
+    }
+
+    #[test]
+    fn apply_auth_refresh_fills_missing_account_id_from_id_token() {
+        let id_token = jwt_with_claims(serde_json::json!({
+            "https://api.openai.com/auth": { "chatgpt_account_id": "acct-new" },
+        }));
+        let auth = serde_json::json!({
+            "tokens": {
+                "access_token": "old.access",
+                "refresh_token": "old.refresh"
+            }
+        });
+        let fresh = Refreshed {
+            id_token: Some(id_token),
+            access_token: Some("new.access".into()),
+            refresh_token: Some("new.refresh".into()),
+        };
+
+        let out = apply_auth_refresh(auth, &fresh, "2026-06-20T12:00:00Z").unwrap();
+
+        assert_eq!(out["tokens"]["account_id"], "acct-new");
+    }
+
+    #[test]
+    fn account_id_for_tokens_uses_id_token_when_field_is_missing() {
+        let id_token = jwt_with_claims(serde_json::json!({
+            "https://api.openai.com/auth": { "chatgpt_account_id": "acct-fallback" },
+        }));
+        let tokens = Tokens {
+            access_token: "access".into(),
+            refresh_token: None,
+            id_token: Some(id_token),
+            account_id: None,
+        };
+
+        assert_eq!(
+            account_id_for_tokens(&tokens).as_deref(),
+            Some("acct-fallback")
+        );
     }
 
     #[test]

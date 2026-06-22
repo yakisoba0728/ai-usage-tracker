@@ -59,7 +59,7 @@ export interface ServiceUsage {
   windows: LimitWindow[];
   /** MODAL-ONLY windows — hidden on the card, shown in the detail modal. */
   detail_windows: LimitWindow[];
-  /** Pretty-printed raw API response JSON for the "Raw Response" tab. */
+  /** Redacted debug-only raw API response JSON; omitted from IPC by default. */
   raw_response?: string;
 }
 
@@ -68,6 +68,7 @@ export interface UsageSnapshot {
   fetched_at: number;
   services: ServiceUsage[];
 }
+
 
 /**
  * Per-provider user settings. Mirrors the Rust `ProviderConfig` 1:1 (config.rs).
@@ -131,4 +132,9 @@ export interface LoginResult {
   ok: boolean;
   label: string | null;
   error: string | null;
+}
+
+export interface ProviderLoadingPayload {
+  id: string;
+  provider: Provider;
 }

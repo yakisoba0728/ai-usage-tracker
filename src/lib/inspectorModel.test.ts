@@ -56,6 +56,26 @@ describe("inspector model", () => {
     expect(sections[0]?.rows[0]?.id).toBe("auto:codex");
   });
 
+  it("omits disabled providers from account sections", () => {
+    const disabledCodex = {
+      ...config,
+      providers: config.providers.map((providerConfig, index) =>
+        index === providers.indexOf("codex")
+          ? { ...providerConfig, enabled: false }
+          : providerConfig,
+      ) as AppConfig["providers"],
+    };
+
+    const sections = buildAccountSections(sampleServices(), disabledCodex, {
+      query: "",
+      showOffline: true,
+    });
+
+    expect(sections.flatMap((section) => section.rows.map((row) => row.id))).not.toContain(
+      "auto:codex",
+    );
+  });
+
   it("sorts account rows by the selected display preference", () => {
     const sections = buildAccountSections(sampleServices(), config, {
       query: "",

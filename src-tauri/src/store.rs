@@ -18,6 +18,9 @@ use crate::model::Provider;
 /// poll loop can't interleave a read-modify-write of accounts.json (lost update).
 static STORE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+#[cfg(test)]
+pub(crate) static STORE_TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// A credential for a manually-added account: full secret + metadata. Persisted
 /// verbatim to accounts.json.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -66,13 +69,16 @@ fn store_path() -> std::path::PathBuf {
     base.join("accounts.json")
 }
 
-fn read_accounts() -> Vec<StoredCredential> {
+fn read_accounts() -> std::io::Result<Vec<StoredCredential>> {
     let path = store_path();
-    let Ok(raw) = std::fs::read_to_string(&path) else {
-        return Vec::new();
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e),
     };
-    let parsed: StoreFile = serde_json::from_str(&raw).unwrap_or_default();
-    parsed.accounts
+    serde_json::from_str::<StoreFile>(&raw)
+        .map(|parsed| parsed.accounts)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
 
 fn persist_accounts(accounts: &[StoredCredential]) -> std::io::Result<()> {
@@ -105,26 +111,22 @@ pub fn add(mut cred: StoredCredential) -> Result<String, String> {
         cred.id = gen_id(&cred.provider);
     }
     let id = cred.id.clone();
-    let mut accounts = read_accounts();
+    let mut accounts = read_accounts().map_err(|e| format!("could not read account store: {e}"))?;
     accounts.push(cred);
     persist_accounts(&accounts).map_err(|e| format!("could not save account: {e}"))?;
     Ok(id)
 }
 
-pub fn remove(id: &str) -> bool {
+pub fn remove(id: &str) -> Result<bool, String> {
     let _guard = STORE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let mut accounts = read_accounts();
+    let mut accounts = read_accounts().map_err(|e| format!("could not read account store: {e}"))?;
     let before = accounts.len();
     accounts.retain(|c| c.id != id);
     let changed = accounts.len() != before;
     if changed {
-        // Don't swallow a write failure (same silent-failure class as B-2): a
-        // removed account would otherwise reappear on the next load with no trace.
-        if let Err(e) = persist_accounts(&accounts) {
-            eprintln!("store: failed to persist after removing {id}: {e}");
-        }
+        persist_accounts(&accounts).map_err(|e| format!("could not save account store: {e}"))?;
     }
-    changed
+    Ok(changed)
 }
 
 /// Replace a stored credential in place (the refresh path persists rotated
@@ -134,7 +136,7 @@ pub fn remove(id: &str) -> bool {
 /// its metadata can never land out of sync.
 pub fn update(cred: &StoredCredential) -> std::io::Result<bool> {
     let _guard = STORE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let mut accounts = read_accounts();
+    let mut accounts = read_accounts()?;
     let Some(idx) = accounts.iter().position(|c| c.id == cred.id) else {
         return Ok(false); // unknown id; nothing to update
     };
@@ -189,19 +191,22 @@ pub fn find(id: &str) -> Option<StoredCredential> {
 /// metadata-only record left behind by an older keychain-backed build) is
 /// skipped rather than surfaced as a broken account.
 pub fn load() -> Vec<StoredCredential> {
-    read_accounts()
-        .into_iter()
-        .filter(|c| !c.access_token.is_empty())
-        .collect()
+    match read_accounts() {
+        Ok(accounts) => accounts
+            .into_iter()
+            .filter(|c| !c.access_token.is_empty())
+            .collect(),
+        Err(e) => {
+            eprintln!("store: failed to read account store: {e}");
+            Vec::new()
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
     // AIT_ACCOUNTS_PATH is process-global, so serialize the file-touching tests.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn temp_path(tag: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("ait_store_{tag}_{}.json", std::process::id()))
@@ -209,7 +214,7 @@ mod tests {
 
     #[test]
     fn add_load_roundtrip_persists_full_credential() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = STORE_TEST_ENV_LOCK.lock().unwrap();
         let path = temp_path("roundtrip");
         let _ = std::fs::remove_file(&path);
         std::env::set_var("AIT_ACCOUNTS_PATH", &path);
@@ -217,7 +222,7 @@ mod tests {
         let id = add(StoredCredential {
             id: String::new(),
             provider: Provider::Codex,
-            label: "a@b.c".into(),
+            label: "store-user@example.invalid".into(),
             access_token: "ACCESS-1".into(),
             refresh_token: Some("REFRESH-1".into()),
             expires_at: 123,
@@ -235,7 +240,10 @@ mod tests {
             "access token should persist to file"
         );
         assert!(file.contains("REFRESH-1"), "refresh token should persist");
-        assert!(file.contains("a@b.c"), "label metadata should persist");
+        assert!(
+            file.contains("store-user@example.invalid"),
+            "label metadata should persist"
+        );
 
         // load() reconstructs the full credential from the file.
         let loaded = load();
@@ -246,7 +254,7 @@ mod tests {
         assert_eq!(loaded[0].account_id.as_deref(), Some("acct"));
         assert_eq!(loaded[0].expires_at, 123);
 
-        assert!(remove(&id));
+        assert!(remove(&id).unwrap());
         assert!(load().is_empty());
         std::env::remove_var("AIT_ACCOUNTS_PATH");
         let _ = std::fs::remove_file(&path);
@@ -256,7 +264,7 @@ mod tests {
     fn load_skips_tokenless_stale_records() {
         // A record left by an older keychain-backed build has metadata but no
         // access token in the file. It must be skipped, not surfaced as broken.
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = STORE_TEST_ENV_LOCK.lock().unwrap();
         let path = temp_path("stale");
         std::fs::write(
             &path,
@@ -272,8 +280,65 @@ mod tests {
     }
 
     #[test]
+    fn add_does_not_overwrite_unparseable_accounts_file() {
+        let _g = STORE_TEST_ENV_LOCK.lock().unwrap();
+        let path = temp_path("corrupt_add");
+        let raw = "{ this is not valid json";
+        std::fs::write(&path, raw).unwrap();
+        std::env::set_var("AIT_ACCOUNTS_PATH", &path);
+
+        let result = add(StoredCredential {
+            id: "new-1".into(),
+            provider: Provider::Codex,
+            label: "new".into(),
+            access_token: "ACCESS".into(),
+            refresh_token: None,
+            expires_at: 0,
+            id_token: None,
+            account_id: None,
+        });
+
+        assert!(
+            result.is_err(),
+            "mutating a corrupt store must surface the parse error"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            raw,
+            "corrupt accounts.json must not be replaced with an empty store"
+        );
+
+        std::env::remove_var("AIT_ACCOUNTS_PATH");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn remove_does_not_overwrite_unparseable_accounts_file() {
+        let _g = STORE_TEST_ENV_LOCK.lock().unwrap();
+        let path = temp_path("corrupt_remove");
+        let raw = "{ this is not valid json";
+        std::fs::write(&path, raw).unwrap();
+        std::env::set_var("AIT_ACCOUNTS_PATH", &path);
+
+        let result = remove("old-1");
+
+        assert!(
+            result.is_err(),
+            "removing from a corrupt store must surface the parse error"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            raw,
+            "corrupt accounts.json must not be replaced with an empty store"
+        );
+
+        std::env::remove_var("AIT_ACCOUNTS_PATH");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
     fn update_replaces_credential_in_place() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = STORE_TEST_ENV_LOCK.lock().unwrap();
         let path = temp_path("update");
         let _ = std::fs::remove_file(&path);
         std::env::set_var("AIT_ACCOUNTS_PATH", &path);
@@ -281,7 +346,7 @@ mod tests {
         let id = add(StoredCredential {
             id: "upd-1".into(),
             provider: Provider::Codex,
-            label: "a@b.c".into(),
+            label: "store-user@example.invalid".into(),
             access_token: "ACCESS-V1".into(),
             refresh_token: Some("REFRESH-V1".into()),
             expires_at: 100,
@@ -293,7 +358,7 @@ mod tests {
         let rotated = StoredCredential {
             id: id.clone(),
             provider: Provider::Codex,
-            label: "a@b.c".into(),
+            label: "store-user@example.invalid".into(),
             access_token: "ACCESS-V2".into(),
             refresh_token: Some("REFRESH-V2".into()),
             expires_at: 999_999,
@@ -320,14 +385,48 @@ mod tests {
         unknown.id = "does-not-exist".into();
         assert!(!update(&unknown).unwrap());
 
-        assert!(remove(&id));
+        assert!(remove(&id).unwrap());
         std::env::remove_var("AIT_ACCOUNTS_PATH");
         let _ = std::fs::remove_file(&path);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn remove_reports_persist_failure() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _g = STORE_TEST_ENV_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("ait_store_remove_ro_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("accounts.json");
+        std::fs::write(
+            &path,
+            r#"{"accounts":[{"id":"victim","provider":"codex","label":"x","access_token":"secret","expires_at":0}]}"#,
+        )
+        .unwrap();
+        std::env::set_var("AIT_ACCOUNTS_PATH", &path);
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+
+        let err = remove("victim").unwrap_err();
+
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(
+            err.contains("could not save account store"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            std::fs::read_to_string(&path).unwrap().contains("victim"),
+            "failed removal must not pretend the account was deleted"
+        );
+
+        std::env::remove_var("AIT_ACCOUNTS_PATH");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn concurrent_adds_do_not_lose_records() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = STORE_TEST_ENV_LOCK.lock().unwrap();
         let path = temp_path("concurrent");
         let _ = std::fs::remove_file(&path);
         std::env::set_var("AIT_ACCOUNTS_PATH", &path);
@@ -358,7 +457,7 @@ mod tests {
         assert_eq!(loaded.len(), 16, "no records lost under concurrent adds");
 
         for i in 0..16 {
-            remove(&format!("conc-{i}"));
+            remove(&format!("conc-{i}")).unwrap();
         }
         std::env::remove_var("AIT_ACCOUNTS_PATH");
         let _ = std::fs::remove_file(&path);
@@ -368,7 +467,7 @@ mod tests {
     #[test]
     fn persisted_accounts_file_is_owner_only() {
         use std::os::unix::fs::PermissionsExt;
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = STORE_TEST_ENV_LOCK.lock().unwrap();
         let path = temp_path("perms");
         let _ = std::fs::remove_file(&path);
         std::env::set_var("AIT_ACCOUNTS_PATH", &path);
@@ -390,7 +489,7 @@ mod tests {
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "accounts.json must be owner-only");
 
-        let _ = remove("perm-1");
+        let _ = remove("perm-1").unwrap();
         std::env::remove_var("AIT_ACCOUNTS_PATH");
         let _ = std::fs::remove_file(&path);
     }
@@ -400,7 +499,7 @@ mod tests {
         let cred = StoredCredential {
             id: "rot-1".into(),
             provider: Provider::Gemini,
-            label: "me@x.com".into(),
+            label: "gemini-user@example.invalid".into(),
             access_token: "old-at".into(),
             refresh_token: Some("old-rt".into()),
             expires_at: 1,
@@ -411,7 +510,7 @@ mod tests {
         let kept = rotate_credential(&cred, "new-at".into(), None, None, 999);
         assert_eq!(kept.id, "rot-1");
         assert_eq!(kept.provider, Provider::Gemini);
-        assert_eq!(kept.label, "me@x.com");
+        assert_eq!(kept.label, "gemini-user@example.invalid");
         assert_eq!(kept.account_id.as_deref(), Some("acct"));
         assert_eq!(kept.access_token, "new-at");
         assert_eq!(kept.refresh_token.as_deref(), Some("old-rt"));

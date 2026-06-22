@@ -9,6 +9,8 @@ pub mod zai;
 
 use async_trait::async_trait;
 use futures::future::join_all;
+use std::collections::HashMap;
+use std::sync::{Arc, LazyLock, Mutex};
 
 use crate::model::{auto_service_id, stored_service_id, Provider, ServiceSource, ServiceUsage};
 
@@ -87,12 +89,21 @@ pub async fn fetch_all(providers: Vec<Box<dyn ProviderApi>>) -> Vec<ServiceUsage
 
 /// Fetch usage for a manually-added (OAuth/API-key) account whose token lives
 /// in the store. Refreshes the access token first if it's near expiry (P0 #3).
-/// Serializes the refresh+persist critical section so two concurrent refreshes
-/// of the SAME stored credential can't both replay the old (rotating) refresh
-/// token and lose the winner's rotated token (B-1). Held only across
-/// refresh+persist — never the usage fetch — so per-provider fetch parallelism
-/// is preserved.
-static REFRESH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+/// Serializes refresh+persist per stored credential, so two refreshes of the
+/// same rotating token cannot replay the old refresh_token while different
+/// stored accounts can still fetch/refresh independently.
+static STORED_REFRESH_LOCKS: LazyLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn stored_refresh_lock_for(id: &str) -> Arc<tokio::sync::Mutex<()>> {
+    let mut locks = STORED_REFRESH_LOCKS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    locks
+        .entry(id.to_string())
+        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+        .clone()
+}
 
 fn is_expired(cred: &crate::store::StoredCredential, now_ms: i64) -> bool {
     cred.expires_at > 0 && cred.expires_at < now_ms
@@ -108,41 +119,58 @@ fn is_expired(cred: &crate::store::StoredCredential, now_ms: i64) -> bool {
 pub async fn refresh_if_expired(
     http: &reqwest::Client,
     cred: &crate::store::StoredCredential,
-) -> crate::store::StoredCredential {
+) -> Result<crate::store::StoredCredential, ProviderError> {
     if !is_expired(cred, chrono::Utc::now().timestamp_millis()) {
-        return cred.clone();
+        return Ok(cred.clone());
     }
-    let _guard = REFRESH_LOCK.lock().await;
+    let lock = stored_refresh_lock_for(&cred.id);
+    let _guard = lock.lock().await;
     // Re-read: a concurrent refresher may have rotated + persisted while we waited.
-    let latest = crate::store::find(&cred.id).unwrap_or_else(|| cred.clone());
+    let latest = crate::store::find(&cred.id).ok_or_else(|| {
+        ProviderError::NotLoggedIn(format!(
+            "stored {:?} account {} was removed before refresh",
+            cred.provider, cred.id
+        ))
+    })?;
     if !is_expired(&latest, chrono::Utc::now().timestamp_millis()) {
-        return latest;
+        return Ok(latest);
     }
     match refresh_stored(http, &latest).await {
-        Some(updated) => {
-            match crate::store::update(&updated) {
-                Ok(true) => {}
-                Ok(false) => eprintln!(
-                    "stored {:?} account {}: vanished before refreshed token could persist",
-                    updated.provider, updated.id
-                ),
-                // B-2: a failed write is logged with the real fs error, not
-                // swallowed — the next poll would otherwise replay the old token.
-                Err(e) => eprintln!(
-                    "stored {:?} account {}: refreshed token not persisted: {e}",
-                    updated.provider, updated.id
-                ),
-            }
-            updated
-        }
-        None => latest,
+        Some(updated) => match crate::store::update(&updated) {
+            Ok(true) => Ok(updated),
+            Ok(false) => Err(ProviderError::NotLoggedIn(format!(
+                "stored {:?} account {} vanished before refreshed token could persist",
+                updated.provider, updated.id
+            ))),
+            Err(e) => Err(ProviderError::Network(format!(
+                "stored {:?} account {} refreshed token not persisted: {e}",
+                updated.provider, updated.id
+            ))),
+        },
+        None => Ok(latest),
     }
 }
 
 pub async fn fetch_credential(cred: &crate::store::StoredCredential) -> ServiceUsage {
     let http = crate::http::shared();
     // P0 #3: refresh expired stored tokens before fetching (serialized + re-read).
-    let active = refresh_if_expired(&http, cred).await;
+    let active = match refresh_if_expired(&http, cred).await {
+        Ok(active) => active,
+        Err(e) => {
+            return ServiceUsage {
+                id: stored_service_id(&cred.id),
+                source: ServiceSource::Stored,
+                provider: cred.provider,
+                connected: false,
+                plan: None,
+                account: Some(cred.label.clone()),
+                error: Some(e.into()),
+                windows: vec![],
+                detail_windows: vec![],
+                raw_response: None,
+            }
+        }
+    };
 
     let res = match active.provider {
         Provider::Codex => crate::providers::codex::fetch_stored(&http, &active).await,
@@ -271,6 +299,22 @@ mod tests {
         assert!(!is_expired(&cred(0), 200)); // 0 = unknown → never expired
         assert!(!is_expired(&cred(-5), 200)); // non-positive → never
         assert!(!is_expired(&cred(200), 200)); // exactly now → not yet (strict <)
+    }
+
+    #[test]
+    fn stored_refresh_locks_are_keyed_by_account_id() {
+        let a1 = stored_refresh_lock_for("account-a");
+        let a2 = stored_refresh_lock_for("account-a");
+        let b = stored_refresh_lock_for("account-b");
+
+        assert!(
+            std::sync::Arc::ptr_eq(&a1, &a2),
+            "the same stored account must reuse one refresh lock"
+        );
+        assert!(
+            !std::sync::Arc::ptr_eq(&a1, &b),
+            "different stored accounts must not serialize each other's refresh"
+        );
     }
 
     #[test]

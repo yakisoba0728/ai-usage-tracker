@@ -1,10 +1,13 @@
 import type { Provider } from "@/lib/types";
+import { PROVIDER_ORDER } from "@/lib/providerMetadata";
 
 export type AddAccountOptionId =
   | "session-key"
   | "browser-oauth"
   | "device-code"
   | "local-session";
+
+export const ADD_ACCOUNT_PROVIDERS: Provider[] = PROVIDER_ORDER;
 
 /**
  * The sign-in methods each provider supports, in display order. Titles and

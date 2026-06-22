@@ -142,6 +142,7 @@
       "codex": "Codex uses the OpenAI browser OAuth flow with a local callback.",
       "gemini": "Gemini uses Google's browser OAuth flow with a local callback.",
       "copilot": "Copilot supports a pasted token or GitHub device-code sign-in.",
+      "cursor": "Cursor can be added by reusing a local Cursor session detected on this device.",
       "zai": "z.ai can be added with a GLM API key or session key."
     },
     "hint": {
@@ -188,7 +189,7 @@
     "showOffline": "Show offline accounts",
     "showOfflineDesc": "Keep disconnected providers visible in the monitor.",
     "providersTitle": "Providers",
-    "providersDesc": "{{count}} providers enabled.",
+    "providersDesc": "{{count}} providers enabled for monitoring.",
     "shownAs": "Shown as {{name}}",
     "defaultName": "Default provider name",
     "addProviderAccount": "Add provider account",

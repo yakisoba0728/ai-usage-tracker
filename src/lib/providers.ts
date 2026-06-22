@@ -1,4 +1,4 @@
-import { PROVIDER_LABEL } from "@/components/ProviderMark";
+import { PROVIDER_LABEL, PROVIDER_ORDER } from "@/lib/providerMetadata";
 import type {
   AppConfig,
   LimitWindow,
@@ -13,19 +13,7 @@ export function anchorSupported(provider: Provider): boolean {
   return ANCHOR_SUPPORTED.has(provider);
 }
 
-/**
- * Canonical provider order — MUST mirror `provider_index` in the Rust
- * `config.rs` and `AppConfig.providers: [ProviderConfig; 6]`. The index of a
- * provider in this array is also its index into `AppConfig.providers`.
- */
-export const PROVIDER_ORDER: Provider[] = [
-  "claude",
-  "codex",
-  "gemini",
-  "copilot",
-  "cursor",
-  "zai",
-];
+export { PROVIDER_LABEL, PROVIDER_ORDER } from "@/lib/providerMetadata";
 
 /** Index of a provider within `AppConfig.providers` (and PROVIDER_ORDER). */
 export function providerIndex(provider: Provider): number {

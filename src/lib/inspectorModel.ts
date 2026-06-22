@@ -1,5 +1,6 @@
 import { formatUsedLimit } from "@/lib/format";
 import {
+  providerConfigFor,
   providerDisplayName,
   providerIndex,
   resolveHeadlineWindow,
@@ -47,6 +48,7 @@ export function buildAccountSections(
 ): AccountSection[] {
   const query = normalizeQuery(options.query);
   const rows = services
+    .filter((service) => providerConfigFor(config, service.provider)?.enabled !== false)
     .filter((service) => options.showOffline || service.connected)
     .map((service) => toAccountRow(service, config))
     .filter((row) => rowMatchesQuery(row, query));

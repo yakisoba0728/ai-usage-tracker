@@ -105,6 +105,16 @@ fn stored_refresh_lock_for(id: &str) -> Arc<tokio::sync::Mutex<()>> {
         .clone()
 }
 
+/// Drop a stored account's refresh lock so the map doesn't grow forever across
+/// add/remove churn (UG-1). Keyed by the RAW credential id. Called from
+/// `remove_account` once removal actually happened.
+pub fn forget_stored_refresh_lock(id: &str) {
+    STORED_REFRESH_LOCKS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(id);
+}
+
 fn is_expired(cred: &crate::store::StoredCredential, now_ms: i64) -> bool {
     cred.expires_at > 0 && cred.expires_at < now_ms
 }
@@ -315,6 +325,30 @@ mod tests {
             !std::sync::Arc::ptr_eq(&a1, &b),
             "different stored accounts must not serialize each other's refresh"
         );
+    }
+
+    #[test]
+    fn forget_stored_refresh_lock_shrinks_the_map() {
+        // Unique key so this can't race the parallel keyed-by-id test (same
+        // process-global static).
+        let id = "acct-forget-unique-xyz";
+        forget_stored_refresh_lock(id); // start clean
+
+        let a1 = stored_refresh_lock_for(id);
+        let a1b = stored_refresh_lock_for(id);
+        assert!(
+            std::sync::Arc::ptr_eq(&a1, &a1b),
+            "before forgetting, the entry is cached and reused"
+        );
+
+        forget_stored_refresh_lock(id);
+        let a2 = stored_refresh_lock_for(id);
+        assert!(
+            !std::sync::Arc::ptr_eq(&a1, &a2),
+            "forgetting removed the entry, so a fresh Arc is minted — map shrank"
+        );
+
+        forget_stored_refresh_lock(id); // cleanup
     }
 
     #[test]

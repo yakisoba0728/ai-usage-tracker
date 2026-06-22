@@ -39,5 +39,12 @@ export function collectThresholdCrossings(
     }
   }
 
+  // Drop previous-percent entries for services no longer in the snapshot (a
+  // removed account) so the map doesn't grow forever across churn (UG-3).
+  const live = new Set(snapshot.services.map((s) => s.id));
+  for (const id of previousPercents.keys()) {
+    if (!live.has(id)) previousPercents.delete(id);
+  }
+
   return crossings;
 }

@@ -6,10 +6,9 @@ import {
   formatPercent,
   formatResetShort,
   formatUsedLimit,
-  percentSeverity,
   remainingPercent,
 } from "@/lib/format";
-import { severityToStatus } from "@/lib/status";
+import { toneForPercent } from "@/lib/status";
 import type { LimitWindow } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -47,7 +46,7 @@ function WindowRow({
 }) {
   const { t } = useTranslation();
   const percent = window.used_percent;
-  const tone = severityToStatus(percentSeverity(percent));
+  const tone = toneForPercent(percent);
   return (
     <div className="rounded-lg border border-border bg-surface/50 p-4">
       <div className="mb-3 flex items-start justify-between gap-4">

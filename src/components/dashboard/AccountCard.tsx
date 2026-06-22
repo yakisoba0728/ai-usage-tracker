@@ -10,7 +10,6 @@ import {
   formatPercent,
   formatResetShort,
   formatServiceError,
-  percentSeverity,
   remainingPercent,
 } from "@/lib/format";
 import {
@@ -20,7 +19,7 @@ import {
 } from "@/lib/accountActionState";
 import type { AccountRow, AccountSection } from "@/lib/inspectorModel";
 import { anchorSupported } from "@/lib/providers";
-import { severityToStatus } from "@/lib/status";
+import { toneForPercent } from "@/lib/status";
 import type { LimitWindow } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -329,7 +328,7 @@ function CompactWindowLine({
   const reset = window.resets_at
     ? formatResetShort(window.resets_at, nowMs, t)
     : null;
-  const tone = severityToStatus(percentSeverity(percent));
+  const tone = toneForPercent(percent);
   return (
     <div>
       <div className="mb-1 flex items-center justify-between gap-2 text-xs">

@@ -97,12 +97,34 @@ impl AppConfig {
         }
     }
 
-    /// Load from disk, or return Default if missing / unparseable.
+    /// Load from disk. Missing → defaults (expected first run). A file that
+    /// exists but fails to parse is preserved (see `load_from`) rather than
+    /// silently discarded.
     pub fn load() -> Self {
-        let path = Self::config_path();
-        match std::fs::read_to_string(&path) {
-            Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
-            Err(_) => Self::default(),
+        Self::load_from(&Self::config_path())
+    }
+
+    fn load_from(path: &Path) -> Self {
+        let Ok(text) = std::fs::read_to_string(path) else {
+            return Self::default(); // missing → defaults (expected first run)
+        };
+        match serde_json::from_str::<Self>(&text) {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                // Corrupt, NOT missing (broken hand-edit, wrong-typed value, or a
+                // `providers` array of length != 6). Silently reverting to Default
+                // would wipe every per-provider pref + sort order + auto_anchor with
+                // no trace. Preserve the bad file as a recoverable .corrupt-* copy
+                // and log, then fall back to defaults (B-7).
+                eprintln!(
+                    "config: {} is corrupt ({e}); keeping a .corrupt-* copy and resetting to defaults",
+                    path.display()
+                );
+                let mut backup = path.as_os_str().to_owned();
+                backup.push(format!(".corrupt-{}", chrono::Utc::now().timestamp()));
+                let _ = std::fs::rename(path, std::path::PathBuf::from(backup));
+                Self::default()
+            }
         }
     }
 
@@ -122,6 +144,55 @@ impl AppConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn load_from_missing_file_returns_default() {
+        let p = std::env::temp_dir().join(format!("ait_cfg_missing_{}.json", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        assert_eq!(AppConfig::load_from(&p).poll_seconds, 300);
+    }
+
+    #[test]
+    fn load_from_parses_valid_file() {
+        let p = std::env::temp_dir().join(format!("ait_cfg_valid_{}.json", std::process::id()));
+        let cfg = AppConfig {
+            poll_seconds: 900,
+            ..Default::default()
+        };
+        std::fs::write(&p, serde_json::to_string(&cfg).unwrap()).unwrap();
+        assert_eq!(AppConfig::load_from(&p).poll_seconds, 900);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn load_from_corrupt_file_is_preserved_not_silently_reset() {
+        let dir = std::env::temp_dir().join(format!("ait_cfg_corrupt_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("config.json");
+        std::fs::write(&p, "{ this is not valid json").unwrap();
+
+        let cfg = AppConfig::load_from(&p);
+
+        // Corrupt → defaults (B-7), but the bad file must NOT be silently
+        // discarded — it is moved aside as a recoverable .corrupt-* sibling.
+        assert_eq!(cfg.poll_seconds, 300);
+        assert!(!p.exists(), "the corrupt config.json was renamed away");
+        let preserved = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .any(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("config.json.corrupt-")
+            });
+        assert!(
+            preserved,
+            "a .corrupt-* backup of the bad config must exist"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[cfg(unix)]
     #[test]

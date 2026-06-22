@@ -95,7 +95,14 @@ pub async fn refresh_once(
                     Ok(()) => eprintln!("anchor auto-fired {id}: ok"),
                     Err(e) => {
                         eprintln!("anchor auto-fired {id}: err: {e}");
-                        crate::anchor::clear(&id);
+                        // Roll back the cooldown ONLY for transient (network)
+                        // failures so a quick retry is allowed. A durable
+                        // rejection (e.g. a retired model → 4xx) keeps the
+                        // cooldown so we don't fire one detached task every poll
+                        // forever against a failing provider (B-3 / B-13).
+                        if crate::anchor::failure_is_transient(e) {
+                            crate::anchor::clear(&id);
+                        }
                     }
                 }
                 let _ = app2.emit(

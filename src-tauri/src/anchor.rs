@@ -78,6 +78,24 @@ pub async fn send_claude(
     Ok(())
 }
 
+/// Detect an in-band failure frame in a drained Codex Responses SSE stream. The
+/// endpoint can return HTTP 200 and then emit `event: response.failed`,
+/// `event: response.incomplete`, or `event: error`, meaning the turn did NOT
+/// complete — so the anchor never actually consumed the window (B-12). Matches
+/// event names exactly to avoid false positives on response content.
+fn sse_has_failure(body: &str) -> bool {
+    body.lines().any(|line| {
+        if let Some(ev) = line.trim().strip_prefix("event:") {
+            matches!(
+                ev.trim(),
+                "response.failed" | "response.incomplete" | "error"
+            )
+        } else {
+            false
+        }
+    })
+}
+
 pub async fn send_codex(
     http: &reqwest::Client,
     access_token: &str,
@@ -109,13 +127,22 @@ pub async fn send_codex(
         .await
         .map_err(|e| ProviderError::Network(e.to_string()))?;
     let status = resp.status();
-    // Drain the SSE stream so the turn completes; we only need a 2xx (no token in the body).
+    // Drain the SSE stream so the turn completes (no token in the body).
     let text = resp.text().await.unwrap_or_default();
     if !status.is_success() {
         let snippet: String = text.chars().take(200).collect();
         return Err(ProviderError::Status {
             status: status.as_u16(),
             body: format!("codex anchor: {snippet}"),
+        });
+    }
+    // HTTP 200 is necessary but not sufficient: the stream can still carry an
+    // in-band failure frame, in which case the turn never ran (B-12).
+    if sse_has_failure(&text) {
+        let snippet: String = text.chars().take(200).collect();
+        return Err(ProviderError::Status {
+            status: status.as_u16(),
+            body: format!("codex anchor: stream reported failure: {snippet}"),
         });
     }
     Ok(())
@@ -239,6 +266,15 @@ pub fn clear(service_id: &str) {
     }
 }
 
+/// Whether an anchor-send failure is transient (worth an immediate retry) vs a
+/// durable rejection (a retired model → 4xx, a missing credential, a parse
+/// error). Only transient failures should roll back the cooldown; a durable one
+/// must keep it so the auto-anchor doesn't retry-storm a failing provider every
+/// poll (B-3 / B-13).
+pub fn failure_is_transient(e: &ProviderError) -> bool {
+    matches!(e, ProviderError::Network(_))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,6 +301,23 @@ mod tests {
     }
 
     #[test]
+    fn only_network_failures_are_transient() {
+        assert!(failure_is_transient(&ProviderError::Network(
+            "timeout".into()
+        )));
+        // Durable rejections must NOT clear the cooldown (else retry-storm).
+        assert!(!failure_is_transient(&ProviderError::Status {
+            status: 400,
+            body: "model is not supported".into(),
+        }));
+        assert!(!failure_is_transient(&ProviderError::NotLoggedIn(
+            "x".into()
+        )));
+        assert!(!failure_is_transient(&ProviderError::Parse("x".into())));
+        assert!(!failure_is_transient(&ProviderError::Expired("x".into())));
+    }
+
+    #[test]
     fn supported_is_claude_codex_zai() {
         assert!(supported(Provider::Claude));
         assert!(supported(Provider::Codex));
@@ -272,6 +325,22 @@ mod tests {
         assert!(!supported(Provider::Copilot));
         assert!(!supported(Provider::Gemini));
         assert!(!supported(Provider::Cursor));
+    }
+
+    #[test]
+    fn sse_has_failure_detects_in_band_failure_frames_only() {
+        // Success / non-failure streams → false.
+        assert!(!sse_has_failure("event: response.completed\ndata: {}\n\n"));
+        assert!(!sse_has_failure("event: done\ndata: {}\n\n")); // the existing test body
+        assert!(!sse_has_failure("data: {\"text\":\"hi\"}\n\n"));
+        // In-band failure frames (HTTP 200 but the turn failed) → true.
+        assert!(sse_has_failure(
+            "event: response.failed\ndata: {\"error\":\"x\"}\n\n"
+        ));
+        assert!(sse_has_failure("event: error\ndata: {}\n\n"));
+        assert!(sse_has_failure("event: response.incomplete\ndata: {}\n\n"));
+        // Tolerates leading whitespace on the event line.
+        assert!(sse_has_failure("  event: response.failed\n"));
     }
 
     #[test]

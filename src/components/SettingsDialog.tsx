@@ -2,6 +2,8 @@ import { useMemo, type ReactNode } from "react";
 import {
   ChevronDown,
   Cloud,
+  Download,
+  Power,
   RefreshCw,
   Settings2,
   Shield,
@@ -36,6 +38,10 @@ export interface SettingsDialogProps {
   onShowOfflineChange: (b: boolean) => void;
   onReuseLocalSession?: () => void;
   onOpenAddAccount?: () => void;
+  /** Toggle launch-at-login — calls `set_launch_at_login` (OS item + persist). */
+  onLaunchAtLoginChange?: (enable: boolean) => void;
+  /** Manual "Check for updates" — calls `check_update_now` and toasts result. */
+  onCheckForUpdates?: () => void;
 }
 
 export function SettingsDialog({
@@ -49,6 +55,8 @@ export function SettingsDialog({
   onShowOfflineChange,
   onReuseLocalSession,
   onOpenAddAccount,
+  onLaunchAtLoginChange,
+  onCheckForUpdates,
 }: SettingsDialogProps) {
   const { t } = useTranslation();
   const enabledCount = useMemo(
@@ -155,6 +163,40 @@ export function SettingsDialog({
                   onChange={onShowOfflineChange}
                   ariaLabel={t("settings.showOffline")}
                 />
+              </SettingsRow>
+              <SettingsRow
+                icon={<Power className="size-4" />}
+                label={t("settings.launchAtLogin")}
+                description={t("settings.launchAtLoginDesc")}
+              >
+                <Toggle
+                  checked={config?.launch_at_login ?? false}
+                  disabled={config == null}
+                  onChange={(enable) => onLaunchAtLoginChange?.(enable)}
+                  ariaLabel={t("settings.launchAtLogin")}
+                />
+              </SettingsRow>
+              <SettingsRow
+                icon={<Download className="size-4" />}
+                label={t("settings.autoUpdate")}
+                description={t("settings.autoUpdateDesc")}
+              >
+                <Toggle
+                  checked={config?.auto_update_check ?? true}
+                  disabled={config == null}
+                  onChange={(checked) => patchConfig({ auto_update_check: checked })}
+                  ariaLabel={t("settings.autoUpdate")}
+                />
+              </SettingsRow>
+              <SettingsRow
+                icon={<Download className="size-4" />}
+                label={t("settings.checkUpdates")}
+                description={t("settings.checkUpdatesDesc")}
+              >
+                <ButtonLike onClick={() => onCheckForUpdates?.()}>
+                  <RefreshCw className="size-4" />
+                  {t("settings.checkUpdatesNow")}
+                </ButtonLike>
               </SettingsRow>
             </Section>
 

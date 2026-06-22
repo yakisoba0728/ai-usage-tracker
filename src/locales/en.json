@@ -197,6 +197,13 @@
     "sort": { "custom": "Custom", "usage": "Usage", "name": "Name" },
     "showOffline": "Show offline accounts",
     "showOfflineDesc": "Keep disconnected providers visible in the monitor.",
+    "launchAtLogin": "Launch at login",
+    "launchAtLoginDesc": "Start AI Usage Tracker automatically when you sign in.",
+    "autoUpdate": "Automatic update checks",
+    "autoUpdateDesc": "Check GitHub daily for a newer release and notify you.",
+    "checkUpdates": "Updates",
+    "checkUpdatesDesc": "Check for a newer release right now.",
+    "checkUpdatesNow": "Check for updates",
     "providersTitle": "Providers",
     "providersDesc": "{{count}} providers enabled for monitoring.",
     "shownAs": "Shown as {{name}}",
@@ -214,7 +221,11 @@
     "anchorSentFor": "Anchor message sent for {{name}}.",
     "anchorFailedFor": "Anchor failed for {{name}}: {{error}}",
     "anchorAutoSentFor": "Auto-anchored {{name}}.",
-    "anchorAutoFailedFor": "Auto-anchor failed for {{name}}: {{error}}"
+    "anchorAutoFailedFor": "Auto-anchor failed for {{name}}: {{error}}",
+    "launchAtLoginFailed": "Couldn't change launch at login: {{error}}",
+    "updateAvailable": "Update available: {{version}}.",
+    "upToDate": "You're on the latest version.",
+    "updateCheckFailed": "Update check failed: {{error}}"
   },
   "time": {
     "justNow": "Updated just now",

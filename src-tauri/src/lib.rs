@@ -11,6 +11,7 @@ pub mod providers;
 pub mod scheduler;
 pub mod secrets;
 pub mod store;
+pub mod update;
 pub mod util;
 
 use tauri::{
@@ -104,11 +105,36 @@ fn build_tray_menu(
         .build()
 }
 
+/// Reconcile the OS login item with the persisted `launch_at_login` intent
+/// (FEAT-4, spec §6.5). If the config says launch-at-login is ON but the OS
+/// reports the login item is gone (a user removed it manually), re-enable it so
+/// the stored preference stays the source of truth. If the config says OFF we do
+/// NOT force-disable — the user may have enabled it via the OS UI directly. All
+/// failures are logged and swallowed; a flaky login-item API must never block
+/// startup.
+fn reconcile_launch_at_login(app: &tauri::AppHandle) {
+    use tauri_plugin_autostart::ManagerExt;
+    if !config::AppConfig::load().launch_at_login {
+        return;
+    }
+    let manager = app.autolaunch();
+    match manager.is_enabled() {
+        Ok(true) => {} // already in the desired state
+        Ok(false) => {
+            if let Err(e) = manager.enable() {
+                eprintln!("autostart: failed to reconcile (re-enable) login item: {e}");
+            }
+        }
+        Err(e) => eprintln!("autostart: could not query login-item state: {e}"),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_autostart::Builder::new().build())
         .manage(commands::empty_snapshot_store())
         .manage(commands::default_config_store())
         .invoke_handler(tauri::generate_handler![
@@ -125,6 +151,8 @@ pub fn run() {
             commands::send_anchor_now,
             commands::refresh_account,
             commands::rename_account,
+            commands::check_update_now,
+            commands::set_launch_at_login,
         ])
         .setup(|app| {
             // --- Tray with a native menu (usage rows + actions) ---
@@ -173,8 +201,18 @@ pub fn run() {
             // is opened from the tray menu.
             set_dock_visible(app.handle(), false);
 
+            // --- Launch-at-login reconcile (FEAT-4) ---
+            // If the user wants launch-at-login but the OS login item was removed
+            // out-of-band (e.g. manually deleted in System Settings), re-enable it
+            // so the persisted intent stays authoritative. Failures are logged,
+            // never fatal.
+            reconcile_launch_at_login(app.handle());
+
             // --- Background poller ---
             scheduler::start(app.handle().clone(), config::AppConfig::load().poll_seconds);
+
+            // --- Update notifier (FEAT-5): one check at startup + every 24h ---
+            update::start(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {

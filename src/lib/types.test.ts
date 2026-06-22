@@ -88,10 +88,14 @@ describe("IPC contract shape", () => {
       ],
       accounts: {},
       auto_anchor: {},
+      launch_at_login: false,
+      auto_update_check: true,
     };
     expect(Object.keys(config).sort()).toEqual([
       "accounts",
       "auto_anchor",
+      "auto_update_check",
+      "launch_at_login",
       "poll_seconds",
       "providers",
       "schema_version",

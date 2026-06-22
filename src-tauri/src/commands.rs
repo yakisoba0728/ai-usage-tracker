@@ -367,6 +367,51 @@ pub async fn rename_account(
     Ok(())
 }
 
+/// Manually check for a newer GitHub release NOW (the "Check for updates"
+/// button, FEAT-5). Runs regardless of the `auto_update_check` toggle (`force =
+/// true`) and always notifies for a newer release. Returns `Some({version,
+/// html_url})` when an update is available so the UI can show it, `None` when
+/// already up to date. A check failure (offline / rate-limited) surfaces as a
+/// command error string rather than panicking.
+#[tauri::command]
+pub async fn check_update_now(
+    app: AppHandle,
+    cfg: State<'_, ConfigStore>,
+) -> Result<Option<crate::update::AvailableUpdate>, String> {
+    crate::update::run_update_check(&app, &cfg.inner().clone(), true).await
+}
+
+/// Enable/disable launch-at-login (FEAT-4) AND persist the intent. Toggles the
+/// OS login item via the autostart plugin's `autolaunch()` manager, then writes
+/// `launch_at_login` to the config so `.setup` can reconcile a manually-removed
+/// item on the next start. An OS-side failure is returned as an error (the
+/// config is NOT written in that case, so the flag never claims a state the OS
+/// didn't accept).
+#[tauri::command]
+pub async fn set_launch_at_login(
+    app: AppHandle,
+    cfg: State<'_, ConfigStore>,
+    enable: bool,
+) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let manager = app.autolaunch();
+    if enable {
+        manager
+            .enable()
+            .map_err(|e| format!("could not enable launch at login: {e}"))?;
+    } else {
+        manager
+            .disable()
+            .map_err(|e| format!("could not disable launch at login: {e}"))?;
+    }
+    let mut guard = cfg.write().await;
+    guard.launch_at_login = enable;
+    guard
+        .save()
+        .map_err(|e| format!("could not save config: {e}"))?;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn start_login(
     app: AppHandle,

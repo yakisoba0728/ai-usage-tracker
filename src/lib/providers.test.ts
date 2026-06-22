@@ -37,6 +37,8 @@ function cfg(
     providers: slots as AppConfig["providers"],
     accounts,
     auto_anchor: {},
+    launch_at_login: false,
+    auto_update_check: true,
   };
 }
 

@@ -80,6 +80,29 @@ pub struct AppConfig {
     /// Per-`service_id` opt-in for auto window-anchoring (default: empty = OFF).
     #[serde(default)]
     pub auto_anchor: HashMap<String, bool>,
+    /// Launch the app at login (FEAT-4). The OS login-item registration is the
+    /// source of truth; this flag mirrors the user's intent so `.setup` can
+    /// reconcile a manually-removed login item back on. Default: false.
+    #[serde(default)]
+    pub launch_at_login: bool,
+    /// Whether the background GitHub-release update notifier runs (FEAT-5).
+    /// Default: true (`default_true`) so old configs without the field still
+    /// opt in.
+    #[serde(default = "default_true")]
+    pub auto_update_check: bool,
+    /// The last release version we fired an "update available" notification for,
+    /// so the 24h check doesn't re-notify the same release every interval
+    /// (FEAT-5). `None` until the first notification. Stored without a leading
+    /// `v`. Empty/absent in old configs via serde default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_notified_version: Option<String>,
+}
+
+/// serde `default = ...` helper: a bool field that defaults to `true` when the
+/// key is absent from an older on-disk config (serde's built-in default is
+/// `false`).
+fn default_true() -> bool {
+    true
 }
 
 impl Default for AppConfig {
@@ -92,6 +115,9 @@ impl Default for AppConfig {
             providers: Default::default(),
             accounts: HashMap::new(),
             auto_anchor: HashMap::new(),
+            launch_at_login: false,
+            auto_update_check: true,
+            last_notified_version: None,
         }
     }
 }
@@ -719,5 +745,47 @@ mod tests {
         v.as_object_mut().unwrap().remove("auto_anchor");
         let old: AppConfig = serde_json::from_value(v).unwrap(); // must succeed (not unwrap_or_default)
         assert!(old.auto_anchor.is_empty());
+    }
+
+    // ── FEAT-4 / FEAT-5 new config fields (D2 round-trip + old-config defaults) ──
+
+    /// `launch_at_login` defaults false, `auto_update_check` defaults TRUE, and
+    /// `last_notified_version` round-trips. An OLDER config missing all three
+    /// fields must still load (serde field defaults), with `auto_update_check`
+    /// defaulting to true via `default_true` — NOT serde's built-in `false`.
+    #[test]
+    fn feat4_5_fields_default_and_roundtrip() {
+        let def = AppConfig::default();
+        assert!(!def.launch_at_login, "launch_at_login defaults off");
+        assert!(def.auto_update_check, "auto_update_check defaults ON");
+        assert!(def.last_notified_version.is_none());
+
+        let cfg = AppConfig {
+            launch_at_login: true,
+            auto_update_check: false,
+            last_notified_version: Some("0.2.0".into()),
+            ..Default::default()
+        };
+        let json = serde_json::to_string_pretty(&cfg).unwrap();
+        let back: AppConfig = serde_json::from_str(&json).unwrap();
+        assert!(back.launch_at_login);
+        assert!(!back.auto_update_check);
+        assert_eq!(back.last_notified_version.as_deref(), Some("0.2.0"));
+
+        // An old config that predates these fields still loads, and the
+        // update-check defaults to ON (the `default_true` helper) rather than
+        // serde's bare `false`.
+        let mut v = serde_json::to_value(AppConfig::default()).unwrap();
+        let obj = v.as_object_mut().unwrap();
+        obj.remove("launch_at_login");
+        obj.remove("auto_update_check");
+        obj.remove("last_notified_version");
+        let old: AppConfig = serde_json::from_value(v).unwrap();
+        assert!(!old.launch_at_login, "missing launch_at_login → false");
+        assert!(
+            old.auto_update_check,
+            "missing auto_update_check must default to TRUE (default_true), not serde's false"
+        );
+        assert!(old.last_notified_version.is_none());
     }
 }

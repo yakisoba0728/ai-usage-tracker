@@ -400,6 +400,17 @@ mod tests {
     ///    so adding/removing one is a deliberate, test-visible diff (and keeps the
     ///    Rust side ↔ `src/lib/ipc.ts` in lockstep).
     ///
+    /// ASYMMETRY (known limitation): the 12 commands are COMPILE-ANCHORED to their
+    /// fn items (the `use` block), so dropping one is a hard build break. The 6
+    /// EVENTS are pinned only as a NAME tripwire — the event strings are raw
+    /// literals at the `emit("…")` call sites (lib.rs/login.rs/commands.rs), NOT
+    /// shared consts, so this test cannot detect a DROPPED emit. Promoting the
+    /// event names to shared `const`s would touch three production files and
+    /// exceeds Chunk 0's sanctioned env-hook seam, so it is deferred.
+    /// CHUNK-2 TODO: when Chunk 2 reworks `anchor-result`'s payload, introduce
+    /// `pub const EVENT_*` names emitted at the call sites and reference them here
+    /// so a dropped/renamed emit becomes a compile error too (closing the gap).
+    ///
     /// CHUNK-2/3/4 ALLOWED DELTAS (the only intended changes — apply in their
     /// owning chunk, with this test updated as the deliberate signal, NOT here):
     ///   - Chunk 2: `anchor-result` payload gains `provider` + `label` (the EVENT

@@ -217,7 +217,15 @@ pub async fn list_accounts() -> Result<Vec<crate::model::AccountInfo>, String> {
 
 #[tauri::command]
 pub async fn remove_account(id: String) -> Result<bool, String> {
-    crate::store::remove(&id)
+    let removed = crate::store::remove(&id)?;
+    if removed {
+        // Drop the per-account entries the add path mints so the maps don't grow
+        // forever across add/remove churn (UG-1/UG-2). Refresh lock is keyed by
+        // the RAW id; the anchor cooldown by the `stored:<id>` service-id form.
+        crate::providers::forget_stored_refresh_lock(&id);
+        crate::anchor::clear(&crate::model::stored_service_id(&id));
+    }
+    Ok(removed)
 }
 
 /// Add an account by pasting a raw credential (Claude session key, or any

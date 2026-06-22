@@ -72,4 +72,17 @@ describe("collectThresholdCrossings", () => {
       { serviceId: "auto:claude", provider: "claude", threshold: 90 },
     ]);
   });
+
+  it("prunes previous-percent entries for services absent from the snapshot (UG-3)", () => {
+    // A removed account ("stored:gone") lingers in the map; a live one stays.
+    const previous = new Map<string, number>([
+      ["stored:gone", 80],
+      ["auto:claude", 50],
+    ]);
+
+    collectThresholdCrossings(usage(102, 55), config, previous);
+
+    expect(previous.has("stored:gone")).toBe(false); // map shrank
+    expect(previous.has("auto:claude")).toBe(true); // live service survives
+  });
 });

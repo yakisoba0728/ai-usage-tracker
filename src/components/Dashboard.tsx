@@ -32,11 +32,11 @@ import { useNow } from "@/hooks/useNow";
 import { useSnapshot } from "@/hooks/useSnapshot";
 import { useAccountActions } from "@/hooks/useAccountActions";
 import { useActionResultEvents } from "@/hooks/useActionResultEvents";
+import { useThresholdToasts } from "@/hooks/useThresholdToasts";
 import { useToasts } from "@/hooks/useToasts";
 import { getAccountAction } from "@/lib/accountActionState";
 import { buildAnchorToast } from "@/lib/anchorToast";
 import {
-  shouldProcessThresholdSnapshot,
   shouldShowNoResultsOfflineCta,
   transitionToAddAccount,
   transitionToSettings,
@@ -56,13 +56,9 @@ import {
   setConfig,
   setLaunchAtLogin,
 } from "@/lib/ipc";
-import {
-  patchAccountConfig,
-  providerDisplayName,
-} from "@/lib/providers";
+import { patchAccountConfig } from "@/lib/providers";
 import { scrubErrorText } from "@/lib/errorScrub";
-import { collectThresholdCrossings } from "@/lib/thresholdToasts";
-import type { AppConfig, UsageSnapshot } from "@/lib/types";
+import type { AppConfig } from "@/lib/types";
 
 export function Dashboard() {
   const { snapshot, loading, refreshing, error, loadingProviders, refresh } =
@@ -167,8 +163,6 @@ export function Dashboard() {
 
 
   const { toasts, pushToast, dismissToast } = useToasts();
-  const prevPctRef = useRef<Map<string, number>>(new Map());
-  const lastProcessedThresholdSnapshotRef = useRef<UsageSnapshot | null>(null);
 
   // Launch-at-login (FEAT-4): optimistic flag update, then the dedicated command
   // (OS login item + persist). On failure, revert the optimistic flag and toast.
@@ -295,27 +289,7 @@ export function Dashboard() {
     t,
   });
 
-  useEffect(() => {
-    if (!snapshot || !config) return;
-    if (
-      !shouldProcessThresholdSnapshot(
-        lastProcessedThresholdSnapshotRef.current,
-        snapshot,
-      )
-    ) {
-      return;
-    }
-    lastProcessedThresholdSnapshotRef.current = snapshot;
-
-    for (const crossing of collectThresholdCrossings(snapshot, config, prevPctRef.current)) {
-      pushToast(
-        t("toast.reached", {
-          provider: providerDisplayName(config, crossing.serviceId, crossing.provider),
-          percent: Math.round(crossing.threshold),
-        }),
-      );
-    }
-  }, [snapshot, config, pushToast, t]);
+  useThresholdToasts(snapshot, config, pushToast, t);
 
   const hasConfigured = allServices.length > 0;
   const fetchedAt = snapshot?.fetched_at ?? null;

@@ -62,6 +62,8 @@ export function formatResetShort(
   const diff = epoch * 1000 - nowMs;
   if (diff <= 0) return t("time.reset.soon");
   const mins = Math.round(diff / 60000);
+  // A sub-minute reset rounds to 0; show "soon" rather than a literal "0m" (F-4).
+  if (mins < 1) return t("time.reset.soon");
   if (mins < 60) return t("time.reset.minutes", { m: mins });
   const hours = Math.floor(mins / 60);
   const remM = mins % 60;
@@ -88,7 +90,9 @@ export function formatUpdatedAgo(
   opts?: { prefix?: boolean },
 ): string {
   const prefix = opts?.prefix ?? true;
-  if (fetchedAtSec == null) return t("time.awaiting");
+  // null AND the 0 cold-start sentinel (and any bogus negative) mean "no real
+  // snapshot yet" — otherwise fetched_at:0 renders "Updated 489000h ago" (F-1).
+  if (fetchedAtSec == null || fetchedAtSec <= 0) return t("time.awaiting");
   const elapsed = Math.max(0, Math.floor(nowMs / 1000) - fetchedAtSec);
   if (elapsed < 5) return prefix ? t("time.justNow") : t("time.agoJustNow");
   if (elapsed < 60) {

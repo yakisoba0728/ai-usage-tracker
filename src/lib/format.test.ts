@@ -93,6 +93,14 @@ describe("formatResetShort", () => {
       'time.reset.daysHours:{"d":2,"h":2}',
     );
   });
+  it("shows 'soon' for a sub-30s reset (rounds to 0m) instead of '0m' (F-4)", () => {
+    expect(formatResetShort(now / 1000 + 15, now, t)).toBe("time.reset.soon");
+    expect(formatResetShort(now / 1000 + 29, now, t)).toBe("time.reset.soon");
+    // ≥30s rounds up to 1m and is shown as "1m" (not "soon") — the boundary.
+    expect(formatResetShort(now / 1000 + 45, now, t)).toBe(
+      'time.reset.minutes:{"m":1}',
+    );
+  });
 });
 
 describe("formatUpdatedAgo", () => {
@@ -104,6 +112,10 @@ describe("formatUpdatedAgo", () => {
       'time.updatedSeconds:{"count":30}',
     );
     expect(formatUpdatedAgo(null, 0, t)).toBe("time.awaiting");
+  });
+  it("treats a 0 / negative fetched_at sentinel as awaiting, not '489000h ago' (F-1)", () => {
+    expect(formatUpdatedAgo(0, nowMs, t)).toBe("time.awaiting");
+    expect(formatUpdatedAgo(-5, nowMs, t)).toBe("time.awaiting");
   });
   it("uses the no-prefix keys when prefix is false", () => {
     expect(formatUpdatedAgo(fetchedAt, nowMs + 30_000, t, { prefix: false })).toBe(

@@ -67,9 +67,10 @@ export function SettingsDialog({
     { id: "providers", label: t("settings.nav.providers"), icon: <Cloud className="size-4" /> },
   ];
 
-  // The settings surface is small enough that both sections render at once;
-  // the nav scrolls to them. (We drop the old 5-section layout — Notifications,
-  // Sessions, Advanced were non-functional scaffolding.)
+  // Both sections render at once on this small surface, so the left rail is a
+  // static section legend (labels, not navigation — there's nothing to scroll
+  // to). (We dropped the old 5-section layout — Notifications, Sessions, and
+  // Advanced were non-functional scaffolding.)
   function patchConfig(patch: Partial<AppConfig>) {
     if (!config) return;
     onConfigChange({ ...config, ...patch });
@@ -89,7 +90,7 @@ export function SettingsDialog({
               {t("settings.title")}
             </DialogTitle>
           </div>
-          <nav className="grid gap-1 p-3 max-md:grid-cols-2">
+          <div className="grid gap-1 p-3 max-md:grid-cols-2">
             {sectionNav.map((item) => (
               <div
                 key={item.id}
@@ -99,7 +100,7 @@ export function SettingsDialog({
                 {item.label}
               </div>
             ))}
-          </nav>
+          </div>
         </div>
 
         <div className="scroll-area min-h-0 min-w-0 overflow-y-auto">

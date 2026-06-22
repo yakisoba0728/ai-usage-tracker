@@ -170,27 +170,6 @@
   }
 }
 
-@keyframes provider-fetch-sweep {
-  0% {
-    transform: translateX(-100%);
-  }
-  100% {
-    transform: translateX(100%);
-  }
-}
-
-@keyframes threshold-card-flash {
-  0% {
-    box-shadow: 0 0 0 0 rgba(196, 148, 74, 0.28);
-  }
-  45% {
-    box-shadow: 0 0 0 3px rgba(196, 148, 74, 0.18);
-  }
-  100% {
-    box-shadow: 0 0 0 0 rgba(196, 148, 74, 0);
-  }
-}
-
 @keyframes menu-pop-in {
   from {
     opacity: 0;
@@ -205,24 +184,6 @@
 .provider-fetch-dot,
 .status-dot-active {
   animation: provider-fetch-dot 1s ease-in-out infinite;
-}
-
-.provider-card-fetching::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background: linear-gradient(
-    90deg,
-    transparent,
-    rgba(255, 255, 255, 0.055),
-    transparent
-  );
-  animation: provider-fetch-sweep 1.4s ease-in-out infinite;
-}
-
-.threshold-flash {
-  animation: threshold-card-flash 1.4s ease-out;
 }
 
 .menu-pop {

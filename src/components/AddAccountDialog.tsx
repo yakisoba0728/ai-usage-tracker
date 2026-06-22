@@ -90,7 +90,7 @@ export function AddAccountDialog({
     return () => {
       void unP.then((u) => u());
     };
-  }, [onChanged, onOpenChange]);
+  }, [onChanged, onOpenChange, t]);
 
   function chooseProvider(provider: Provider) {
     setSelectedProvider(provider);

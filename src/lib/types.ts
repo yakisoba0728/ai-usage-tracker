@@ -75,12 +75,17 @@ export interface UsageSnapshot {
  */
 export interface ProviderConfig {
   enabled: boolean;
-  /** Override the display name shown on the card / modal title. */
-  custom_name: string | null;
+  /**
+   * Override the display name shown on the card / modal title. Optional AND
+   * nullable: Rust serializes this with `skip_serializing_if = Option::is_none`,
+   * so when unset the key is ABSENT (→ `undefined`) over IPC, while the TS write
+   * side may set it back to `null` (F-3).
+   */
+  custom_name?: string | null;
   /** Notification thresholds in percent (0–100). Default [50,75,90,95,100]. */
   notify_thresholds: number[];
-  /** Which window label to surface as the card headline. null = auto. */
-  primary_window: string | null;
+  /** Which window label to surface as the card headline. Absent/null = auto. */
+  primary_window?: string | null;
   /** Sort index for drag-and-drop reordering. Lower = earlier. */
   sort_index: number;
 }

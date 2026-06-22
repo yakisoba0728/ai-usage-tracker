@@ -24,14 +24,9 @@
     "stored": "Stored",
     "session": "Session",
     "oauth": "OAuth",
-    "offline": "Offline",
-    "online": "Online",
     "loggedOut": "Not logged in",
     "noUsageWindow": "No usage window",
-    "limitNotReported": "Limit not reported",
     "resetsIn": "Resets in {{time}}",
-    "noReset": "No reset",
-    "disconnected": "Disconnected",
     "viewDetails": "View details",
     "refresh": "Refresh",
     "sendRequest": "Send request",
@@ -44,20 +39,10 @@
     "network": "Network error.",
     "server_error": "The provider returned an error.",
     "parse_error": "Couldn't read the provider response.",
-    "offline": "Not connected.",
     "unknown": "Something went wrong.",
     "loadFailed": "Couldn't load usage.",
     "backendUnreachable": "Couldn't reach the tracker backend.",
-    "checkConnection": "Check the connection and try Refresh.",
-    "hint": {
-      "claude": "Run `claude` to refresh, or re-add the account.",
-      "codex": "Run `codex login`, or re-add the account.",
-      "gemini": "Re-authenticate with Google, or re-add the account.",
-      "copilot": "Re-authorize GitHub Copilot, or re-add the account.",
-      "cursor": "Sign in to Cursor again, or re-add the account.",
-      "zai": "Re-add the z.ai account with a fresh session key.",
-      "generic": "Re-add the account, or refresh its credential."
-    }
+    "checkConnection": "Check the connection and try Refresh."
   },
   "footer": {
     "hideOffline": "Hide offline",
@@ -130,10 +115,7 @@
       "sendNow": "Send a message now",
       "unsupported": "Not supported for this provider (calendar quota / no send path).",
       "confirmTitle": "Send an anchor message?",
-      "confirmBody": "This sends a real 1-token message, consumes quota, and may violate the provider's terms. Continue?",
-      "sending": "Sending…",
-      "sent": "Sent.",
-      "failed": "Failed: {{error}}"
+      "confirmBody": "This sends a real 1-token message, consumes quota, and may violate the provider's terms. Continue?"
     },
     "raw": {
       "empty": "No raw response — this account didn't make an HTTP call this cycle."

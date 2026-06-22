@@ -39,7 +39,6 @@ export function InspectorSettings({
   const messageAnchor = anchorSupported(service.provider);
   const autoOn = config?.auto_anchor?.[service.id] ?? false;
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [anchorStatus, setAnchorStatus] = useState<string | null>(null);
 
   function toggleAuto(next: boolean) {
     if (!config) return;
@@ -48,7 +47,6 @@ export function InspectorSettings({
 
   useEffect(() => {
     setNameDraft(providerConfig?.custom_name ?? "");
-    setAnchorStatus(null);
   }, [providerConfig?.custom_name, service.provider]);
 
   function patch(patchValue: Partial<ProviderConfig>) {
@@ -179,21 +177,14 @@ export function InspectorSettings({
                 title={t("detail.anchor.confirmTitle")}
                 body={t("detail.anchor.confirmBody")}
                 confirmLabel={t("detail.anchor.sendNow")}
-                onConfirm={() => {
-                  setAnchorStatus(t("detail.anchor.sending"));
-                  sendAnchorNow(service.id)
-                    .then(() => setAnchorStatus(t("detail.anchor.sent")))
-                    .catch((e) => setAnchorStatus(t("detail.anchor.failed", { error: String(e) })));
-                }}
+                onConfirm={() => void sendAnchorNow(service.id)}
                 onOpenChange={setConfirmOpen}
               />
             </>
           ) : (
             <p className="text-xs text-text-faint">{t("detail.anchor.unsupported")}</p>
           )}
-          {anchorStatus && (
-            <p className="num text-xs text-text-faint">{anchorStatus}</p>
-          )}
+          {/* Result feedback comes from the global anchor-result toast (F-10). */}
         </section>
       </div>
 

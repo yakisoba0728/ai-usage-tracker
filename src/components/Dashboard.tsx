@@ -236,7 +236,11 @@ export function Dashboard() {
             </div>
 
             <div className="scroll-area min-h-0 flex-1 overflow-y-auto px-4 pb-5">
-              {loading && snapshot == null ? (
+              {(loading || snapshot == null || snapshot.fetched_at === 0) &&
+              error == null ? (
+                // Treat the cold-start sentinel (fetched_at:0, before the first
+                // real refresh) as still-loading, so a configured user never
+                // flashes the new-user EmptyState (F-2).
                 <LoadingState />
               ) : snapshot == null ? (
                 <ErrorState error={error ?? t("error.backendUnreachable")} />
@@ -299,7 +303,7 @@ export function Dashboard() {
       <AddAccountDialog
         open={addOpen}
         onOpenChange={setAddOpen}
-        onChanged={() => void refresh()}
+        onChanged={refresh}
       />
 
       <SettingsDialog

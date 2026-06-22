@@ -10,11 +10,8 @@ export function serviceStatus(
 ): ServiceStatus {
   if (!service.connected) return "offline";
   const pct = resolveHeadlineWindow(service, config)?.used_percent ?? null;
-  const severity = percentSeverity(pct);
-  if (severity === "crit") return "critical";
-  if (severity === "warn") return "warning";
-  if (severity === "ok") return "ok";
-  return "unknown";
+  // Reuse the single severity→status mapping (F-6) so the two can't drift.
+  return severityToStatus(percentSeverity(pct));
 }
 
 export function severityToStatus(severity: Severity | null): ServiceStatus {

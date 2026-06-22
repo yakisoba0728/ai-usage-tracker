@@ -21,6 +21,24 @@ pub enum ServiceSource {
     Stored,
 }
 
+/// Canonical provider order [Claude, Codex, Gemini, Copilot, Cursor, z.ai] —
+/// matches `AppConfig.providers` slot indices and `PROVIDER_CTORS`.
+pub const PROVIDER_ORDER: [Provider; 6] = [
+    Provider::Claude,
+    Provider::Codex,
+    Provider::Gemini,
+    Provider::Copilot,
+    Provider::Cursor,
+    Provider::Zai,
+];
+
+/// The provider at a canonical slot index (inverse of the slot ordering), or
+/// `None` for an out-of-range index. Used by config migration to map a legacy
+/// `providers[i]` slot back to its provider.
+pub fn provider_at_index(index: usize) -> Option<Provider> {
+    PROVIDER_ORDER.get(index).copied()
+}
+
 pub fn auto_service_id(provider: Provider) -> String {
     let key = match provider {
         Provider::Claude => "claude",
@@ -415,7 +433,7 @@ mod tests {
     /// owning chunk, with this test updated as the deliberate signal, NOT here):
     ///   - Chunk 2: `anchor-result` payload gains `provider` + `label` (the EVENT
     ///     NAME stays; only its payload shape grows).
-    ///   - Chunk 3: new command `rename_account`.
+    ///   - Chunk 3: new command `rename_account`. ← APPLIED (per-account rename).
     ///   - Chunk 4: new commands `set_launch_at_login`, `check_update_now`.
     #[test]
     fn ipc_command_and_event_catalog_is_frozen() {
@@ -425,13 +443,14 @@ mod tests {
         #[allow(unused_imports)]
         use crate::commands::{
             add_session_key, cancel_login, get_config, get_usage, list_accounts, login_oauth,
-            refresh_account, refresh_now, remove_account, send_anchor_now, set_config, start_login,
+            refresh_account, refresh_now, remove_account, rename_account, send_anchor_now,
+            set_config, start_login,
         };
 
-        // (2) The frozen catalog. Mirrors `lib.rs:122-135` (commands) and the six
-        // emitted/listened events (`usage-updated`, `provider-loading`,
+        // (2) The frozen catalog. Mirrors `lib.rs` generate_handler! (commands) and
+        // the six emitted/listened events (`usage-updated`, `provider-loading`,
         // `anchor-result`, `refresh-result`, `login-complete`, `trigger-refresh`).
-        const COMMANDS: [&str; 12] = [
+        const COMMANDS: [&str; 13] = [
             "add_session_key",
             "cancel_login",
             "get_config",
@@ -441,6 +460,7 @@ mod tests {
             "refresh_account",
             "refresh_now",
             "remove_account",
+            "rename_account",
             "send_anchor_now",
             "set_config",
             "start_login",
@@ -469,9 +489,9 @@ mod tests {
         assert_sorted_unique(&COMMANDS, "command");
         assert_sorted_unique(&EVENTS, "event");
 
-        // Cardinality pins: exactly 12 commands (lib.rs generate_handler!) and 6
+        // Cardinality pins: exactly 13 commands (lib.rs generate_handler!) and 6
         // events. Adding/removing one is a deliberate, reviewed change.
-        assert_eq!(COMMANDS.len(), 12, "exactly 12 IPC commands are frozen");
+        assert_eq!(COMMANDS.len(), 13, "exactly 13 IPC commands are frozen");
         assert_eq!(EVENTS.len(), 6, "exactly 6 IPC events are frozen");
     }
 }

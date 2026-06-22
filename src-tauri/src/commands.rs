@@ -245,6 +245,42 @@ pub async fn set_config(
     Ok(())
 }
 
+/// Apply a per-account rename to a config in place: set/clear
+/// `accounts[service_id].custom_name`, dropping a now-empty entry. Pure logic,
+/// extracted so it's unit-testable without constructing a Tauri `State` (the
+/// BUG-2 per-account isolation is proven against THIS function).
+pub fn apply_account_rename(cfg: &mut AppConfig, service_id: &str, name: Option<String>) {
+    let trimmed = name.and_then(|n| {
+        let t = n.trim().to_string();
+        (!t.is_empty()).then_some(t)
+    });
+    let entry = cfg.accounts.entry(service_id.to_string()).or_default();
+    entry.custom_name = trimmed;
+    // Drop a now-empty entry so we don't accumulate blank placeholders.
+    if entry.custom_name.is_none() && entry.primary_window.is_none() {
+        cfg.accounts.remove(service_id);
+    }
+}
+
+/// Rename a single account by its service id (`auto:<provider>` / `stored:<id>`).
+/// Writes `accounts[service_id].custom_name` in the config and persists — this
+/// is PER-ACCOUNT (BUG-2 fix), so renaming one account never touches another of
+/// the same provider. `name = None` (or blank) clears the override back to the
+/// canonical provider label. Does NOT touch the poll scheduler.
+#[tauri::command]
+pub async fn rename_account(
+    cfg: State<'_, ConfigStore>,
+    service_id: String,
+    name: Option<String>,
+) -> Result<(), String> {
+    let mut guard = cfg.write().await;
+    apply_account_rename(&mut guard, &service_id, name);
+    guard
+        .save()
+        .map_err(|e| format!("could not save config: {e}"))?;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn start_login(
     app: AppHandle,
@@ -685,6 +721,58 @@ mod tests {
                 Provider::Zai,
             ],
         );
+    }
+
+    #[test]
+    fn apply_account_rename_is_per_service_id_isolated() {
+        // The command's core mutation: renaming one Claude account must NOT touch
+        // another Claude account of the same provider (BUG-2 isolation).
+        let mut cfg = AppConfig::default();
+
+        apply_account_rename(&mut cfg, "auto:claude", Some("Personal".into()));
+        apply_account_rename(&mut cfg, "stored:abc", Some("Work".into()));
+        // Rename the first again — the second must be unaffected.
+        apply_account_rename(&mut cfg, "auto:claude", Some("Personal v2".into()));
+
+        assert_eq!(
+            cfg.accounts.get("auto:claude").unwrap().custom_name.as_deref(),
+            Some("Personal v2")
+        );
+        assert_eq!(
+            cfg.accounts.get("stored:abc").unwrap().custom_name.as_deref(),
+            Some("Work"),
+            "renaming auto:claude must not touch stored:abc"
+        );
+
+        // Clearing the name (None / blank) drops the now-empty entry.
+        apply_account_rename(&mut cfg, "auto:claude", None);
+        assert!(!cfg.accounts.contains_key("auto:claude"));
+        apply_account_rename(&mut cfg, "stored:abc", Some("   ".into()));
+        assert!(
+            !cfg.accounts.contains_key("stored:abc"),
+            "a whitespace-only name clears the override"
+        );
+    }
+
+    #[test]
+    fn apply_account_rename_preserves_a_pinned_window() {
+        // Clearing the name must NOT delete the entry when a primary_window is
+        // still pinned on it.
+        let mut cfg = AppConfig::default();
+        cfg.accounts.insert(
+            "auto:codex".into(),
+            crate::config::AccountConfig {
+                custom_name: Some("Old".into()),
+                primary_window: Some("Weekly".into()),
+            },
+        );
+        apply_account_rename(&mut cfg, "auto:codex", None);
+        let entry = cfg
+            .accounts
+            .get("auto:codex")
+            .expect("entry survives because a window is still pinned");
+        assert!(entry.custom_name.is_none());
+        assert_eq!(entry.primary_window.as_deref(), Some("Weekly"));
     }
 
     #[test]

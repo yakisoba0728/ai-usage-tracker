@@ -1,8 +1,9 @@
-import { useMemo, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
   ChevronDown,
   Cloud,
   Download,
+  Globe,
   Power,
   RefreshCw,
   Settings2,
@@ -20,12 +21,16 @@ import {
 import { ProviderMark } from "@/components/ProviderMark";
 import { PROVIDER_LABEL } from "@/lib/providerMetadata";
 import { patchProviderConfig, PROVIDER_ORDER } from "@/lib/providers";
+import { toggleThreshold } from "@/lib/thresholds";
 import { cn } from "@/lib/utils";
 import type { AppConfig, Provider } from "@/lib/types";
 
 export type SortBy = "custom" | "usage" | "name";
 
 type SettingsSection = "general" | "providers";
+
+/** Notification threshold chips offered per provider (percent). */
+const THRESHOLD_CHIPS = [50, 75, 90, 95, 100] as const;
 
 export interface SettingsDialogProps {
   open: boolean;
@@ -58,7 +63,12 @@ export function SettingsDialog({
   onLaunchAtLoginChange,
   onCheckForUpdates,
 }: SettingsDialogProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  // The rail is now real navigation: only the active section renders on the
+  // right (previously both rendered at once on this small surface).
+  const [activeSection, setActiveSection] = useState<SettingsSection>("general");
+  // One provider's threshold chips open at a time (keeps the dialog compact).
+  const [expandedProvider, setExpandedProvider] = useState<Provider | null>(null);
   const enabledCount = useMemo(
     () => config?.providers.filter((provider) => provider.enabled).length ?? 0,
     [config],
@@ -76,10 +86,8 @@ export function SettingsDialog({
     { id: "providers", label: t("settings.nav.providers"), icon: <Cloud className="size-4" /> },
   ];
 
-  // Both sections render at once on this small surface, so the left rail is a
-  // static section legend (labels, not navigation — there's nothing to scroll
-  // to). (We dropped the old 5-section layout — Notifications, Sessions, and
-  // Advanced were non-functional scaffolding.)
+  const currentLang = i18n.resolvedLanguage === "ko" ? "ko" : "en";
+
   function patchConfig(patch: Partial<AppConfig>) {
     if (!config) return;
     onConfigChange({ ...config, ...patch });
@@ -88,6 +96,17 @@ export function SettingsDialog({
   function toggleProvider(provider: Provider, enabled: boolean) {
     if (!config) return;
     onConfigChange(patchProviderConfig(config, provider, { enabled }));
+  }
+
+  function toggleProviderThreshold(provider: Provider, value: number) {
+    if (!config) return;
+    const index = PROVIDER_ORDER.indexOf(provider);
+    const current = config.providers[index]?.notify_thresholds ?? [];
+    onConfigChange(
+      patchProviderConfig(config, provider, {
+        notify_thresholds: toggleThreshold(current, value),
+      }),
+    );
   }
 
   return (
@@ -100,15 +119,28 @@ export function SettingsDialog({
             </DialogTitle>
           </div>
           <div className="grid gap-1 p-3 max-md:grid-cols-2">
-            {sectionNav.map((item) => (
-              <div
-                key={item.id}
-                className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-text-dim"
-              >
-                <span className="text-text-faint">{item.icon}</span>
-                {item.label}
-              </div>
-            ))}
+            {sectionNav.map((item) => {
+              const active = item.id === activeSection;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  aria-current={active ? "page" : undefined}
+                  onClick={() => setActiveSection(item.id)}
+                  className={cn(
+                    "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs transition-colors",
+                    active
+                      ? "bg-[#2c84d8] font-medium text-text"
+                      : "text-text-dim hover:bg-white/[0.04] hover:text-text",
+                  )}
+                >
+                  <span className={active ? "text-text" : "text-text-faint"}>
+                    {item.icon}
+                  </span>
+                  {item.label}
+                </button>
+              );
+            })}
           </div>
         </div>
 
@@ -120,120 +152,228 @@ export function SettingsDialog({
           </div>
 
           <div className="space-y-6 p-5">
-            <Section
-              title={t("settings.generalTitle")}
-              description={t("settings.generalDesc")}
-            >
-              <SettingsRow
-                icon={<SlidersHorizontal className="size-4" />}
-                label={t("settings.refreshInterval")}
-                description={t("settings.refreshIntervalDesc")}
-              >
-                <SelectValue
-                  value={config?.poll_seconds ?? 300}
-                  options={pollOptions}
-                  onChange={(value) => patchConfig({ poll_seconds: value })}
-                  disabled={config == null}
-                  ariaLabel={t("settings.refreshInterval")}
-                />
-              </SettingsRow>
-              <SettingsRow
-                icon={<SlidersHorizontal className="size-4" />}
-                label={t("settings.sortList")}
-                description={t("settings.sortListDesc")}
-              >
-                <Segmented
-                  options={[
-                    { label: t("settings.sort.custom"), value: "custom" as const },
-                    { label: t("settings.sort.usage"), value: "usage" as const },
-                    { label: t("settings.sort.name"), value: "name" as const },
-                  ]}
-                  value={sortBy}
-                  onChange={onSortByChange}
-                  ariaLabel={t("settings.sortList")}
-                />
-              </SettingsRow>
-              <SettingsRow
-                icon={<Shield className="size-4" />}
-                label={t("settings.showOffline")}
-                description={t("settings.showOfflineDesc")}
-              >
-                <Toggle
-                  checked={showOffline}
-                  onChange={onShowOfflineChange}
-                  ariaLabel={t("settings.showOffline")}
-                />
-              </SettingsRow>
-              <SettingsRow
-                icon={<Power className="size-4" />}
-                label={t("settings.launchAtLogin")}
-                description={t("settings.launchAtLoginDesc")}
-              >
-                <Toggle
-                  checked={config?.launch_at_login ?? false}
-                  disabled={config == null}
-                  onChange={(enable) => onLaunchAtLoginChange?.(enable)}
-                  ariaLabel={t("settings.launchAtLogin")}
-                />
-              </SettingsRow>
-              <SettingsRow
-                icon={<Download className="size-4" />}
-                label={t("settings.autoUpdate")}
-                description={t("settings.autoUpdateDesc")}
-              >
-                <Toggle
-                  checked={config?.auto_update_check ?? true}
-                  disabled={config == null}
-                  onChange={(checked) => patchConfig({ auto_update_check: checked })}
-                  ariaLabel={t("settings.autoUpdate")}
-                />
-              </SettingsRow>
-              <SettingsRow
-                icon={<Download className="size-4" />}
-                label={t("settings.checkUpdates")}
-                description={t("settings.checkUpdatesDesc")}
-              >
-                <ButtonLike onClick={() => onCheckForUpdates?.()}>
-                  <RefreshCw className="size-4" />
-                  {t("settings.checkUpdatesNow")}
-                </ButtonLike>
-              </SettingsRow>
-            </Section>
-
-            <Section
-              title={t("settings.providersTitle")}
-              description={t("settings.providersDesc", { count: enabledCount })}
-            >
-              <div className="space-y-1">
-                {PROVIDER_ORDER.map((provider, index) => (
+            {activeSection === "general" ? (
+              <>
+                <Section title={t("settings.group.display")} description="">
                   <SettingsRow
-                    key={provider}
-                    icon={<ProviderMark provider={provider} className="size-4" />}
-                    label={PROVIDER_LABEL[provider]}
-                    // Per-account display names moved to the account detail
-                    // dialog (BUG-2); this row only toggles the provider on/off.
-                    description={t("settings.defaultName")}
+                    icon={<SlidersHorizontal className="size-4" />}
+                    label={t("settings.refreshInterval")}
+                    description={t("settings.refreshIntervalDesc")}
                   >
-                    <Toggle
-                      checked={config?.providers[index].enabled ?? false}
+                    <SelectValue
+                      value={config?.poll_seconds ?? 300}
+                      options={pollOptions}
+                      onChange={(value) => patchConfig({ poll_seconds: value })}
                       disabled={config == null}
-                      onChange={(enabled) => toggleProvider(provider, enabled)}
-                      ariaLabel={PROVIDER_LABEL[provider]}
+                      ariaLabel={t("settings.refreshInterval")}
                     />
                   </SettingsRow>
-                ))}
-              </div>
-              <div className="mt-5 flex flex-wrap gap-2">
-                <ButtonLike onClick={() => onOpenAddAccount?.()}>
-                  <Cloud className="size-4" />
-                  {t("settings.addProviderAccount")}
-                </ButtonLike>
-                <ButtonLike onClick={() => onReuseLocalSession?.()}>
-                  <RefreshCw className="size-4" />
-                  {t("settings.scanLocal")}
-                </ButtonLike>
-              </div>
-            </Section>
+                  <SettingsRow
+                    icon={<SlidersHorizontal className="size-4" />}
+                    label={t("settings.sortList")}
+                    description={t("settings.sortListDesc")}
+                  >
+                    <Segmented
+                      options={[
+                        { label: t("settings.sort.custom"), value: "custom" as const },
+                        { label: t("settings.sort.usage"), value: "usage" as const },
+                        { label: t("settings.sort.name"), value: "name" as const },
+                      ]}
+                      value={sortBy}
+                      onChange={onSortByChange}
+                      ariaLabel={t("settings.sortList")}
+                    />
+                  </SettingsRow>
+                  <SettingsRow
+                    icon={<Shield className="size-4" />}
+                    label={t("settings.showOffline")}
+                    description={t("settings.showOfflineDesc")}
+                  >
+                    <Toggle
+                      checked={showOffline}
+                      onChange={onShowOfflineChange}
+                      ariaLabel={t("settings.showOffline")}
+                    />
+                  </SettingsRow>
+                  <SettingsRow
+                    icon={<Globe className="size-4" />}
+                    label={t("settings.language")}
+                    description={t("settings.languageDesc")}
+                  >
+                    <Segmented
+                      options={[
+                        { label: t("language.english"), value: "en" as const },
+                        { label: t("language.korean"), value: "ko" as const },
+                      ]}
+                      value={currentLang}
+                      onChange={(lang) => void i18n.changeLanguage(lang)}
+                      ariaLabel={t("settings.language")}
+                    />
+                  </SettingsRow>
+                </Section>
+
+                <Section title={t("settings.group.system")} description="">
+                  <SettingsRow
+                    icon={<Power className="size-4" />}
+                    label={t("settings.launchAtLogin")}
+                    description={t("settings.launchAtLoginDesc")}
+                  >
+                    <Toggle
+                      checked={config?.launch_at_login ?? false}
+                      disabled={config == null}
+                      onChange={(enable) => onLaunchAtLoginChange?.(enable)}
+                      ariaLabel={t("settings.launchAtLogin")}
+                    />
+                  </SettingsRow>
+                </Section>
+
+                <Section title={t("settings.group.updates")} description="">
+                  <SettingsRow
+                    icon={<Download className="size-4" />}
+                    label={t("settings.autoUpdate")}
+                    description={t("settings.autoUpdateDesc")}
+                  >
+                    <Toggle
+                      checked={config?.auto_update_check ?? true}
+                      disabled={config == null}
+                      onChange={(checked) => patchConfig({ auto_update_check: checked })}
+                      ariaLabel={t("settings.autoUpdate")}
+                    />
+                  </SettingsRow>
+                  <SettingsRow
+                    icon={<Download className="size-4" />}
+                    label={t("settings.updateMode")}
+                    description={t("settings.updateModeDesc")}
+                  >
+                    <Segmented
+                      options={[
+                        { label: t("settings.updateModeOption.notify"), value: "notify" as const },
+                        {
+                          label: t("settings.updateModeOption.notifyOpen"),
+                          value: "notifyOpen" as const,
+                        },
+                      ]}
+                      value={config?.update_auto_open ? "notifyOpen" : "notify"}
+                      onChange={(mode) =>
+                        patchConfig({ update_auto_open: mode === "notifyOpen" })
+                      }
+                      ariaLabel={t("settings.updateMode")}
+                    />
+                  </SettingsRow>
+                  <SettingsRow
+                    icon={<Download className="size-4" />}
+                    label={t("settings.checkUpdates")}
+                    description={t("settings.checkUpdatesDesc")}
+                  >
+                    <ButtonLike onClick={() => onCheckForUpdates?.()}>
+                      <RefreshCw className="size-4" />
+                      {t("settings.checkUpdatesNow")}
+                    </ButtonLike>
+                  </SettingsRow>
+                </Section>
+              </>
+            ) : (
+              <Section
+                title={t("settings.providersTitle")}
+                description={t("settings.providersDesc", { count: enabledCount })}
+              >
+                <div className="space-y-1">
+                  {PROVIDER_ORDER.map((provider, index) => {
+                    const expanded = expandedProvider === provider;
+                    const thresholds = config?.providers[index]?.notify_thresholds ?? [];
+                    return (
+                      <div key={provider}>
+                        <SettingsRow
+                          icon={<ProviderMark provider={provider} className="size-4" />}
+                          label={PROVIDER_LABEL[provider]}
+                          // Per-account display names moved to the account detail
+                          // dialog (BUG-2); this row toggles the provider on/off
+                          // and (via the chevron) its notification thresholds.
+                          description={t("settings.defaultName")}
+                        >
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              aria-expanded={expanded}
+                              aria-label={t(
+                                expanded
+                                  ? "settings.collapseThresholds"
+                                  : "settings.expandThresholds",
+                              )}
+                              disabled={config == null}
+                              onClick={() =>
+                                setExpandedProvider(expanded ? null : provider)
+                              }
+                              className="grid size-7 place-items-center rounded-md border border-border bg-surface text-text-faint transition-colors hover:border-border-strong hover:text-text disabled:opacity-50"
+                            >
+                              <ChevronDown
+                                className={cn(
+                                  "size-4 transition-transform",
+                                  expanded && "rotate-180",
+                                )}
+                              />
+                            </button>
+                            <Toggle
+                              checked={config?.providers[index].enabled ?? false}
+                              disabled={config == null}
+                              onChange={(enabled) => toggleProvider(provider, enabled)}
+                              ariaLabel={PROVIDER_LABEL[provider]}
+                            />
+                          </div>
+                        </SettingsRow>
+                        {expanded && (
+                          <div className="mb-1 ml-9 mr-3 rounded-lg border border-border bg-canvas/60 px-3 py-3">
+                            <div className="text-xs font-medium text-text-dim">
+                              {t("settings.thresholds")}
+                            </div>
+                            <div className="mt-1 text-[11px] text-text-faint">
+                              {t("settings.thresholdsDesc")}
+                            </div>
+                            <div
+                              role="group"
+                              aria-label={t("settings.thresholds")}
+                              className="mt-2.5 flex flex-wrap gap-1.5"
+                            >
+                              {THRESHOLD_CHIPS.map((value) => {
+                                const on = thresholds.includes(value);
+                                return (
+                                  <button
+                                    key={value}
+                                    type="button"
+                                    role="checkbox"
+                                    aria-checked={on}
+                                    disabled={config == null}
+                                    onClick={() => toggleProviderThreshold(provider, value)}
+                                    className={cn(
+                                      "num rounded-md border px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-50",
+                                      on
+                                        ? "border-[#4b9bea] bg-[#2c84d8] text-text"
+                                        : "border-border bg-surface text-text-faint hover:border-border-strong hover:text-text",
+                                    )}
+                                  >
+                                    {value}%
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="mt-5 flex flex-wrap gap-2">
+                  <ButtonLike onClick={() => onOpenAddAccount?.()}>
+                    <Cloud className="size-4" />
+                    {t("settings.addProviderAccount")}
+                  </ButtonLike>
+                  <ButtonLike onClick={() => onReuseLocalSession?.()}>
+                    <RefreshCw className="size-4" />
+                    {t("settings.scanLocal")}
+                  </ButtonLike>
+                </div>
+              </Section>
+            )}
           </div>
         </div>
       </DialogContent>
@@ -255,7 +395,7 @@ function Section({
       {title && (
         <div className="mb-3">
           <h2 className="text-sm font-semibold text-text">{title}</h2>
-          <p className="mt-1 text-xs text-text-faint">{description}</p>
+          {description && <p className="mt-1 text-xs text-text-faint">{description}</p>}
         </div>
       )}
       <div className="space-y-1">{children}</div>

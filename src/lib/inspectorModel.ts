@@ -18,7 +18,7 @@ export interface AccountRow {
   id: string;
   service: ServiceUsage;
   title: string;
-  subtitle: string | null;
+  subtitle: string;
   status: ServiceStatus;
   headline: LimitWindow | null;
   headlinePercent: number | null;
@@ -86,8 +86,29 @@ export function buildInspectorSummary(
 ): InspectorSummary {
   return {
     title: providerDisplayName(config, service.id, service.provider),
-    accountId: service.account ?? service.id,
+    accountId: accountSubtitle(service, config),
   };
+}
+
+/**
+ * The subtitle shown under a card / in the inspector for ONE account. Precedence
+ * (BUG-6): the provider-supplied account label → the per-account `custom_name`
+ * → a synthesized "<provider label> · <short id>". A null-account stored service
+ * must never leak its raw `stored:<uuid>` id, so the fallback strips the
+ * source prefix and shows only a short tail.
+ */
+export function accountSubtitle(
+  service: ServiceUsage,
+  config: AppConfig | null,
+): string {
+  const account = service.account?.trim();
+  if (account) return account;
+  const custom = config?.accounts?.[service.id]?.custom_name?.trim();
+  if (custom) return custom;
+  const label = providerDisplayName(config, service.id, service.provider);
+  const bareId = service.id.replace(/^(auto|stored):/, "");
+  const shortId = bareId.slice(-6);
+  return shortId ? `${label} · ${shortId}` : label;
 }
 
 function toAccountRow(
@@ -99,7 +120,7 @@ function toAccountRow(
     id: service.id,
     service,
     title: providerDisplayName(config, service.id, service.provider),
-    subtitle: service.account,
+    subtitle: accountSubtitle(service, config),
     status: serviceStatus(service, config),
     headline,
     headlinePercent: headline?.used_percent ?? null,

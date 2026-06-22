@@ -5,7 +5,7 @@ import { useTranslation } from "react-i18next";
 
 import { ProviderIconTile } from "@/components/dashboard/ProviderIconTile";
 import { UsageBar } from "@/components/dashboard/UsageBar";
-import { displayAccountId, statusTextClass } from "@/components/dashboard/helpers";
+import { statusTextClass } from "@/components/dashboard/helpers";
 import {
   formatPercent,
   formatResetShort,
@@ -152,9 +152,9 @@ const AccountCardButton = memo(function AccountCardButton({
             </div>
             <div
               className="num mt-0.5 truncate text-xs text-text-faint"
-              title={row.subtitle ?? undefined}
+              title={row.subtitle}
             >
-              {row.subtitle ?? displayAccountId(row.service)}
+              {row.subtitle}
             </div>
           </div>
         </div>

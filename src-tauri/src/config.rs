@@ -93,6 +93,12 @@ pub struct AppConfig {
     /// opt in.
     #[serde(default = "default_true")]
     pub auto_update_check: bool,
+    /// On a new release, also open the release page in the browser (not just
+    /// notify). `#[serde(default)]` → false, so existing configs load fine with
+    /// no migration and the less-intrusive "notify-only" behavior is the
+    /// default. The manual "Check for updates" button always opens regardless.
+    #[serde(default)]
+    pub update_auto_open: bool,
     /// The last release version we fired an "update available" notification for,
     /// so the 24h check doesn't re-notify the same release every interval
     /// (FEAT-5). `None` until the first notification. Stored without a leading
@@ -127,6 +133,7 @@ impl Default for AppConfig {
             auto_anchor: HashMap::new(),
             launch_at_login: false,
             auto_update_check: true,
+            update_auto_open: false,
             last_notified_version: None,
             device_id: None,
         }
@@ -892,11 +899,16 @@ mod tests {
         let def = AppConfig::default();
         assert!(!def.launch_at_login, "launch_at_login defaults off");
         assert!(def.auto_update_check, "auto_update_check defaults ON");
+        assert!(
+            !def.update_auto_open,
+            "update_auto_open defaults OFF (notify-only)"
+        );
         assert!(def.last_notified_version.is_none());
 
         let cfg = AppConfig {
             launch_at_login: true,
             auto_update_check: false,
+            update_auto_open: true,
             last_notified_version: Some("0.2.0".into()),
             ..Default::default()
         };
@@ -904,6 +916,7 @@ mod tests {
         let back: AppConfig = serde_json::from_str(&json).unwrap();
         assert!(back.launch_at_login);
         assert!(!back.auto_update_check);
+        assert!(back.update_auto_open, "update_auto_open round-trips true");
         assert_eq!(back.last_notified_version.as_deref(), Some("0.2.0"));
 
         // An old config that predates these fields still loads, and the
@@ -913,12 +926,17 @@ mod tests {
         let obj = v.as_object_mut().unwrap();
         obj.remove("launch_at_login");
         obj.remove("auto_update_check");
+        obj.remove("update_auto_open");
         obj.remove("last_notified_version");
         let old: AppConfig = serde_json::from_value(v).unwrap();
         assert!(!old.launch_at_login, "missing launch_at_login → false");
         assert!(
             old.auto_update_check,
             "missing auto_update_check must default to TRUE (default_true), not serde's false"
+        );
+        assert!(
+            !old.update_auto_open,
+            "missing update_auto_open must default to false (serde default, notify-only)"
         );
         assert!(old.last_notified_version.is_none());
     }

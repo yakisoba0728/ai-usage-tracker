@@ -284,6 +284,7 @@ function createDefaultConfig(): AppConfig {
     auto_anchor: {},
     launch_at_login: false,
     auto_update_check: true,
+    update_auto_open: false,
   };
 }
 

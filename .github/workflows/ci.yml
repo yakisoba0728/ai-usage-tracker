@@ -11,7 +11,7 @@ concurrency:
 
 jobs:
   frontend:
-    name: Frontend (tsc + vitest)
+    name: Frontend (lint + tsc + vitest)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,6 +20,8 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 24, cache: pnpm }
       - run: pnpm install --frozen-lockfile
+      - name: Lint
+        run: pnpm lint
       - name: Type-check
         run: pnpm exec tsc --noEmit
       - name: Unit tests
@@ -39,11 +41,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with: { workspaces: src-tauri }
       - name: cargo fmt --check
+        # fmt is platform-agnostic, so one OS is enough.
         if: matrix.os == 'macos-latest'
         working-directory: src-tauri
         run: cargo fmt --all -- --check
       - name: cargo clippy
-        if: matrix.os == 'macos-latest'
+        # Run on BOTH legs: the macOS leg compiles out every
+        # `#[cfg(target_os = "windows")]` / `not(macos)` arm, so the Windows
+        # leg is the only one that lints the real Windows code paths (X-4).
         working-directory: src-tauri
         run: cargo clippy --all-targets -- -D warnings
       - name: cargo test

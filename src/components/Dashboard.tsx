@@ -96,7 +96,9 @@ export function Dashboard() {
     };
   }, [refresh]);
 
-  const allServices = snapshot?.services ?? [];
+  // Memoized so the `?? []` fallback doesn't hand a fresh array identity to the
+  // dependent useMemos on every render (surfaced by react-hooks/exhaustive-deps).
+  const allServices = useMemo(() => snapshot?.services ?? [], [snapshot]);
   const accountSections = useMemo(
     () =>
       buildAccountSections(allServices, config, {

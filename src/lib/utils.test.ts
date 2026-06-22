@@ -19,8 +19,8 @@ describe("clamp", () => {
 describe("cn", () => {
   it("merges class names and lets later Tailwind classes win", () => {
     expect(cn("px-2", "px-4")).toBe("px-4");
-    expect(cn("text-sm", false && "hidden", "font-bold")).toBe(
-      "text-sm font-bold",
-    );
+    // A falsy conditional class is dropped (the `cond && "class"` idiom).
+    const hidden: string | false = false;
+    expect(cn("text-sm", hidden, "font-bold")).toBe("text-sm font-bold");
   });
 });

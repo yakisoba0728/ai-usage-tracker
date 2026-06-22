@@ -22,7 +22,7 @@ import { AddAccountDialog } from "@/components/AddAccountDialog";
 import { EmptyState } from "@/components/EmptyState";
 import { ErrorState } from "@/components/ErrorState";
 import { SettingsDialog, type SortBy } from "@/components/SettingsDialog";
-import { Toaster, type Toast } from "@/components/Toaster";
+import { Toaster } from "@/components/Toaster";
 import { AccountSections } from "@/components/dashboard/AccountCard";
 import { AccountDetailDialog } from "@/components/dashboard/AccountDetailDialog";
 import { storedAccountId } from "@/components/dashboard/helpers";
@@ -30,6 +30,7 @@ import type { InspectorTab } from "@/components/dashboard/inspectorTabs";
 import { Button } from "@/components/ui/button";
 import { useNow } from "@/hooks/useNow";
 import { useSnapshot } from "@/hooks/useSnapshot";
+import { useToasts } from "@/hooks/useToasts";
 import {
   clearAccountAction,
   finishAccountAction,
@@ -258,20 +259,9 @@ export function Dashboard() {
   }, [openServiceId, visibleServiceId]);
 
 
-  const [toasts, setToasts] = useState<Toast[]>([]);
-  const toastIdRef = useRef(0);
+  const { toasts, pushToast, dismissToast } = useToasts();
   const prevPctRef = useRef<Map<string, number>>(new Map());
   const lastProcessedThresholdSnapshotRef = useRef<UsageSnapshot | null>(null);
-  const pushToast = useCallback((message: string) => {
-    const id = ++toastIdRef.current;
-    setToasts((t) => [...t, { id, message }]);
-    window.setTimeout(() => {
-      setToasts((t) => t.filter((x) => x.id !== id));
-    }, 5000);
-  }, []);
-  const dismissToast = useCallback((id: number) => {
-    setToasts((t) => t.filter((x) => x.id !== id));
-  }, []);
 
   // Launch-at-login (FEAT-4): optimistic flag update, then the dedicated command
   // (OS login item + persist). On failure, revert the optimistic flag and toast.

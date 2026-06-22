@@ -52,7 +52,18 @@ pub fn cursor_state_db() -> Option<PathBuf> {
     }
     #[cfg(target_os = "windows")]
     {
-        let p = dirs::data_dir()?.join("Cursor/User/globalStorage/state.vscdb");
+        // Base = `AIT_CURSOR_DATA_DIR` override > `dirs::data_dir()` (Roaming
+        // `%APPDATA%`, where the VS Code-fork Cursor keeps globalStorage). The
+        // app-specific override (same category as `CODEX_HOME`/`CLAUDE_CONFIG_DIR`)
+        // exists so a hermetic test can redirect the base: `dirs::data_dir()`
+        // resolves via the Win32 Known Folder API and ignores `%APPDATA%`, so it
+        // can't be redirected by env alone. With the override UNSET this is
+        // byte-identical to the previous `dirs::data_dir()?.join(...)` behavior.
+        let base = std::env::var("AIT_CURSOR_DATA_DIR")
+            .map(PathBuf::from)
+            .ok()
+            .or_else(dirs::data_dir)?;
+        let p = base.join("Cursor/User/globalStorage/state.vscdb");
         p.exists().then_some(p)
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
@@ -182,6 +193,48 @@ mod tests {
             PathBuf::from("/tmp/ait_codex_home/auth.json")
         );
         std::env::remove_var("CODEX_HOME");
+    }
+
+    /// Windows-only (runs on the Windows CI leg; compiles out on the macOS dev
+    /// loop). Pins the Windows `cursor_state_db()` path resolution before the
+    /// rewrite reshuffles `secrets.rs`, so a Windows regression isn't invisible
+    /// to the macOS loop. Asserts BOTH the derived suffix
+    /// (`Cursor/User/globalStorage/state.vscdb` under the `%APPDATA%`-class base)
+    /// AND the existence gate (`None` when the DB file is absent). Hermetic via
+    /// the `AIT_CURSOR_DATA_DIR` redirect — `dirs::data_dir()` resolves via the
+    /// Win32 Known Folder API and ignores `%APPDATA%`, so we must not write into
+    /// the real Roaming AppData.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn cursor_state_db_resolves_windows_localappdata() {
+        use std::sync::Mutex;
+        static ENV_LOCK: Mutex<()> = Mutex::new(());
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let base = std::env::temp_dir().join(format!("ait_cursor_db_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let db = base.join("Cursor/User/globalStorage/state.vscdb");
+        std::env::set_var("AIT_CURSOR_DATA_DIR", &base);
+
+        // Absent → None (the `.exists()` gate; pins that a missing DB is not a
+        // phantom path).
+        assert_eq!(
+            cursor_state_db(),
+            None,
+            "no state.vscdb under the base must resolve to None"
+        );
+
+        // Present → Some(base + the canonical Cursor suffix).
+        std::fs::create_dir_all(db.parent().unwrap()).unwrap();
+        std::fs::write(&db, b"x").unwrap();
+        assert_eq!(
+            cursor_state_db(),
+            Some(db.clone()),
+            "the Windows cursor DB must resolve to <APPDATA>/Cursor/User/globalStorage/state.vscdb"
+        );
+
+        std::env::remove_var("AIT_CURSOR_DATA_DIR");
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

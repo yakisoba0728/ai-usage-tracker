@@ -20,6 +20,15 @@
     "online": "온라인",
     "offline": "오프라인"
   },
+  "status": {
+    "refreshingUsage": "사용량 새로고침 중…",
+    "refreshingAccount": "계정 새로고침 중…",
+    "refreshComplete": "새로고침 완료.",
+    "refreshFailed": "새로고침 실패.",
+    "sendingAnchor": "앵커 메시지 전송 중…",
+    "anchorSent": "앵커 메시지를 보냈습니다.",
+    "anchorFailed": "앵커 메시지 전송 실패."
+  },
   "card": {
     "stored": "저장됨",
     "session": "세션",
@@ -29,7 +38,7 @@
     "resetsIn": "{{time}} 후 초기화",
     "viewDetails": "상세 보기",
     "refresh": "새로고침",
-    "sendRequest": "요청 보내기",
+    "sendRequest": "앵커 보내기",
     "autoAvail": "자동요청",
     "autoUnavail": "자동불가"
   },
@@ -112,7 +121,7 @@
     "anchor": {
       "title": "윈도우 앵커링",
       "auto": "5시간 윈도우가 비면 자동으로 앵커링",
-      "sendNow": "지금 메시지 보내기",
+      "sendNow": "지금 앵커 메시지 보내기",
       "unsupported": "이 제공자는 지원하지 않음 (달력형 쿼터 / 전송 경로 없음).",
       "confirmTitle": "앵커 메시지를 보낼까요?",
       "confirmBody": "실제 1-토큰 메시지를 전송하며 쿼터를 소모하고 제공자 약관에 위배될 수 있습니다. 계속할까요?"
@@ -203,7 +212,7 @@
     "scanning": "로컬 세션을 다시 검색하는 중입니다.",
     "dismiss": "알림 닫기",
     "anchorSent": "앵커 메시지를 보냈습니다.",
-    "anchorFailed": "앵커 실패: {{error}}"
+    "anchorFailed": "앵커 메시지 전송 실패: {{error}}"
   },
   "time": {
     "justNow": "방금 업데이트됨",

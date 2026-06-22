@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { ActionFeedbackOverlay } from "@/components/ActionFeedbackOverlay";
 import { ProviderIconTile } from "@/components/dashboard/ProviderIconTile";
 import { InspectorSettings } from "@/components/dashboard/detail/InspectorSettings";
 import { LimitsTab } from "@/components/dashboard/detail/LimitsTab";
@@ -31,6 +32,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { formatUpdatedAgo } from "@/lib/format";
+import {
+  getAccountAction,
+  type AccountActionState,
+  type AccountActionStatus,
+} from "@/lib/accountActionState";
 import { buildInspectorSummary } from "@/lib/inspectorModel";
 import { providerDisplayName } from "@/lib/providers";
 import { serviceStatus } from "@/lib/status";
@@ -49,7 +55,9 @@ export function AccountDetailDialog({
   onTabChange,
   moreOpen,
   onMoreOpenChange,
+  accountActions,
   onRefresh,
+  onSendAnchor,
   onOpenAdd,
   onOpenSettings,
   onConfigChange,
@@ -66,7 +74,9 @@ export function AccountDetailDialog({
   onTabChange: (tab: InspectorTab) => void;
   moreOpen: boolean;
   onMoreOpenChange: (open: boolean) => void;
+  accountActions: AccountActionState;
   onRefresh: () => void;
+  onSendAnchor: (id: string) => void;
   onOpenAdd: () => void;
   onOpenSettings: () => void;
   onConfigChange: (next: AppConfig) => void;
@@ -96,7 +106,10 @@ export function AccountDetailDialog({
               onTabChange={onTabChange}
               moreOpen={moreOpen}
               onMoreOpenChange={onMoreOpenChange}
+              refreshAction={getAccountAction(accountActions, service.id, "refresh")}
+              anchorAction={getAccountAction(accountActions, service.id, "anchor")}
               onRefresh={onRefresh}
+              onSendAnchor={onSendAnchor}
               onOpenAdd={onOpenAdd}
               onOpenSettings={onOpenSettings}
               onConfigChange={onConfigChange}
@@ -119,7 +132,10 @@ function DetailPanelContent({
   onTabChange,
   moreOpen,
   onMoreOpenChange,
+  refreshAction,
+  anchorAction,
   onRefresh,
+  onSendAnchor,
   onOpenAdd,
   onOpenSettings,
   onConfigChange,
@@ -134,7 +150,10 @@ function DetailPanelContent({
   onTabChange: (tab: InspectorTab) => void;
   moreOpen: boolean;
   onMoreOpenChange: (open: boolean) => void;
+  refreshAction: AccountActionStatus | null;
+  anchorAction: AccountActionStatus | null;
   onRefresh: () => void;
+  onSendAnchor: (id: string) => void;
   onOpenAdd: () => void;
   onOpenSettings: () => void;
   onConfigChange: (next: AppConfig) => void;
@@ -145,6 +164,14 @@ function DetailPanelContent({
   const accountId = storedAccountId(service);
   const allWindows = allServiceWindows(service);
   const tabBaseId = `detail-${service.id.replace(/[^A-Za-z0-9_-]/g, "-")}`;
+  const refreshFeedbackMessage =
+    refreshAction === "success"
+      ? t("status.refreshComplete")
+      : refreshAction === "error"
+        ? t("status.refreshFailed")
+        : refreshing
+          ? t("status.refreshingUsage")
+          : null;
 
   const moreRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -291,7 +318,11 @@ function DetailPanelContent({
                 onKeyDown={onMenuKeyDown}
                 className="menu-pop absolute right-0 top-10 z-40 w-56 rounded-lg border border-border-strong bg-[#25272b]/95 p-1.5 shadow-2xl shadow-black/40"
               >
-                <MenuItem icon={<RefreshCw className={refreshing ? "size-4 animate-spin" : "size-4"} />} onClick={onRefresh}>
+                <MenuItem
+                  icon={<RefreshCw className={refreshing ? "size-4 animate-spin" : "size-4"} />}
+                  disabled={refreshing}
+                  onClick={onRefresh}
+                >
                   {t("detail.menu.refresh")}
                 </MenuItem>
                 <MenuItem icon={<Cloud className="size-4" />} onClick={openAddFromMenu}>
@@ -347,7 +378,8 @@ function DetailPanelContent({
         id={`${tabBaseId}-panel-${tab}`}
         role="tabpanel"
         aria-labelledby={`${tabBaseId}-tab-${tab}`}
-        className="px-5 py-5"
+        aria-busy={refreshing}
+        className="relative min-h-[220px] px-5 py-5"
       >
         {tab === "limits" && (
           <LimitsTab windows={allWindows} nowMs={nowMs} />
@@ -357,6 +389,7 @@ function DetailPanelContent({
             service={service}
             fetchedAt={fetchedAt}
             nowMs={nowMs}
+            refreshing={refreshing}
             onRefresh={onRefresh}
             onOpenAdd={onOpenAdd}
           />
@@ -366,9 +399,14 @@ function DetailPanelContent({
           <InspectorSettings
             service={service}
             config={config}
+            anchorAction={anchorAction}
+            onSendAnchor={onSendAnchor}
             onConfigChange={onConfigChange}
             onOpenAdd={onOpenAdd}
           />
+        )}
+        {refreshFeedbackMessage && (
+          <ActionFeedbackOverlay message={refreshFeedbackMessage} />
         )}
       </div>
     </section>

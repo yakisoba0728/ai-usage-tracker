@@ -22,8 +22,12 @@ export interface UseSnapshotResult {
   error: string | null;
   /** Service ids mid-fetch in the current cycle — cleared on each snapshot. */
   loadingProviders: Set<string>;
-  refresh: () => Promise<void>;
+  refresh: () => Promise<RefreshResult>;
 }
+
+export type RefreshResult =
+  | { ok: true; accepted: boolean }
+  | { ok: false; error: string };
 
 export function useSnapshot(): UseSnapshotResult {
   const [snapshot, setSnapshot] = useState<UsageSnapshot | null>(null);
@@ -69,6 +73,12 @@ export function useSnapshot(): UseSnapshotResult {
     setLoadingProviders(next);
   }, []);
 
+  const clearLoading = useCallback(() => {
+    if (loadingRef.current.size === 0) return;
+    loadingRef.current = new Set();
+    setLoadingProviders(new Set());
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     const initialOrder = ++sourceOrderRef.current;
@@ -89,10 +99,7 @@ export function useSnapshot(): UseSnapshotResult {
       const eventOrder = ++sourceOrderRef.current;
       if (!acceptSnapshot(s, eventOrder)) return;
       // A full snapshot closes every in-flight provider fetch.
-      if (loadingRef.current.size > 0) {
-        loadingRef.current = new Set();
-        setLoadingProviders(new Set());
-      }
+      clearLoading();
     }).catch((err) => {
       console.error("subscribe usage-updated failed:", err);
       return undefined;
@@ -110,7 +117,7 @@ export function useSnapshot(): UseSnapshotResult {
       void usageUnlisten.then((un) => un?.());
       void loadingUnlisten.then((un) => un?.());
     };
-  }, [acceptSnapshot, markLoading]);
+  }, [acceptSnapshot, clearLoading, markLoading]);
 
   const refresh = useCallback(async () => {
     const refreshOrder = ++sourceOrderRef.current;
@@ -118,19 +125,25 @@ export function useSnapshot(): UseSnapshotResult {
     setRefreshing(refreshActivityRef.current.refreshing);
     try {
       const s = await refreshNow();
-      if (acceptSnapshot(s, refreshOrder)) {
+      const accepted = acceptSnapshot(s, refreshOrder);
+      if (accepted) {
         setError(null);
+        clearLoading();
       }
+      return { ok: true as const, accepted };
     } catch (err) {
       console.error("refresh_now failed:", err);
+      const message = scrubErrorText(String(err));
       if (refreshOrder >= latestAcceptedOrderRef.current) {
-        setError(scrubErrorText(String(err)));
+        setError(message);
       }
+      clearLoading();
+      return { ok: false as const, error: message };
     } finally {
       refreshActivityRef.current = finishRefreshActivity(refreshActivityRef.current);
       setRefreshing(refreshActivityRef.current.refreshing);
     }
-  }, [acceptSnapshot]);
+  }, [acceptSnapshot, clearLoading]);
 
   return { snapshot, loading, refreshing, error, loadingProviders, refresh };
 }

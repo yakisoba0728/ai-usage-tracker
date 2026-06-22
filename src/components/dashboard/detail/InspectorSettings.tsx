@@ -5,7 +5,6 @@ import { useTranslation } from "react-i18next";
 import { allServiceWindows } from "@/components/dashboard/helpers";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { sendAnchorNow } from "@/lib/ipc";
 import {
   anchorSupported,
   patchProviderConfig,
@@ -13,17 +12,22 @@ import {
   providerDisplayName,
   setAutoAnchor,
 } from "@/lib/providers";
+import type { AccountActionStatus } from "@/lib/accountActionState";
 import type { AppConfig, ProviderConfig, ServiceUsage } from "@/lib/types";
 import { clamp } from "@/lib/utils";
 
 export function InspectorSettings({
   service,
   config,
+  anchorAction,
+  onSendAnchor,
   onConfigChange,
   onOpenAdd,
 }: {
   service: ServiceUsage;
   config: AppConfig | null;
+  anchorAction: AccountActionStatus | null;
+  onSendAnchor: (id: string) => void;
   onConfigChange: (next: AppConfig) => void;
   onOpenAdd: () => void;
 }) {
@@ -39,6 +43,15 @@ export function InspectorSettings({
   const messageAnchor = anchorSupported(service.provider);
   const autoOn = config?.auto_anchor?.[service.id] ?? false;
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const anchorPending = anchorAction === "pending";
+  const anchorStatusMessage =
+    anchorAction === "pending"
+      ? t("status.sendingAnchor")
+      : anchorAction === "success"
+        ? t("status.anchorSent")
+        : anchorAction === "error"
+          ? t("status.anchorFailed")
+          : null;
 
   function toggleAuto(next: boolean) {
     if (!config) return;
@@ -169,15 +182,24 @@ export function InspectorSettings({
                   onChange={(e) => toggleAuto(e.target.checked)}
                 />
               </label>
-              <Button variant="ghost" onClick={() => setConfirmOpen(true)}>
+              <Button
+                variant="ghost"
+                disabled={anchorPending || !service.connected}
+                onClick={() => setConfirmOpen(true)}
+              >
                 {t("detail.anchor.sendNow")}
               </Button>
+              {anchorStatusMessage && (
+                <p role="status" className="text-xs text-text-faint">
+                  {anchorStatusMessage}
+                </p>
+              )}
               <ConfirmDialog
                 open={confirmOpen}
                 title={t("detail.anchor.confirmTitle")}
                 body={t("detail.anchor.confirmBody")}
                 confirmLabel={t("detail.anchor.sendNow")}
-                onConfirm={() => void sendAnchorNow(service.id)}
+                onConfirm={() => onSendAnchor(service.id)}
                 onOpenChange={setConfirmOpen}
               />
             </>

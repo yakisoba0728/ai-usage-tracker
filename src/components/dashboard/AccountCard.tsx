@@ -1,4 +1,6 @@
 import { memo } from "react";
+import { AlertCircle, CheckCircle2, Loader2 } from "lucide-react";
+import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 
 import { ProviderIconTile } from "@/components/dashboard/ProviderIconTile";
@@ -11,7 +13,11 @@ import {
   percentSeverity,
   remainingPercent,
 } from "@/lib/format";
-import { refreshAccount, sendAnchorNow } from "@/lib/ipc";
+import {
+  getAccountAction,
+  type AccountActionState,
+  type AccountActionStatus,
+} from "@/lib/accountActionState";
 import type { AccountRow, AccountSection } from "@/lib/inspectorModel";
 import { anchorSupported } from "@/lib/providers";
 import { severityToStatus } from "@/lib/status";
@@ -23,13 +29,19 @@ export function AccountSections({
   selectedId,
   nowMs,
   loadingProviders,
+  accountActions,
   onSelect,
+  onRefreshAccount,
+  onSendAnchor,
 }: {
   sections: AccountSection[];
   selectedId: string | null;
   nowMs: number;
   loadingProviders: Set<string>;
+  accountActions: AccountActionState;
   onSelect: (id: string) => void;
+  onRefreshAccount: (id: string) => void;
+  onSendAnchor: (id: string) => void;
 }) {
   const { t } = useTranslation();
   return (
@@ -52,7 +64,10 @@ export function AccountSections({
                 nowMs={nowMs}
                 selected={selectedId === row.id}
                 loading={loadingProviders.has(row.id)}
+                accountActions={accountActions}
                 onSelect={onSelect}
+                onRefreshAccount={onRefreshAccount}
+                onSendAnchor={onSendAnchor}
               />
             ))}
           </div>
@@ -67,13 +82,19 @@ const AccountCardButton = memo(function AccountCardButton({
   nowMs,
   selected,
   loading,
+  accountActions,
   onSelect,
+  onRefreshAccount,
+  onSendAnchor,
 }: {
   row: AccountRow;
   nowMs: number;
   selected: boolean;
   loading: boolean;
+  accountActions: AccountActionState;
   onSelect: (id: string) => void;
+  onRefreshAccount: (id: string) => void;
+  onSendAnchor: (id: string) => void;
 }) {
   const { t } = useTranslation();
   const connected = row.service.connected;
@@ -86,6 +107,17 @@ const AccountCardButton = memo(function AccountCardButton({
     .slice(0, 2);
 
   const isAnchorSupported = anchorSupported(row.service.provider);
+  const refreshAction = getAccountAction(accountActions, row.id, "refresh");
+  const anchorAction = getAccountAction(accountActions, row.id, "anchor");
+  const refreshPending = loading || refreshAction === "pending";
+  const anchorPending = anchorAction === "pending";
+  const actionBusy = refreshPending || anchorPending;
+  const refreshDisabled = actionBusy;
+  const anchorDisabled = actionBusy;
+  const actionStatus = anchorAction ?? (refreshPending ? "pending" : refreshAction);
+  const actionMessage = actionStatus
+    ? accountActionMessage(actionStatus, anchorAction != null ? "anchor" : "refresh", t)
+    : null;
 
   return (
     <div className="group relative h-full">
@@ -95,12 +127,14 @@ const AccountCardButton = memo(function AccountCardButton({
         className={cn(
           "relative flex h-full min-h-[188px] w-full flex-col overflow-hidden rounded-lg border p-4 text-left",
           "transition-[background-color,border-color,box-shadow,transform,opacity] duration-150 hover:-translate-y-0.5 hover:border-border-strong hover:bg-surface",
+          actionBusy && "card-active-hairline opacity-70",
           selected
             ? "border-border-strong bg-surface-2 shadow-lg shadow-black/10"
             : connected
               ? "border-border bg-surface/60 hover:border-border-strong hover:bg-surface"
               : "border-border bg-surface/40 opacity-55 hover:bg-surface/60 hover:opacity-100",
         )}
+        aria-busy={actionBusy}
       >
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
@@ -210,6 +244,19 @@ const AccountCardButton = memo(function AccountCardButton({
       {loading && (
         <span className="provider-fetch-dot absolute right-2 top-2 size-2 rounded-full bg-[#73b8f4]" />
       )}
+      {actionMessage && (
+        <span
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          className="action-feedback-overlay rounded-lg"
+        >
+          <span className="action-feedback-indicator max-w-[calc(100%-2rem)] px-3 py-2 text-xs">
+            <AccountActionIcon status={actionStatus ?? "pending"} />
+            <span className="truncate">{actionMessage}</span>
+          </span>
+        </span>
+      )}
       </button>
 
       <div className="absolute bottom-2 right-2 z-10 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
@@ -217,8 +264,9 @@ const AccountCardButton = memo(function AccountCardButton({
           type="button"
           title={t("card.refresh")}
           aria-label={t("card.refresh")}
-          onClick={(e) => { e.stopPropagation(); void refreshAccount(row.id); }}
-          className="rounded-md border border-border bg-surface px-2 py-1 text-xs text-text-dim hover:bg-surface-2"
+          disabled={refreshDisabled}
+          onClick={(e) => { e.stopPropagation(); onRefreshAccount(row.id); }}
+          className="rounded-md border border-border bg-surface px-2 py-1 text-xs text-text-dim hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {t("card.refresh")}
         </button>
@@ -227,8 +275,9 @@ const AccountCardButton = memo(function AccountCardButton({
             type="button"
             title={t("card.sendRequest")}
             aria-label={t("card.sendRequest")}
-            onClick={(e) => { e.stopPropagation(); void sendAnchorNow(row.id); }}
-            className="rounded-md border border-border bg-surface px-2 py-1 text-xs text-text-dim hover:bg-surface-2"
+            disabled={anchorDisabled}
+            onClick={(e) => { e.stopPropagation(); onSendAnchor(row.id); }}
+            className="rounded-md border border-border bg-surface px-2 py-1 text-xs text-text-dim hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {t("card.sendRequest")}
           </button>
@@ -237,6 +286,36 @@ const AccountCardButton = memo(function AccountCardButton({
     </div>
   );
 });
+
+function accountActionMessage(
+  status: AccountActionStatus,
+  kind: "refresh" | "anchor",
+  t: TFunction,
+): string {
+  if (status === "pending") {
+    return kind === "anchor"
+      ? t("status.sendingAnchor")
+      : t("status.refreshingAccount");
+  }
+  if (status === "success") {
+    return kind === "anchor"
+      ? t("status.anchorSent")
+      : t("status.refreshComplete");
+  }
+  return kind === "anchor"
+    ? t("status.anchorFailed")
+    : t("status.refreshFailed");
+}
+
+function AccountActionIcon({ status }: { status: AccountActionStatus }) {
+  if (status === "success") {
+    return <CheckCircle2 className="size-3.5 shrink-0 text-ok" aria-hidden />;
+  }
+  if (status === "error") {
+    return <AlertCircle className="size-3.5 shrink-0 text-crit" aria-hidden />;
+  }
+  return <Loader2 className="refresh-spin size-3.5 shrink-0 text-[#73b8f4]" aria-hidden />;
+}
 
 function CompactWindowLine({
   window,

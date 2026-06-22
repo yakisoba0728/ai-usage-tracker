@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { ActionFeedbackOverlay } from "@/components/ActionFeedbackOverlay";
 import { AddAccountDialog } from "@/components/AddAccountDialog";
 import { EmptyState } from "@/components/EmptyState";
 import { ErrorState } from "@/components/ErrorState";
@@ -29,6 +30,15 @@ import type { InspectorTab } from "@/components/dashboard/inspectorTabs";
 import { Button } from "@/components/ui/button";
 import { useNow } from "@/hooks/useNow";
 import { useSnapshot } from "@/hooks/useSnapshot";
+import {
+  clearAccountAction,
+  finishAccountAction,
+  getAccountAction,
+  isAccountActionPending,
+  startAccountAction,
+  type AccountActionKind,
+  type AccountActionState,
+} from "@/lib/accountActionState";
 import {
   shouldProcessThresholdSnapshot,
   shouldShowNoResultsOfflineCta,
@@ -45,7 +55,9 @@ import {
   onAnchorResult,
   onRefreshResult,
   onTriggerRefresh,
+  refreshAccount,
   removeAccount,
+  sendAnchorNow,
   setConfig,
 } from "@/lib/ipc";
 import {
@@ -54,6 +66,10 @@ import {
 import { scrubErrorText } from "@/lib/errorScrub";
 import { collectThresholdCrossings } from "@/lib/thresholdToasts";
 import type { AppConfig, UsageSnapshot } from "@/lib/types";
+
+function accountActionKey(serviceId: string, kind: AccountActionKind): string {
+  return `${kind}:${serviceId}`;
+}
 
 export function Dashboard() {
   const { snapshot, loading, refreshing, error, loadingProviders, refresh } =
@@ -73,6 +89,9 @@ export function Dashboard() {
 
   const [sortBy, setSortBy] = useState<SortBy>("custom");
   const [showOffline, setShowOffline] = useState(false);
+  const [accountActions, setAccountActions] = useState<AccountActionState>({});
+  const accountActionsRef = useRef<AccountActionState>({});
+  const clearActionTimersRef = useRef<Map<string, number>>(new Map());
 
   const [config, setConfigState] = useState<AppConfig | null>(null);
   useEffect(() => {
@@ -86,22 +105,96 @@ export function Dashboard() {
     void setConfig(next).catch((e) => console.error("set_config failed:", e));
   }, []);
 
+  const applyAccountActions = useCallback((next: AccountActionState) => {
+    accountActionsRef.current = next;
+    setAccountActions(next);
+  }, []);
+
+  const clearVisibleAccountAction = useCallback(
+    (serviceId: string, kind: AccountActionKind) => {
+      const next = clearAccountAction(accountActionsRef.current, serviceId, kind);
+      if (next !== accountActionsRef.current) {
+        applyAccountActions(next);
+      }
+    },
+    [applyAccountActions],
+  );
+
+  const scheduleAccountActionClear = useCallback(
+    (serviceId: string, kind: AccountActionKind) => {
+      const key = accountActionKey(serviceId, kind);
+      const existing = clearActionTimersRef.current.get(key);
+      if (existing != null) {
+        window.clearTimeout(existing);
+      }
+
+      const timeout = window.setTimeout(() => {
+        clearActionTimersRef.current.delete(key);
+        clearVisibleAccountAction(serviceId, kind);
+      }, 2200);
+      clearActionTimersRef.current.set(key, timeout);
+    },
+    [clearVisibleAccountAction],
+  );
+
+  const beginAccountAction = useCallback(
+    (serviceId: string, kind: AccountActionKind) => {
+      const result = startAccountAction(
+        accountActionsRef.current,
+        serviceId,
+        kind,
+      );
+      if (!result.started) return false;
+
+      const key = accountActionKey(serviceId, kind);
+      const existing = clearActionTimersRef.current.get(key);
+      if (existing != null) {
+        window.clearTimeout(existing);
+        clearActionTimersRef.current.delete(key);
+      }
+
+      applyAccountActions(result.state);
+      return true;
+    },
+    [applyAccountActions],
+  );
+
+  const finishVisibleAccountAction = useCallback(
+    (
+      serviceId: string,
+      kind: AccountActionKind,
+      status: "success" | "error",
+    ) => {
+      const next = finishAccountAction(
+        accountActionsRef.current,
+        serviceId,
+        kind,
+        status,
+      );
+      if (next === accountActionsRef.current) return false;
+      applyAccountActions(next);
+      scheduleAccountActionClear(serviceId, kind);
+      return true;
+    },
+    [applyAccountActions, scheduleAccountActionClear],
+  );
+
+  useEffect(
+    () => () => {
+      for (const timeout of clearActionTimersRef.current.values()) {
+        window.clearTimeout(timeout);
+      }
+      clearActionTimersRef.current.clear();
+    },
+    [],
+  );
+
   // Stable so memoized cards don't re-render when an unrelated card is selected
   // or a provider-loading event fires.
   const handleSelectService = useCallback((id: string) => {
     setOpenServiceId(id);
     setInspectorTab("limits");
   }, []);
-
-  useEffect(() => {
-    const un = onTriggerRefresh(() => void refresh()).catch((e) => {
-      console.error("subscribe trigger-refresh failed:", e);
-      return undefined;
-    });
-    return () => {
-      void un.then((u) => u?.());
-    };
-  }, [refresh]);
 
   // Memoized so the `?? []` fallback doesn't hand a fresh array identity to the
   // dependent useMemos on every render (surfaced by react-hooks/exhaustive-deps).
@@ -132,6 +225,11 @@ export function Dashboard() {
         : allServices.find((service) => service.id === visibleServiceId) ?? null,
     [allServices, visibleServiceId],
   );
+  const detailRefreshing =
+    refreshing ||
+    (detailService != null &&
+      (loadingProviders.has(detailService.id) ||
+        getAccountAction(accountActions, detailService.id, "refresh") === "pending"));
 
   useEffect(() => {
     if (openServiceId != null && visibleServiceId == null) {
@@ -155,8 +253,79 @@ export function Dashboard() {
     setToasts((t) => t.filter((x) => x.id !== id));
   }, []);
 
+  const handleRefreshAll = useCallback(async () => {
+    const result = await refresh();
+    if (!result.ok) {
+      pushToast(t("toast.refreshFailed", { error: result.error }));
+    }
+  }, [pushToast, refresh, t]);
+
+  const handleRefreshAccount = useCallback(
+    (serviceId: string) => {
+      if (loadingProviders.has(serviceId)) return;
+      if (!beginAccountAction(serviceId, "refresh")) return;
+
+      // refresh-result is the source of truth for provider outcome; invoke
+      // rejection is only a transport-level fallback.
+      void refreshAccount(serviceId)
+        .catch((e) => {
+          if (isAccountActionPending(accountActionsRef.current, serviceId, "refresh")) {
+            finishVisibleAccountAction(serviceId, "refresh", "error");
+            pushToast(
+              t("toast.refreshFailed", {
+                error: scrubErrorText(String(e)),
+              }),
+            );
+          }
+        });
+    },
+    [beginAccountAction, finishVisibleAccountAction, loadingProviders, pushToast, t],
+  );
+
+  const handleSendAnchor = useCallback(
+    (serviceId: string) => {
+      if (!beginAccountAction(serviceId, "anchor")) return;
+
+      void sendAnchorNow(serviceId)
+        .then(() => {
+          if (isAccountActionPending(accountActionsRef.current, serviceId, "anchor")) {
+            finishVisibleAccountAction(serviceId, "anchor", "success");
+            pushToast(t("toast.anchorSent"));
+          }
+        })
+        .catch((e) => {
+          if (isAccountActionPending(accountActionsRef.current, serviceId, "anchor")) {
+            finishVisibleAccountAction(serviceId, "anchor", "error");
+            pushToast(
+              t("toast.anchorFailed", {
+                error: scrubErrorText(String(e)),
+              }),
+            );
+          }
+        });
+    },
+    [beginAccountAction, finishVisibleAccountAction, pushToast, t],
+  );
+
+  useEffect(() => {
+    const un = onTriggerRefresh(() => void handleRefreshAll()).catch((e) => {
+      console.error("subscribe trigger-refresh failed:", e);
+      return undefined;
+    });
+    return () => {
+      void un.then((u) => u?.());
+    };
+  }, [handleRefreshAll]);
+
   useEffect(() => {
     const un = onAnchorResult((p) => {
+      const current = getAccountAction(accountActionsRef.current, p.id, "anchor");
+      if (current === "pending") {
+        finishVisibleAccountAction(p.id, "anchor", p.ok ? "success" : "error");
+      }
+      if (current === "success" || current === "error") {
+        return;
+      }
       pushToast(
         p.ok
           ? t("toast.anchorSent")
@@ -171,12 +340,19 @@ export function Dashboard() {
     return () => {
       void un.then((u) => u?.());
     };
-  }, [pushToast, t]);
+  }, [finishVisibleAccountAction, pushToast, t]);
 
   // A per-card refresh emits `refresh-result` on every path; only surface a
   // failure (success already updates the card via usage-updated) — F-7.
   useEffect(() => {
     const un = onRefreshResult((p) => {
+      const current = getAccountAction(accountActionsRef.current, p.id, "refresh");
+      if (current === "pending") {
+        finishVisibleAccountAction(p.id, "refresh", p.ok ? "success" : "error");
+      }
+      if (current === "success" || current === "error") {
+        return;
+      }
       if (!p.ok) {
         pushToast(
           t("toast.refreshFailed", {
@@ -191,7 +367,7 @@ export function Dashboard() {
     return () => {
       void un.then((u) => u?.());
     };
-  }, [pushToast, t]);
+  }, [finishVisibleAccountAction, pushToast, t]);
 
   useEffect(() => {
     if (!snapshot || !config) return;
@@ -264,14 +440,9 @@ export function Dashboard() {
       <div className="flex min-h-dvh">
         <div className="flex min-w-0 flex-1 flex-col">
           <section className="relative flex min-h-dvh min-w-0 flex-col bg-canvas/95">
-            {refreshing && (
-              <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-canvas/50 backdrop-blur-[1.5px]">
-                <RefreshCw className="size-8 animate-spin text-text-dim" />
-              </div>
-            )}
             <MobileHeader
               refreshing={refreshing}
-              onRefresh={() => void refresh()}
+              onRefresh={() => void handleRefreshAll()}
               onOpenSettings={openSettings}
             />
 
@@ -286,27 +457,35 @@ export function Dashboard() {
               <span className="ml-1 text-sm">{t("nav.accounts")}</span>
             </div>
 
-            <div className="scroll-area min-h-0 flex-1 overflow-y-auto px-4 pb-5">
-              {(loading || snapshot == null || snapshot.fetched_at === 0) &&
-              error == null ? (
-                // Treat the cold-start sentinel (fetched_at:0, before the first
-                // real refresh) as still-loading, so a configured user never
-                // flashes the new-user EmptyState (F-2).
-                <LoadingState />
-              ) : snapshot == null ? (
-                <ErrorState error={error ?? t("error.backendUnreachable")} />
-              ) : !hasConfigured ? (
-                <EmptyState onAddAccount={openAddAccount} />
-              ) : accountSections.length === 0 ? (
-                <NoResults query={query} onShowOffline={() => setShowOffline(true)} />
-              ) : (
-                <AccountSections
-                  sections={accountSections}
-                  selectedId={visibleServiceId}
-                  nowMs={nowMs}
-                  loadingProviders={loadingProviders}
-                  onSelect={handleSelectService}
-                />
+            <div className="relative min-h-0 flex-1" aria-busy={refreshing}>
+              <div className="scroll-area h-full min-h-0 overflow-y-auto px-4 pb-5">
+                {(loading || snapshot == null || snapshot.fetched_at === 0) &&
+                error == null ? (
+                  // Treat the cold-start sentinel (fetched_at:0, before the first
+                  // real refresh) as still-loading, so a configured user never
+                  // flashes the new-user EmptyState (F-2).
+                  <LoadingState />
+                ) : snapshot == null ? (
+                  <ErrorState error={error ?? t("error.backendUnreachable")} />
+                ) : !hasConfigured ? (
+                  <EmptyState onAddAccount={openAddAccount} />
+                ) : accountSections.length === 0 ? (
+                  <NoResults query={query} onShowOffline={() => setShowOffline(true)} />
+                ) : (
+                  <AccountSections
+                    sections={accountSections}
+                    selectedId={visibleServiceId}
+                    nowMs={nowMs}
+                    loadingProviders={loadingProviders}
+                    accountActions={accountActions}
+                    onSelect={handleSelectService}
+                    onRefreshAccount={handleRefreshAccount}
+                    onSendAnchor={handleSendAnchor}
+                  />
+                )}
+              </div>
+              {refreshing && (
+                <ActionFeedbackOverlay message={t("status.refreshingUsage")} />
               )}
             </div>
 
@@ -339,12 +518,16 @@ export function Dashboard() {
         config={config}
         nowMs={nowMs}
         fetchedAt={fetchedAt}
-        refreshing={refreshing}
+        refreshing={detailRefreshing}
         tab={inspectorTab}
         onTabChange={setInspectorTab}
         moreOpen={moreMenuOpen}
         onMoreOpenChange={setMoreMenuOpen}
-        onRefresh={() => void refresh()}
+        accountActions={accountActions}
+        onRefresh={() => {
+          if (detailService) handleRefreshAccount(detailService.id);
+        }}
+        onSendAnchor={handleSendAnchor}
         onOpenAdd={openAddAccount}
         onOpenSettings={openSettings}
         onConfigChange={updateConfig}
@@ -367,7 +550,7 @@ export function Dashboard() {
         showOffline={showOffline}
         onShowOfflineChange={setShowOffline}
         onReuseLocalSession={() => {
-          void refresh();
+          void handleRefreshAll();
           pushToast(t("toast.scanning"));
         }}
         onOpenAddAccount={openAddAccount}

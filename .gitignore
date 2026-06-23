@@ -34,3 +34,6 @@ src-tauri/gen/schemas
 
 # Harness stray files
 omp-session-*.html
+
+# Superpowers local brainstorming / subagent artifacts
+.superpowers/

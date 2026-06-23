@@ -1,4 +1,4 @@
-import type { UsageSnapshot } from "@/lib/types";
+import type { AppConfig, UsageSnapshot } from "@/lib/types";
 
 export interface DashboardModalState {
   addOpen: boolean;
@@ -40,4 +40,12 @@ export function shouldProcessThresholdSnapshot(
   next: UsageSnapshot,
 ): boolean {
   return previous !== next;
+}
+
+export function rollbackConfigAfterFailedSave(
+  current: AppConfig | null,
+  attempted: AppConfig,
+  lastPersisted: AppConfig | null,
+): AppConfig | null {
+  return Object.is(current, attempted) ? lastPersisted : current;
 }

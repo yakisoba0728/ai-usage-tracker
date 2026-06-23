@@ -21,7 +21,7 @@ import {
   storedAccountId,
 } from "@/components/dashboard/helpers";
 import {
-  INSPECTOR_TABS,
+  inspectorTabsForService,
   type InspectorTab,
 } from "@/components/dashboard/inspectorTabs";
 import { Button } from "@/components/ui/button";
@@ -168,6 +168,8 @@ function DetailPanelContent({
   const summary = buildInspectorSummary(service, config);
   const accountId = storedAccountId(service);
   const allWindows = allServiceWindows(service);
+  const visibleTabs = inspectorTabsForService(service);
+  const activeTab = visibleTabs.includes(tab) ? tab : "limits";
   const tabBaseId = `detail-${service.id.replace(/[^A-Za-z0-9_-]/g, "-")}`;
   const refreshFeedbackMessage =
     refreshAction === "success"
@@ -180,6 +182,11 @@ function DetailPanelContent({
 
   const moreRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (activeTab !== tab) onTabChange(activeTab);
+  }, [activeTab, onTabChange, tab]);
+
   useEffect(() => {
     if (!moreOpen) return;
     // Move focus into the menu so the Arrow keys drive it immediately.
@@ -355,20 +362,20 @@ function DetailPanelContent({
           onKeyDown={onTabsKeyDown}
           className="mt-5 flex gap-5 overflow-x-auto"
         >
-          {INSPECTOR_TABS.map((id) => (
+          {visibleTabs.map((id) => (
             <button
               key={id}
               type="button"
               id={`${tabBaseId}-tab-${id}`}
               role="tab"
-              aria-selected={tab === id}
+              aria-selected={activeTab === id}
               aria-controls={`${tabBaseId}-panel-${id}`}
-              tabIndex={tab === id ? 0 : -1}
+              tabIndex={activeTab === id ? 0 : -1}
               data-tab-id={id}
               onClick={() => onTabChange(id)}
               className={cn(
                 "border-b-2 pb-3 text-sm font-medium transition-colors",
-                tab === id
+                activeTab === id
                   ? "border-[#4b9bea] text-text"
                   : "border-transparent text-text-dim hover:text-text",
               )}
@@ -380,16 +387,16 @@ function DetailPanelContent({
       </div>
 
       <div
-        id={`${tabBaseId}-panel-${tab}`}
+        id={`${tabBaseId}-panel-${activeTab}`}
         role="tabpanel"
-        aria-labelledby={`${tabBaseId}-tab-${tab}`}
+        aria-labelledby={`${tabBaseId}-tab-${activeTab}`}
         aria-busy={refreshing}
         className="relative min-h-[220px] px-5 py-5"
       >
-        {tab === "limits" && (
+        {activeTab === "limits" && (
           <LimitsTab windows={allWindows} nowMs={nowMs} />
         )}
-        {tab === "sessions" && (
+        {activeTab === "sessions" && (
           <SessionsTab
             service={service}
             fetchedAt={fetchedAt}
@@ -399,8 +406,8 @@ function DetailPanelContent({
             onOpenAdd={onOpenAdd}
           />
         )}
-        {tab === "raw" && <RawTab service={service} />}
-        {tab === "settings" && (
+        {activeTab === "raw" && <RawTab service={service} />}
+        {activeTab === "settings" && (
           <InspectorSettings
             service={service}
             config={config}

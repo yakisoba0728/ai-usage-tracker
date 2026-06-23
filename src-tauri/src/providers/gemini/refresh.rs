@@ -90,16 +90,25 @@ fn build_refreshed_cred(
 /// Refresh a stored credential's access_token using its refresh_token via the
 /// same Google OAuth endpoint + client metadata (env override > Gemini CLI's
 /// public constants) as the CLI-path self-refresh. Returns `Some(updated_cred)`
-/// when a refresh happened (caller persists); `None` if there is no
-/// refresh_token or the refresh failed (caller falls back to the existing token).
+/// when a refresh happened (caller persists). Stored OAuth credentials that need
+/// refresh must not fall back to a stale token, so missing refresh grants and
+/// refresh failures are surfaced as provider errors.
 pub(crate) async fn refresh_stored(
     http: &reqwest::Client,
     cred: &crate::store::StoredCredential,
-) -> Option<crate::store::StoredCredential> {
-    let rt = cred.refresh_token.as_ref()?;
-    let fresh = refresh_gemini_token(http, rt).await.ok()?;
+) -> Result<Option<crate::store::StoredCredential>, ProviderError> {
+    let rt = cred
+        .refresh_token
+        .as_ref()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            ProviderError::Expired(
+                "stored Gemini token expired or is near expiry and has no refresh_token".into(),
+            )
+        })?;
+    let fresh = refresh_gemini_token(http, rt).await?;
     let now_ms = chrono::Utc::now().timestamp_millis();
-    Some(build_refreshed_cred(cred, &fresh, now_ms))
+    Ok(Some(build_refreshed_cred(cred, &fresh, now_ms)))
 }
 
 #[cfg(test)]

@@ -55,11 +55,21 @@ impl crate::providers::ProviderApi for CodexProvider {
     }
 
     async fn fetch(&self) -> Result<ServiceUsage, ProviderError> {
-        let (_, t) = read_auth()?;
-        let t = refresh_auto_auth_if_needed(&self.http, t).await?;
-        let account_id = account_id_for_tokens(&t);
-        fetch_with(&self.http, &t.access_token, account_id.as_deref(), None).await
+        let (access_token, account_id) = prepare_auto_auth(&self.http).await?;
+        fetch_with(&self.http, &access_token, account_id.as_deref(), None).await
     }
+}
+
+/// Prepare Codex CLI auth exactly once for auto consumers: read auth.json,
+/// refresh an expiring access token, and derive ChatGPT-Account-Id from the
+/// id_token when auth.json lacks the explicit field.
+pub(crate) async fn prepare_auto_auth(
+    http: &reqwest::Client,
+) -> Result<(String, Option<String>), ProviderError> {
+    let (_, t) = read_auth()?;
+    let t = refresh_auto_auth_if_needed(http, t).await?;
+    let account_id = account_id_for_tokens(&t);
+    Ok((t.access_token, account_id))
 }
 
 /// Fetch Codex usage given an explicit token (used for manually-added accounts).
@@ -103,7 +113,7 @@ pub(crate) async fn fetch_with(
 pub(crate) async fn refresh_stored(
     http: &reqwest::Client,
     cred: &crate::store::StoredCredential,
-) -> Option<crate::store::StoredCredential> {
+) -> Result<Option<crate::store::StoredCredential>, ProviderError> {
     refresh::refresh_stored(http, cred).await
 }
 

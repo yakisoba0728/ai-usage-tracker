@@ -173,6 +173,17 @@ pub fn list() -> Vec<StoredCredential> {
     load()
 }
 
+pub fn try_list() -> Result<Vec<StoredCredential>, String> {
+    read_accounts()
+        .map(|accounts| {
+            accounts
+                .into_iter()
+                .filter(|c| !c.access_token.is_empty())
+                .collect()
+        })
+        .map_err(|e| format!("could not read account store: {e}"))
+}
+
 /// Find a stored credential by its UI service id (`stored:<account-id>`).
 pub fn find_by_service_id(service_id: &str) -> Option<StoredCredential> {
     list()

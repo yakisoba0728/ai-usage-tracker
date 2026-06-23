@@ -110,7 +110,7 @@ impl ServiceError {
 }
 
 fn raw_response_should_skip(value: &Option<String>) -> bool {
-    value.is_none() || !raw_response_debug_enabled()
+    value.is_none()
 }
 
 fn serialize_raw_response<S>(value: &Option<String>, serializer: S) -> Result<S::Ok, S::Error>
@@ -121,17 +121,6 @@ where
         Some(raw) => serializer.serialize_some(&redact_raw_response(raw)),
         None => serializer.serialize_none(),
     }
-}
-
-fn raw_response_debug_enabled() -> bool {
-    std::env::var("AIT_DEBUG_RAW_RESPONSE")
-        .map(|value| {
-            matches!(
-                value.to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
-        .unwrap_or(false)
 }
 
 fn redact_raw_response(raw: &str) -> String {
@@ -205,9 +194,8 @@ pub struct ServiceUsage {
     /// Modal-only windows (Spark / per-model / credits / resets / extra usage).
     /// Hidden on the card, shown when the card is opened.
     pub detail_windows: Vec<LimitWindow>,
-    /// Pretty-printed raw API response JSON. It is omitted from IPC unless
-    /// AIT_DEBUG_RAW_RESPONSE is explicitly enabled, then redacted during
-    /// serialization before it can reach the webview.
+    /// Pretty-printed raw API response JSON, redacted during serialization
+    /// before it can reach the webview.
     #[serde(
         default,
         skip_serializing_if = "raw_response_should_skip",
@@ -235,8 +223,6 @@ pub struct UsageSnapshot {
 mod tests {
     use super::*;
 
-    static RAW_RESPONSE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     #[test]
     fn provider_serializes_lowercase() {
         assert_eq!(
@@ -254,9 +240,6 @@ mod tests {
     /// serde-attr change that diverges from the frontend types fails here.
     #[test]
     fn service_usage_json_shape_matches_ts_contract() {
-        let _guard = RAW_RESPONSE_ENV_LOCK.lock().unwrap();
-        std::env::remove_var("AIT_DEBUG_RAW_RESPONSE");
-
         let u = ServiceUsage {
             id: "auto:claude".into(),
             source: ServiceSource::Auto,
@@ -289,6 +272,7 @@ mod tests {
                 "id",
                 "plan",
                 "provider",
+                "raw_response",
                 "source",
                 "windows",
             ]
@@ -341,14 +325,12 @@ mod tests {
         assert_eq!(keys, vec!["code"]);
     }
 
-    /// `raw_response` is omitted from IPC by default even when a provider
-    /// captured one; it can contain account identifiers or provider-specific
-    /// metadata that the webview does not need during normal operation.
+    /// `raw_response` is included when a provider captured one, redacted during
+    /// serialization before it can reach the webview. Different account plans can
+    /// report different provider fields, so the raw tab must show the actual
+    /// response shape instead of implying no HTTP call happened.
     #[test]
-    fn raw_response_is_omitted_by_default_even_when_present() {
-        let _guard = RAW_RESPONSE_ENV_LOCK.lock().unwrap();
-        std::env::remove_var("AIT_DEBUG_RAW_RESPONSE");
-
+    fn raw_response_is_serialized_redacted_when_present() {
         let u = ServiceUsage {
             id: "auto:claude".into(),
             source: ServiceSource::Auto,
@@ -364,15 +346,26 @@ mod tests {
             ),
         };
         let v = serde_json::to_value(&u).unwrap();
-        assert!(!v.as_object().unwrap().contains_key("raw_response"));
+        let raw = v
+            .as_object()
+            .unwrap()
+            .get("raw_response")
+            .and_then(|v| v.as_str())
+            .expect("captured HTTP responses should be visible in the Raw tab");
+        assert!(
+            raw.contains("[redacted]"),
+            "sensitive fields are redacted: {raw}"
+        );
+        assert!(
+            !raw.contains("person@example.invalid"),
+            "email leaked: {raw}"
+        );
+        assert!(!raw.contains("sk-ant-secret"), "token leaked: {raw}");
     }
 
-    /// Debug raw responses are opt-in and scrubbed before serialization.
+    /// Raw responses are scrubbed before serialization.
     #[test]
-    fn raw_response_debug_opt_in_redacts_sensitive_values() {
-        let _guard = RAW_RESPONSE_ENV_LOCK.lock().unwrap();
-        std::env::set_var("AIT_DEBUG_RAW_RESPONSE", "1");
-
+    fn raw_response_redacts_sensitive_values() {
         let u = ServiceUsage {
             id: "auto:claude".into(),
             source: ServiceSource::Auto,
@@ -404,8 +397,6 @@ mod tests {
         );
         assert!(!raw.contains("sk-ant-session"), "session key leaked: {raw}");
         assert!(!raw.contains("rt-secret"), "refresh token leaked: {raw}");
-
-        std::env::remove_var("AIT_DEBUG_RAW_RESPONSE");
     }
 
     /// `raw_response` is absent (not null) when there was no HTTP response.

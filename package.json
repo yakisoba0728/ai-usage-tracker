@@ -11,10 +11,11 @@
     "dev": "vite",
     "test": "vitest run",
     "lint": "eslint .",
-    "build": "tsc && vite build",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.node.json --noEmit",
+    "build": "pnpm typecheck && vite build",
     "preview": "vite preview",
     "tauri": "node scripts/tauri.mjs",
-    "verify:runtime": "pnpm lint && pnpm exec tsc --noEmit && pnpm test && cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check && cargo clippy --all-targets --manifest-path src-tauri/Cargo.toml -- -D warnings && cargo test --lib --manifest-path src-tauri/Cargo.toml --locked",
+    "verify:runtime": "pnpm lint && pnpm typecheck && pnpm test && cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check && cargo clippy --all-targets --manifest-path src-tauri/Cargo.toml -- -D warnings && cargo test --lib --manifest-path src-tauri/Cargo.toml --locked",
     "verify:release": "pnpm build && pnpm tauri build --debug --no-bundle"
   },
   "dependencies": {
@@ -41,6 +42,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@tauri-apps/cli": "^2",
+    "@types/node": "^26.0.0",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",

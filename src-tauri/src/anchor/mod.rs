@@ -101,7 +101,7 @@ pub async fn send(service_id: &str, device_id: &str) -> Result<(), ProviderError
     match service_id {
         "auto:zai" => send_zai(&http, &resolve::resolve_zai_auto()?, ZAI_CHAT_URL).await,
         "auto:codex" => {
-            let (access, account_id) = resolve::resolve_codex_auto()?;
+            let (access, account_id) = crate::providers::codex::prepare_auto_auth(&http).await?;
             send_codex(&http, &access, account_id.as_deref(), CODEX_RESPONSES_URL).await
         }
         other => Err(ProviderError::NotLoggedIn(format!(

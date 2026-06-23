@@ -22,10 +22,10 @@ export interface LimitWindow {
 }
 
 /**
- * The closed set of stable error codes the backend emits (one per
- * `ProviderError` variant in `src-tauri/src/providers/mod.rs`). Each MUST have a
- * matching `error.<code>` key in every locale catalog — guarded by a test. The
- * runtime array is the single source of truth for the `ServiceErrorCode` union.
+ * The closed set of stable service error codes the backend emits. Each MUST
+ * have a matching `error.<code>` key in every locale catalog — guarded by a
+ * test. The runtime array is the single source of truth for the
+ * `ServiceErrorCode` union.
  */
 export const SERVICE_ERROR_CODES = [
   "not_logged_in",
@@ -33,6 +33,7 @@ export const SERVICE_ERROR_CODES = [
   "network",
   "server_error",
   "parse_error",
+  "account_store_unavailable",
 ] as const;
 
 export type ServiceErrorCode = (typeof SERVICE_ERROR_CODES)[number];

@@ -29,4 +29,4 @@ jobs:
         with: { workspaces: src-tauri }
       - run: pnpm install --frozen-lockfile
       - name: tauri build (debug, no bundle, NO signing)
-        run: pnpm exec tauri build --debug --no-bundle
+        run: pnpm tauri build --debug --no-bundle

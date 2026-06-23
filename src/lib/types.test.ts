@@ -7,6 +7,7 @@ import type {
   ServiceError,
   ServiceUsage,
 } from "@/lib/types";
+import { SERVICE_ERROR_CODES } from "@/lib/types";
 
 /**
  * Contract guard — the frontend half. Asserts the exact serialized field set the
@@ -34,6 +35,7 @@ describe("IPC contract shape", () => {
       error: null,
       windows: [window],
       detail_windows: [],
+      raw_response: "{}",
     };
 
     expect(Object.keys(service).sort()).toEqual([
@@ -44,6 +46,7 @@ describe("IPC contract shape", () => {
       "id",
       "plan",
       "provider",
+      "raw_response",
       "source",
       "windows",
     ]);
@@ -67,6 +70,10 @@ describe("IPC contract shape", () => {
     // carry only `code` — `detail?` must stay optional to mirror that.
     const codeOnly: ServiceError = { code: "network" };
     expect(Object.keys(codeOnly)).toEqual(["code"]);
+  });
+
+  it("includes refresh pipeline account-store availability errors", () => {
+    expect(SERVICE_ERROR_CODES).toContain("account_store_unavailable");
   });
 
   it("AppConfig is a versioned poll interval, a fixed 6-provider tuple, and per-account maps", () => {

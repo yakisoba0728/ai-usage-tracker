@@ -96,6 +96,7 @@ export function useSnapshot(): UseSnapshotResult {
       });
 
     const usageUnlisten = onUsageUpdated((s) => {
+      if (cancelled) return;
       const eventOrder = ++sourceOrderRef.current;
       if (!acceptSnapshot(s, eventOrder)) return;
       // A full snapshot closes every in-flight provider fetch.

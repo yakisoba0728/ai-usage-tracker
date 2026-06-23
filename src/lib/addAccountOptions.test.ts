@@ -21,10 +21,7 @@ describe("add account options", () => {
       "browser-oauth",
       "local-session",
     ]);
-    expect(authOptionsForProvider("gemini")).toEqual([
-      "browser-oauth",
-      "local-session",
-    ]);
+    expect(authOptionsForProvider("gemini")).toEqual(["browser-oauth"]);
     expect(authOptionsForProvider("copilot")).toEqual([
       "session-key",
       "device-code",

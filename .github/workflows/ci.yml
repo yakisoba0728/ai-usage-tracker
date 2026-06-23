@@ -11,7 +11,7 @@ concurrency:
 
 jobs:
   frontend:
-    name: Frontend (lint + tsc + vitest)
+    name: Frontend (lint + typecheck + vitest)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,7 +24,7 @@ jobs:
       - name: Lint
         run: pnpm lint
       - name: Type-check
-        run: pnpm exec tsc --noEmit
+        run: pnpm typecheck
       - name: Unit tests
         run: pnpm test
 

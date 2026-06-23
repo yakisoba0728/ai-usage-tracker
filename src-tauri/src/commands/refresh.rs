@@ -11,15 +11,15 @@ use tauri::{AppHandle, Emitter};
 
 use crate::config::AppConfig;
 use crate::model::{
-    auto_service_id, stored_service_id, Provider, EVENT_ANCHOR_RESULT, EVENT_PROVIDER_LOADING,
-    EVENT_USAGE_UPDATED,
+    auto_service_id, stored_service_id, Provider, ServiceError, ServiceSource, ServiceUsage,
+    EVENT_ANCHOR_RESULT, EVENT_PROVIDER_LOADING, EVENT_USAGE_UPDATED,
 };
 use crate::notify::anchor_notification;
 use crate::providers::{fetch_all, ProviderApi};
 
 use super::snapshot_merge::{
-    anchor_result_payload, dedupe_services, filter_deleted_stored_services, five_hour_used,
-    loading_payload,
+    anchor_result_payload, dedupe_services, filter_deleted_stored_services, loading_payload,
+    should_auto_anchor_for_reset,
 };
 use super::state::{ConfigStore, SnapshotStore, PROVIDER_CTORS};
 
@@ -53,25 +53,45 @@ async fn refresh_once_inner(
     for p in &providers {
         emit_loading(app, &auto_service_id(p.key()), p.key());
     }
-    let stored = crate::store::list();
-    for cred in &stored {
-        emit_loading(app, &stored_service_id(&cred.id), cred.provider);
-    }
-    let mut services = fetch_all(providers).await;
-    let stored_results = futures::future::join_all(stored.iter().map(|cred| async move {
-        (
-            stored_service_id(&cred.id),
-            crate::providers::fetch_credential(cred).await,
-        )
-    }))
-    .await;
-    let active_stored = active_stored_service_ids();
-    for (id, service) in stored_results {
-        if active_stored.contains(&id) {
-            services.push(service);
+    let stored_result = crate::store::try_list();
+    if let Ok(stored) = &stored_result {
+        for cred in stored {
+            emit_loading(app, &stored_service_id(&cred.id), cred.provider);
         }
     }
-    filter_deleted_stored_services(&mut services, &active_stored);
+    let mut services = fetch_all(providers).await;
+    match stored_result {
+        Ok(stored) => {
+            let stored_results = futures::future::join_all(stored.iter().map(|cred| async move {
+                (
+                    stored_service_id(&cred.id),
+                    crate::providers::fetch_credential(cred).await,
+                )
+            }))
+            .await;
+            let active_stored = latest_active_stored_service_ids();
+            if let Err(e) = &active_stored {
+                eprintln!(
+                    "store: discarding stored refresh results after post-fetch read failure: {e}"
+                );
+            }
+            let previous_stored = match &active_stored {
+                Ok(_) => Vec::new(),
+                Err(_) => previous_stored_snapshot_services(snap).await,
+            };
+            merge_stored_results_after_latest_store_read(
+                &mut services,
+                stored_results,
+                active_stored,
+                previous_stored,
+            );
+        }
+        Err(e) => {
+            eprintln!("store: preserving stored snapshot identities after account-store read failure: {e}");
+            let previous_stored = previous_stored_snapshot_services(snap).await;
+            services.extend(mark_stored_snapshot_unavailable(previous_stored, &e));
+        }
+    }
     // If a stored account connected for a provider, drop the auto-detect
     // failure for the same provider (the user's explicit Add-account wins).
     dedupe_services(&mut services);
@@ -83,7 +103,8 @@ async fn refresh_once_inner(
     *snap.write().await = snapshot.clone();
     let _ = app.emit(EVENT_USAGE_UPDATED, &snapshot);
     // Auto window-anchoring: for each opted-in, connected, supported service
-    // whose 5-hour window is empty (100% remaining), send one anchor message.
+    // whose 5-hour reset is unreported or freshly five hours away, send one
+    // anchor message. This is reset-driven, not usage-percent-driven.
     let now_sec = chrono::Utc::now().timestamp();
     let auto = cfg.read().await.auto_anchor.clone();
     // The stable per-install device id for the Claude web anchor — read once here
@@ -93,7 +114,7 @@ async fn refresh_once_inner(
         if auto.get(&s.id).copied().unwrap_or(false)
             && s.connected
             && crate::anchor::supported(s.provider)
-            && five_hour_used(s) == Some(0.0)
+            && should_auto_anchor_for_reset(s, now_sec)
             && crate::anchor::try_begin(&s.id, now_sec)
         {
             let id = s.id.clone();
@@ -108,6 +129,74 @@ async fn refresh_once_inner(
     }
     // Tray shows the app icon only — no title text (per user request).
     snapshot
+}
+
+async fn previous_stored_snapshot_services(snap: &SnapshotStore) -> Vec<ServiceUsage> {
+    snap.read()
+        .await
+        .services
+        .iter()
+        .filter(|s| s.source == ServiceSource::Stored)
+        .cloned()
+        .collect()
+}
+
+fn latest_active_stored_service_ids() -> Result<HashSet<String>, String> {
+    crate::store::try_list().map(|stored| {
+        stored
+            .into_iter()
+            .map(|c| stored_service_id(&c.id))
+            .collect()
+    })
+}
+
+fn merge_active_stored_refresh_results(
+    services: &mut Vec<ServiceUsage>,
+    stored_results: Vec<(String, ServiceUsage)>,
+    active_stored: &HashSet<String>,
+) {
+    services.extend(
+        stored_results
+            .into_iter()
+            .filter_map(|(id, service)| active_stored.contains(&id).then_some(service)),
+    );
+    filter_deleted_stored_services(services, active_stored);
+}
+
+fn merge_stored_results_after_latest_store_read(
+    services: &mut Vec<ServiceUsage>,
+    stored_results: Vec<(String, ServiceUsage)>,
+    active_stored: Result<HashSet<String>, String>,
+    previous_stored: Vec<ServiceUsage>,
+) {
+    match active_stored {
+        Ok(active_stored) => {
+            merge_active_stored_refresh_results(services, stored_results, &active_stored);
+        }
+        Err(e) => {
+            services.extend(mark_stored_snapshot_unavailable(previous_stored, &e));
+        }
+    }
+}
+
+fn mark_stored_snapshot_unavailable(
+    services: Vec<ServiceUsage>,
+    detail: &str,
+) -> Vec<ServiceUsage> {
+    services
+        .into_iter()
+        .map(|mut s| {
+            s.connected = false;
+            s.error = Some(ServiceError {
+                code: "account_store_unavailable".into(),
+                detail: Some(detail.to_string()),
+            });
+            s.windows.clear();
+            s.detail_windows.clear();
+            s.raw_response = None;
+            s
+        })
+        .collect()
 }
 
 /// The detached body of one auto-anchor send. Extracted verbatim from the
@@ -150,13 +239,6 @@ async fn auto_anchor_task(
             label.as_deref(),
         ),
     );
-}
-
-fn active_stored_service_ids() -> HashSet<String> {
-    crate::store::list()
-        .into_iter()
-        .map(|c| stored_service_id(&c.id))
-        .collect()
 }
 
 fn emit_loading(app: &AppHandle, id: &str, provider: Provider) {
@@ -262,6 +344,7 @@ async fn remove_service_from_snapshot(app: &AppHandle, snap: &SnapshotStore, ser
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{LimitWindow, ServiceSource, ServiceUsage};
 
     #[test]
     fn build_providers_respects_enabled_flags_and_canonical_order() {
@@ -295,5 +378,115 @@ mod tests {
                 Provider::Zai,
             ],
         );
+    }
+
+    fn connected_stored_service(id: &str) -> ServiceUsage {
+        ServiceUsage {
+            id: stored_service_id(id),
+            source: ServiceSource::Stored,
+            provider: Provider::Gemini,
+            connected: true,
+            plan: Some("Pro".into()),
+            account: Some(format!("{id}@example.invalid")),
+            error: None,
+            windows: vec![LimitWindow {
+                label: "5-hour".into(),
+                used_percent: Some(25.0),
+                resets_at: Some(999),
+                used: Some(1.0),
+                limit: Some(4.0),
+            }],
+            detail_windows: vec![LimitWindow {
+                label: "daily".into(),
+                used_percent: Some(10.0),
+                resets_at: Some(1999),
+                used: Some(1.0),
+                limit: Some(10.0),
+            }],
+            raw_response: Some("{\"usage\":\"old\"}".into()),
+        }
+    }
+
+    #[test]
+    fn mark_stored_snapshot_unavailable_clears_stale_quota_data() {
+        let services = mark_stored_snapshot_unavailable(
+            vec![connected_stored_service("stale")],
+            "permission denied",
+        );
+
+        assert_eq!(services.len(), 1);
+        let service = &services[0];
+        assert_eq!(service.id, "stored:stale");
+        assert_eq!(service.source, ServiceSource::Stored);
+        assert_eq!(service.provider, Provider::Gemini);
+        assert_eq!(service.account.as_deref(), Some("stale@example.invalid"));
+        assert!(!service.connected);
+        assert_eq!(
+            service.error.as_ref().map(|error| error.code.as_str()),
+            Some("account_store_unavailable")
+        );
+        assert_eq!(
+            service
+                .error
+                .as_ref()
+                .and_then(|error| error.detail.as_deref()),
+            Some("permission denied")
+        );
+        assert!(service.windows.is_empty());
+        assert!(service.detail_windows.is_empty());
+        assert!(service.raw_response.is_none());
+    }
+
+    #[test]
+    fn active_stored_refresh_results_exclude_deleted_fetch_results() {
+        let mut services = vec![];
+        let stored_results = vec![
+            (
+                stored_service_id("deleted"),
+                connected_stored_service("deleted"),
+            ),
+            (stored_service_id("kept"), connected_stored_service("kept")),
+        ];
+        let active_stored = HashSet::from([stored_service_id("kept")]);
+
+        merge_active_stored_refresh_results(&mut services, stored_results, &active_stored);
+
+        let ids: Vec<&str> = services.iter().map(|service| service.id.as_str()).collect();
+        assert_eq!(ids, vec!["stored:kept"]);
+    }
+
+    #[test]
+    fn unavailable_latest_store_read_does_not_trust_fetched_stored_results() {
+        let mut services = vec![];
+        let stored_results = vec![(
+            stored_service_id("deleted"),
+            connected_stored_service("deleted"),
+        )];
+        let previous_stored = vec![connected_stored_service("previous")];
+
+        merge_stored_results_after_latest_store_read(
+            &mut services,
+            stored_results,
+            Err("store unreadable".into()),
+            previous_stored,
+        );
+
+        assert!(
+            services
+                .iter()
+                .all(|service| service.id != "stored:deleted"),
+            "fetched stored results are stale when the account store cannot be re-read"
+        );
+        let previous = services
+            .iter()
+            .find(|service| service.id == "stored:previous")
+            .expect("previous stored identity should stay visible as unavailable");
+        assert!(!previous.connected);
+        assert_eq!(
+            previous.error.as_ref().map(|error| error.code.as_str()),
+            Some("account_store_unavailable")
+        );
+        assert!(previous.windows.is_empty());
+        assert!(previous.raw_response.is_none());
     }
 }

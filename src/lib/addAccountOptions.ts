@@ -22,8 +22,9 @@ export function authOptionsForProvider(provider: Provider): AddAccountOptionId[]
     case "zai":
       return ["session-key", "local-session"];
     case "codex":
-    case "gemini":
       return ["browser-oauth", "local-session"];
+    case "gemini":
+      return ["browser-oauth"];
     case "copilot":
       return ["session-key", "device-code", "local-session"];
     case "cursor":

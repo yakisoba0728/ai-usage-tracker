@@ -39,4 +39,17 @@ describe("locale catalogs", () => {
       );
     }
   });
+
+  it("localizes programmatic input labels and persistence failure messages", () => {
+    expect(en.toolbar).toHaveProperty("search");
+    expect(ko.toolbar).toHaveProperty("search");
+    expect(en.addAccount).toHaveProperty("sessionKeyInput");
+    expect(ko.addAccount).toHaveProperty("sessionKeyInput");
+    expect(en.addAccount).toHaveProperty("removeFailed");
+    expect(ko.addAccount).toHaveProperty("removeFailed");
+    expect(en.detail.settings).toHaveProperty("thresholdInput");
+    expect(ko.detail.settings).toHaveProperty("thresholdInput");
+    expect(en.toast).toHaveProperty("configSaveFailed");
+    expect(ko.toast).toHaveProperty("configSaveFailed");
+  });
 });

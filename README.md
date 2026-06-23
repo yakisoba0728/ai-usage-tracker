@@ -108,12 +108,12 @@ The `tauri` npm script is a cross-platform Node wrapper that strips the ambient 
 ```bash
 cd src-tauri && cargo test --lib    # Rust unit tests
 pnpm test                           # frontend unit tests (vitest)
-pnpm exec tsc --noEmit              # type-check
+pnpm typecheck                      # type-check app + Vite/node config
 pnpm verify:runtime                 # lint + type-check + vitest + Rust unit tests
 pnpm verify:release                 # frontend build + debug Tauri no-bundle smoke
 ```
 
-CI (`.github/workflows/`) runs the frontend type-check + vitest, and `cargo test --lib` across a **macOS + Windows** matrix on every push/PR (`fmt`/`clippy` on macOS); `build-smoke.yml` does a debug `tauri build` on both.
+CI (`.github/workflows/`) runs frontend lint + type-check + vitest on every push/PR; Rust `fmt` runs on macOS only, while `clippy` and `cargo test --lib` run across the **macOS + Windows** matrix. `build-smoke.yml` does a debug `tauri build` on both.
 
 ## 🔒 Privacy & security
 

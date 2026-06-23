@@ -122,8 +122,9 @@ export function useAddAccountFlow({
   async function load() {
     try {
       setAccounts(await listAccounts());
-    } catch {
-      /* ignore - no backend in dev */
+    } catch (e) {
+      setAccounts([]);
+      setError(scrubErrorText(String(e)));
     }
   }
 
@@ -266,7 +267,11 @@ export function useAddAccountFlow({
 
   async function remove(id: string) {
     try {
-      await removeAccount(id);
+      const removed = await removeAccount(id);
+      if (!removed) {
+        setError(t("addAccount.removeFailed"));
+        return;
+      }
     } catch (e) {
       setError(scrubErrorText(String(e)));
       return;

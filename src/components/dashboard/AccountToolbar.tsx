@@ -33,6 +33,7 @@ export function AccountToolbar({
           ref={inputRef}
           value={query}
           onChange={(event) => onQueryChange(event.target.value)}
+          aria-label={t("toolbar.search")}
           placeholder={t("toolbar.searchPlaceholder")}
           className="h-10 w-full rounded-lg border border-border bg-surface/60 pl-9 pr-12 text-sm text-text placeholder:text-text-faint outline-none transition-colors focus:border-border-strong focus:bg-surface"
         />

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -26,6 +26,7 @@ import { useToasts } from "@/hooks/useToasts";
 import { getAccountAction } from "@/lib/accountActionState";
 import { buildAnchorToast } from "@/lib/anchorToast";
 import {
+  rollbackConfigAfterFailedSave,
   transitionToAddAccount,
   transitionToSettings,
 } from "@/lib/dashboardState";
@@ -74,16 +75,47 @@ export function Dashboard() {
   } = useAccountActions();
 
   const [config, setConfigState] = useState<AppConfig | null>(null);
+  const lastPersistedConfigRef = useRef<AppConfig | null>(null);
+  const { toasts, pushToast, dismissToast } = useToasts();
+
   useEffect(() => {
     getConfig()
-      .then(setConfigState)
+      .then((loaded) => {
+        lastPersistedConfigRef.current = loaded;
+        setConfigState(loaded);
+      })
       .catch((e) => console.error("get_config failed:", e));
   }, []);
 
-  const updateConfig = useCallback((next: AppConfig) => {
-    setConfigState(next);
-    void setConfig(next).catch((e) => console.error("set_config failed:", e));
-  }, []);
+  const updateConfig = useCallback(
+    (next: AppConfig) => {
+      setConfigState(next);
+      void setConfig(next)
+        .then(() => {
+          const previousPersisted = lastPersistedConfigRef.current;
+          lastPersistedConfigRef.current = next;
+          setConfigState((current) =>
+            Object.is(current, previousPersisted) ? next : current,
+          );
+        })
+        .catch((e) => {
+          console.error("set_config failed:", e);
+          setConfigState((current) =>
+            rollbackConfigAfterFailedSave(
+              current,
+              next,
+              lastPersistedConfigRef.current,
+            ),
+          );
+          pushToast(
+            t("toast.configSaveFailed", {
+              error: scrubErrorText(String(e)),
+            }),
+          );
+        });
+    },
+    [pushToast, t],
+  );
 
   // Per-account rename (BUG-2). Persists via the dedicated `rename_account`
   // command — NOT `set_config` — so a rename never restarts the poll scheduler.
@@ -147,8 +179,6 @@ export function Dashboard() {
       setOpenServiceId(null);
     }
   }, [openServiceId, visibleServiceId]);
-
-  const { toasts, pushToast, dismissToast } = useToasts();
 
   // Launch-at-login (FEAT-4): optimistic flag update, then the dedicated command
   // (OS login item + persist). On failure, revert the optimistic flag and toast.
@@ -285,7 +315,15 @@ export function Dashboard() {
     const accountId = storedAccountId(detailService);
     if (!accountId) return;
     try {
-      await removeAccount(accountId);
+      const removed = await removeAccount(accountId);
+      if (!removed) {
+        pushToast(
+          t("toast.removeFailed", {
+            error: t("addAccount.removeFailed"),
+          }),
+        );
+        return;
+      }
       setMoreMenuOpen(false);
       setOpenServiceId(null);
       await refresh();

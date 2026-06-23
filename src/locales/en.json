@@ -14,6 +14,7 @@
     "settings": "Settings"
   },
   "toolbar": {
+    "search": "Search accounts",
     "searchPlaceholder": "Search accounts, providers, tags...",
     "addAccount": "Add Account"
   },
@@ -49,6 +50,7 @@
     "network": "Network error.",
     "server_error": "The provider returned an error.",
     "parse_error": "Couldn't read the provider response.",
+    "account_store_unavailable": "Couldn't read stored account data.",
     "unknown": "Something went wrong.",
     "loadFailed": "Couldn't load usage.",
     "backendUnreachable": "Couldn't reach the tracker backend.",
@@ -115,20 +117,21 @@
       "primaryWindow": "Primary window",
       "autoWindow": "Auto (first reported window)",
       "thresholds": "Usage thresholds",
+      "thresholdInput": "Usage threshold percentage",
       "add": "Add",
       "dangerZone": "Danger zone",
       "reauthAccount": "Re-authenticate account"
     },
     "anchor": {
       "title": "Window anchoring",
-      "auto": "Auto-anchor when the 5-hour window is empty",
+      "auto": "Auto-anchor when the 5-hour reset is fresh or unreported",
       "sendNow": "Send anchor message now",
       "unsupported": "Not supported for this provider (calendar quota / no send path).",
       "confirmTitle": "Send an anchor message?",
       "confirmBody": "This sends a real 1-token message, consumes quota, and may violate the provider's terms. Continue?"
     },
     "raw": {
-      "empty": "No raw response — this account didn't make an HTTP call this cycle."
+      "empty": "No raw response available for this account."
     },
     "loading": "Loading usage…"
   },
@@ -141,8 +144,10 @@
     "added": "Added accounts",
     "none": "None yet.",
     "loginFailed": "Login failed.",
+    "removeFailed": "Couldn't remove the stored account.",
     "removeAria": "Remove {{provider}} account",
     "pasteKey": "Paste the {{provider}} key",
+    "sessionKeyInput": "{{provider}} session key",
     "add": "Add",
     "enterCode": "Enter code:",
     "authorize": "Authorize in your browser.",
@@ -238,6 +243,7 @@
     "anchorAutoSentFor": "Auto-anchored {{name}}.",
     "anchorAutoFailedFor": "Auto-anchor failed for {{name}}: {{error}}",
     "launchAtLoginFailed": "Couldn't change launch at login: {{error}}",
+    "configSaveFailed": "Couldn't save preferences: {{error}}",
     "updateAvailable": "Update available: {{version}}.",
     "upToDate": "You're on the latest version.",
     "updateCheckFailed": "Update check failed: {{error}}"

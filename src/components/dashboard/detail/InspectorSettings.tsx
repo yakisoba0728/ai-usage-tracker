@@ -172,6 +172,7 @@ export function InspectorSettings({
               if (event.key === "Enter") addThreshold();
             }}
             inputMode="numeric"
+            aria-label={t("detail.settings.thresholdInput")}
             placeholder="90"
             className="num w-24 rounded-md border border-border bg-canvas px-3 py-2 text-sm text-text outline-none focus:border-border-strong"
           />

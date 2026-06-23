@@ -84,12 +84,8 @@ pub async fn get_config(cfg: State<'_, ConfigStore>) -> Result<AppConfig, String
 /// next anchor (breaking "stable per-install") or re-notifying an old release.
 /// Pure + unit-tested so `set_config` can stay a thin command shell.
 fn preserve_backend_managed_fields(incoming: &mut AppConfig, current: &AppConfig) {
-    if incoming.device_id.is_none() {
-        incoming.device_id = current.device_id.clone();
-    }
-    if incoming.last_notified_version.is_none() {
-        incoming.last_notified_version = current.last_notified_version.clone();
-    }
+    incoming.device_id = current.device_id.clone();
+    incoming.last_notified_version = current.last_notified_version.clone();
 }
 
 #[tauri::command]
@@ -102,14 +98,15 @@ pub async fn set_config(
     // Preserve backend-managed fields the UI never writes (FEAT-2/FEAT-5) — see
     // `preserve_backend_managed_fields`.
     {
-        let current = cfg.read().await;
+        let mut current = cfg.write().await;
         preserve_backend_managed_fields(&mut new, &current);
+        let poll = new.poll_seconds;
+        new.save()
+            .map_err(|e| format!("could not save config: {e}"))?;
+        *current = new;
+        drop(current);
+        crate::scheduler::restart(&app, poll);
     }
-    let poll = new.poll_seconds;
-    new.save()
-        .map_err(|e| format!("could not save config: {e}"))?;
-    *cfg.write().await = new;
-    crate::scheduler::restart(&app, poll);
     Ok(())
 }
 
@@ -205,7 +202,7 @@ pub async fn start_login(
 /// Display-only list of stored accounts — tokens never cross IPC (P0 #1).
 #[tauri::command]
 pub async fn list_accounts() -> Result<Vec<crate::model::AccountInfo>, String> {
-    Ok(crate::store::list()
+    Ok(crate::store::try_list()?
         .into_iter()
         .map(|c| crate::model::AccountInfo {
             id: c.id,
@@ -215,15 +212,33 @@ pub async fn list_accounts() -> Result<Vec<crate::model::AccountInfo>, String> {
         .collect())
 }
 
+fn prune_removed_account_config(cfg: &mut AppConfig, id: &str) {
+    let service_id = crate::model::stored_service_id(id);
+    cfg.accounts.remove(&service_id);
+    cfg.auto_anchor.remove(&service_id);
+}
+
 #[tauri::command]
-pub async fn remove_account(id: String) -> Result<bool, String> {
+pub async fn remove_account(cfg: State<'_, ConfigStore>, id: String) -> Result<bool, String> {
+    remove_account_inner(cfg.inner(), id).await
+}
+
+async fn remove_account_inner(cfg: &ConfigStore, id: String) -> Result<bool, String> {
     let removed = crate::store::remove(&id)?;
     if removed {
         // Drop the per-account entries the add path mints so the maps don't grow
         // forever across add/remove churn (UG-1/UG-2). Refresh lock is keyed by
         // the RAW id; the anchor cooldown by the `stored:<id>` service-id form.
         crate::providers::forget_stored_refresh_lock(&id);
-        crate::anchor::clear(&crate::model::stored_service_id(&id));
+        let service_id = crate::model::stored_service_id(&id);
+        crate::anchor::clear(&service_id);
+        let mut guard = cfg.write().await;
+        prune_removed_account_config(&mut guard, &id);
+        if let Err(e) = guard.save() {
+            eprintln!(
+                "config: removed account {service_id}, but failed to prune stale settings: {e}"
+            );
+        }
     }
     Ok(removed)
 }
@@ -240,6 +255,9 @@ pub async fn add_session_key(
         crate::model::Provider::Claude => crate::providers::claude::normalize_session_key(&key),
         _ => key.trim().to_string(),
     };
+    if access_token.trim().is_empty() {
+        return Err("credential is blank".into());
+    }
     let cred = crate::store::StoredCredential {
         id: String::new(),
         provider,
@@ -345,6 +363,32 @@ pub async fn refresh_account(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct EnvVarGuard {
+        key: &'static str,
+        old: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &std::path::Path) -> Self {
+            let old = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, old }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match &self.old {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+
+    fn temp_path(tag: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("ait_commands_{tag}_{}.json", std::process::id()))
+    }
 
     #[test]
     fn provider_for_service_id_resolves_auto_prefix() {
@@ -452,21 +496,178 @@ mod tests {
         assert_eq!(incoming.poll_seconds, 450);
     }
 
-    /// If the incoming config DOES carry a device_id (e.g. the UI round-tripped
-    /// it), that value wins — the preservation only fills an omitted field, it
-    /// never clobbers a present one.
+    /// Frontend-provided backend-managed values must never win: even if a stale
+    /// UI payload happens to include `device_id` / `last_notified_version`, the
+    /// backend's current values remain authoritative.
     #[test]
-    fn preserve_backend_managed_fields_does_not_clobber_present_values() {
+    fn preserve_backend_managed_fields_ignores_incoming_backend_values() {
         let current = AppConfig {
             device_id: Some("old".into()),
+            last_notified_version: Some("0.3.0".into()),
             ..Default::default()
         };
         let mut incoming = AppConfig {
-            device_id: Some("round-tripped".into()),
+            device_id: Some("stale-ui-device".into()),
+            last_notified_version: Some("0.1.0".into()),
             ..Default::default()
         };
         preserve_backend_managed_fields(&mut incoming, &current);
-        assert_eq!(incoming.device_id.as_deref(), Some("round-tripped"));
+        assert_eq!(incoming.device_id.as_deref(), Some("old"));
+        assert_eq!(incoming.last_notified_version.as_deref(), Some("0.3.0"));
+    }
+
+    #[test]
+    fn list_accounts_returns_error_when_store_is_corrupt() {
+        let _guard = crate::store::STORE_TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let path = temp_path("corrupt_list");
+        std::fs::write(&path, "{ this is not valid json").unwrap();
+        let _env = EnvVarGuard::set("AIT_ACCOUNTS_PATH", &path);
+
+        let result = tauri::async_runtime::block_on(list_accounts());
+
+        assert!(
+            result.is_err(),
+            "corrupt accounts.json must be reported, not hidden as an empty list"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn prune_removed_account_config_removes_only_the_deleted_stored_service() {
+        let mut cfg = AppConfig::default();
+        cfg.accounts.insert(
+            "stored:victim".into(),
+            crate::config::AccountConfig {
+                custom_name: Some("Victim".into()),
+                primary_window: Some("Weekly".into()),
+            },
+        );
+        cfg.accounts.insert(
+            "stored:kept".into(),
+            crate::config::AccountConfig {
+                custom_name: Some("Kept".into()),
+                primary_window: None,
+            },
+        );
+        cfg.auto_anchor.insert("stored:victim".into(), true);
+        cfg.auto_anchor.insert("stored:kept".into(), true);
+
+        prune_removed_account_config(&mut cfg, "victim");
+
+        assert!(
+            !cfg.accounts.contains_key("stored:victim"),
+            "removing a stored account must prune its per-account config"
+        );
+        assert!(
+            !cfg.auto_anchor.contains_key("stored:victim"),
+            "removing a stored account must prune its auto-anchor opt-in"
+        );
+        assert!(
+            cfg.accounts.contains_key("stored:kept"),
+            "unrelated stored account config must survive"
+        );
+        assert_eq!(cfg.auto_anchor.get("stored:kept"), Some(&true));
+    }
+
+    #[test]
+    fn remove_account_returns_success_when_only_config_cleanup_save_fails() {
+        let _guard = crate::store::STORE_TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let accounts_path = temp_path("remove_cleanup_best_effort_accounts");
+        let config_path = std::env::temp_dir().join(format!(
+            "ait_commands_remove_cleanup_config_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&accounts_path);
+        let _ = std::fs::remove_dir_all(&config_path);
+        std::fs::create_dir_all(&config_path).unwrap();
+        let _accounts_env = EnvVarGuard::set("AIT_ACCOUNTS_PATH", &accounts_path);
+        let _config_env = EnvVarGuard::set("AIT_CONFIG_PATH", &config_path);
+
+        let id = crate::store::add(crate::store::StoredCredential {
+            id: "remove-me".into(),
+            provider: Provider::Codex,
+            label: "remove-me@example.invalid".into(),
+            access_token: "ACCESS".into(),
+            refresh_token: None,
+            expires_at: 0,
+            id_token: None,
+            account_id: None,
+        })
+        .unwrap();
+        let service_id = crate::model::stored_service_id(&id);
+        let mut initial_cfg = AppConfig::default();
+        initial_cfg.accounts.insert(
+            service_id.clone(),
+            crate::config::AccountConfig {
+                custom_name: Some("Remove me".into()),
+                primary_window: None,
+            },
+        );
+        initial_cfg.auto_anchor.insert(service_id.clone(), true);
+        let cfg_store: ConfigStore = std::sync::Arc::new(tokio::sync::RwLock::new(initial_cfg));
+
+        let response = tauri::async_runtime::block_on(remove_account_inner(&cfg_store, id));
+
+        assert_eq!(
+            response,
+            Ok(true),
+            "store removal already succeeded, so config cleanup save failure must not become an IPC error"
+        );
+        assert!(
+            crate::store::find("remove-me").is_none(),
+            "account store deletion should remain committed"
+        );
+        let cfg_after = tauri::async_runtime::block_on(async { cfg_store.read().await.clone() });
+        assert!(!cfg_after.accounts.contains_key(&service_id));
+        assert!(!cfg_after.auto_anchor.contains_key(&service_id));
+
+        let _ = std::fs::remove_file(&accounts_path);
+        let _ = std::fs::remove_dir_all(&config_path);
+    }
+
+    #[test]
+    fn add_session_key_rejects_blank_trimmed_token() {
+        let _guard = crate::store::STORE_TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let path = temp_path("blank_token");
+        let _ = std::fs::remove_file(&path);
+        let _env = EnvVarGuard::set("AIT_ACCOUNTS_PATH", &path);
+
+        let result =
+            tauri::async_runtime::block_on(add_session_key(Provider::Codex, "   ".into(), None));
+
+        assert!(
+            result.is_err(),
+            "blank credentials must not create a stored account"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn add_session_key_rejects_blank_claude_session_cookie() {
+        let _guard = crate::store::STORE_TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let path = temp_path("blank_claude_cookie");
+        let _ = std::fs::remove_file(&path);
+        let _env = EnvVarGuard::set("AIT_ACCOUNTS_PATH", &path);
+
+        let result = tauri::async_runtime::block_on(add_session_key(
+            Provider::Claude,
+            "Cookie: other=1; sessionKey=   ; x=2".into(),
+            None,
+        ));
+
+        assert!(
+            result.is_err(),
+            "Claude credentials that normalize to blank must be rejected"
+        );
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
@@ -474,12 +675,9 @@ mod tests {
         let _guard = crate::store::STORE_TEST_ENV_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        let path = std::env::temp_dir().join(format!(
-            "ait_commands_session_cookie_{}.json",
-            std::process::id()
-        ));
+        let path = temp_path("session_cookie");
         let _ = std::fs::remove_file(&path);
-        std::env::set_var("AIT_ACCOUNTS_PATH", &path);
+        let _env = EnvVarGuard::set("AIT_ACCOUNTS_PATH", &path);
 
         let id = tauri::async_runtime::block_on(add_session_key(
             Provider::Claude,
@@ -496,7 +694,6 @@ mod tests {
         assert!(!loaded[0].access_token.contains("also-not-this"));
 
         let _ = crate::store::remove(&id);
-        std::env::remove_var("AIT_ACCOUNTS_PATH");
         let _ = std::fs::remove_file(&path);
     }
 }

@@ -186,17 +186,29 @@ async fn refresh_oauth(
 /// Refresh a stored Codex OAuth credential via `auth.openai.com/oauth/token`
 /// using the public CLI client_id (`app_EMoamEEZ73f0CkXaXp7hrann`) and a
 /// `refresh_token` grant. Returns `Some(updated_cred)` when a refresh happened
-/// (caller persists); `None` if there is no refresh_token, the network call
-/// fails, the server returns non-2xx, or the response lacks an access_token
-/// (caller falls back to the existing token).
+/// (caller persists). Stored OAuth credentials that need refresh must not fall
+/// back to a stale token, so missing refresh grants and refresh failures are
+/// surfaced as provider errors.
 pub(super) async fn refresh_stored(
     http: &reqwest::Client,
     cred: &crate::store::StoredCredential,
-) -> Option<crate::store::StoredCredential> {
-    let rt = cred.refresh_token.as_ref().filter(|s| !s.is_empty())?;
-    let fresh = refresh_oauth(http, rt).await.ok()?;
-    let _ = fresh.access_token.as_ref()?;
-    Some(build_refreshed_cred(cred, &fresh))
+) -> Result<Option<crate::store::StoredCredential>, ProviderError> {
+    let rt = cred
+        .refresh_token
+        .as_ref()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            ProviderError::Expired(
+                "stored Codex token expired or is near expiry and has no refresh_token".into(),
+            )
+        })?;
+    let fresh = refresh_oauth(http, rt).await?;
+    if fresh.access_token.is_none() {
+        return Err(ProviderError::Parse(
+            "codex refresh: missing access_token".into(),
+        ));
+    }
+    Ok(Some(build_refreshed_cred(cred, &fresh)))
 }
 
 #[cfg(test)]

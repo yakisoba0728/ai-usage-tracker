@@ -6,15 +6,32 @@
 
 use std::collections::HashSet;
 
-use crate::model::{Provider, ServiceSource};
+use crate::model::{LimitWindow, Provider, ServiceSource};
 
-/// The `used_percent` of the provider's 5-hour window (card or detail list).
-pub(crate) fn five_hour_used(s: &crate::model::ServiceUsage) -> Option<f32> {
+const FIVE_HOUR_RESET_SECS: i64 = 5 * 60 * 60;
+const FIVE_HOUR_RESET_TOLERANCE_SECS: i64 = 60;
+
+fn five_hour_window(s: &crate::model::ServiceUsage) -> Option<&LimitWindow> {
     s.windows
         .iter()
         .chain(s.detail_windows.iter())
         .find(|w| w.label == "5-hour")
-        .and_then(|w| w.used_percent)
+}
+
+/// Auto-anchor is based on the 5-hour reset state, not remaining percentage:
+/// send one anchor when the provider reports no reset yet, or when the reset is
+/// freshly five hours away. A lower reset countdown is already anchored.
+pub(crate) fn should_auto_anchor_for_reset(s: &crate::model::ServiceUsage, now_sec: i64) -> bool {
+    let Some(window) = five_hour_window(s) else {
+        return false;
+    };
+    let Some(reset_at) = window.resets_at else {
+        return true;
+    };
+    let delta = reset_at - now_sec;
+    (FIVE_HOUR_RESET_SECS - FIVE_HOUR_RESET_TOLERANCE_SECS
+        ..=FIVE_HOUR_RESET_SECS + FIVE_HOUR_RESET_TOLERANCE_SECS)
+        .contains(&delta)
 }
 
 /// Drop disconnected entries for any provider that also has a connected entry.
@@ -326,33 +343,54 @@ mod tests {
     }
 
     #[test]
-    fn five_hour_used_reads_the_5h_window_from_either_list() {
-        let mk = |label: &str, p: f32| crate::model::LimitWindow {
-            label: label.into(),
-            used_percent: Some(p),
-            resets_at: None,
-            used: None,
-            limit: None,
-        };
-        let mut s = svc("auto:zai", Provider::Zai, ServiceSource::Auto, true, None);
-        s.windows = vec![mk("Weekly", 70.0), mk("5-hour", 0.0)];
-        assert_eq!(five_hour_used(&s), Some(0.0));
-        let mut s2 = svc(
-            "auto:claude",
+    fn auto_anchor_uses_five_hour_reset_state_not_usage_percent() {
+        let now = 1_700_000_000;
+        let mk =
+            |label: &str, used_percent: f32, resets_at: Option<i64>| crate::model::LimitWindow {
+                label: label.into(),
+                used_percent: Some(used_percent),
+                resets_at,
+                used: None,
+                limit: None,
+            };
+
+        let mut missing_reset = svc(
+            "stored:claude",
             Provider::Claude,
-            ServiceSource::Auto,
+            ServiceSource::Stored,
             true,
             None,
         );
-        s2.detail_windows = vec![mk("5-hour", 12.0)];
-        assert_eq!(five_hour_used(&s2), Some(12.0));
-        let s3 = svc(
-            "auto:cursor",
-            Provider::Cursor,
-            ServiceSource::Auto,
+        missing_reset.windows = vec![mk("5-hour", 75.0, None)];
+        assert!(
+            should_auto_anchor_for_reset(&missing_reset, now),
+            "missing 5-hour reset should request one anchor regardless of usage percent"
+        );
+
+        let mut fresh_five_hour = svc(
+            "stored:codex",
+            Provider::Codex,
+            ServiceSource::Stored,
             true,
             None,
         );
-        assert_eq!(five_hour_used(&s3), None);
+        fresh_five_hour.windows = vec![mk("5-hour", 91.0, Some(now + 5 * 60 * 60))];
+        assert!(
+            should_auto_anchor_for_reset(&fresh_five_hour, now),
+            "a displayed 5-hour reset should be eligible even when usage is not 0%"
+        );
+
+        let mut already_anchored = svc(
+            "stored:zai",
+            Provider::Zai,
+            ServiceSource::Stored,
+            true,
+            None,
+        );
+        already_anchored.windows = vec![mk("5-hour", 0.0, Some(now + 3 * 60 * 60))];
+        assert!(
+            !should_auto_anchor_for_reset(&already_anchored, now),
+            "100% remaining with a shorter reset must not trigger another auto message"
+        );
     }
 }

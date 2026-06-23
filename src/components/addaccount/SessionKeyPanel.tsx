@@ -37,6 +37,9 @@ export function SessionKeyPanel({
           placeholder="sk-ant-... / token"
           value={sessionInput}
           autoFocus
+          aria-label={t("addAccount.sessionKeyInput", {
+            provider: PROVIDER_LABEL[sessionFor],
+          })}
           onChange={(e) => setSessionInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && void submitSession()}
         />

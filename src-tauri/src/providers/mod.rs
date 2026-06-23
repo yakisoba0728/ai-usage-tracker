@@ -94,6 +94,7 @@ pub async fn fetch_all(providers: Vec<Box<dyn ProviderApi>>) -> Vec<ServiceUsage
 /// stored accounts can still fetch/refresh independently.
 static STORED_REFRESH_LOCKS: LazyLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+const STORED_REFRESH_SKEW_MS: i64 = 5 * 60 * 1000;
 
 fn stored_refresh_lock_for(id: &str) -> Arc<tokio::sync::Mutex<()>> {
     let mut locks = STORED_REFRESH_LOCKS
@@ -116,16 +117,16 @@ pub fn forget_stored_refresh_lock(id: &str) {
 }
 
 fn is_expired(cred: &crate::store::StoredCredential, now_ms: i64) -> bool {
-    cred.expires_at > 0 && cred.expires_at < now_ms
+    cred.expires_at > 0 && cred.expires_at <= now_ms + STORED_REFRESH_SKEW_MS
 }
 
-/// Refresh a stored credential if its access token is past expiry, persisting the
-/// rotated token, and return the credential to actually use. Serialized via
-/// `REFRESH_LOCK` and RE-READS the latest persisted record inside the lock, so a
-/// refresher that waited adopts a rotation a concurrent one already committed
-/// instead of replaying the now-invalid old refresh token (B-1). Providers with
-/// no refresh path (Cursor/Copilot/z.ai) or no refresh_token (Claude session
-/// keys) leave the credential unchanged.
+/// Refresh a stored credential if its access token is expired or near expiry,
+/// persisting the rotated token, and return the credential to actually use.
+/// Serialized via `REFRESH_LOCK` and RE-READS the latest persisted record inside
+/// the lock, so a refresher that waited adopts a rotation a concurrent one
+/// already committed instead of replaying the now-invalid old refresh token
+/// (B-1). Providers with no refresh path (Cursor/Copilot/z.ai) or no
+/// refresh_token (Claude session keys) leave the credential unchanged.
 pub async fn refresh_if_expired(
     http: &reqwest::Client,
     cred: &crate::store::StoredCredential,
@@ -145,7 +146,7 @@ pub async fn refresh_if_expired(
     if !is_expired(&latest, chrono::Utc::now().timestamp_millis()) {
         return Ok(latest);
     }
-    match refresh_stored(http, &latest).await {
+    match refresh_stored(http, &latest).await? {
         Some(updated) => match crate::store::update(&updated) {
             Ok(true) => Ok(updated),
             Ok(false) => Err(ProviderError::NotLoggedIn(format!(
@@ -217,18 +218,19 @@ pub async fn fetch_credential(cred: &crate::store::StoredCredential) -> ServiceU
 }
 
 /// Dispatch to the provider's `refresh_stored` helper. Returns Some(updated) if
-/// a refresh happened (caller persists), None if not applicable / failed.
+/// a refresh happened (caller persists), None if not applicable, and Err when a
+/// provider with refreshable OAuth credentials failed to refresh.
 async fn refresh_stored(
     http: &reqwest::Client,
     cred: &crate::store::StoredCredential,
-) -> Option<crate::store::StoredCredential> {
+) -> Result<Option<crate::store::StoredCredential>, ProviderError> {
     match cred.provider {
-        Provider::Claude => crate::providers::claude::refresh_stored(http, cred).await,
+        Provider::Claude => Ok(crate::providers::claude::refresh_stored(http, cred).await),
         Provider::Codex => crate::providers::codex::refresh_stored(http, cred).await,
         Provider::Gemini => crate::providers::gemini::refresh_stored(http, cred).await,
-        Provider::Copilot => crate::providers::copilot::refresh_stored(http, cred).await,
-        Provider::Cursor => crate::providers::cursor::refresh_stored(http, cred).await,
-        Provider::Zai => crate::providers::zai::refresh_stored(http, cred).await,
+        Provider::Copilot => Ok(crate::providers::copilot::refresh_stored(http, cred).await),
+        Provider::Cursor => Ok(crate::providers::cursor::refresh_stored(http, cred).await),
+        Provider::Zai => Ok(crate::providers::zai::refresh_stored(http, cred).await),
     }
 }
 
@@ -293,7 +295,7 @@ mod tests {
     }
 
     #[test]
-    fn is_expired_only_for_positive_past_expiry() {
+    fn is_expired_uses_near_expiry_skew_for_positive_expiry() {
         let cred = |exp: i64| crate::store::StoredCredential {
             id: "x".into(),
             provider: Provider::Codex,
@@ -304,11 +306,108 @@ mod tests {
             id_token: None,
             account_id: None,
         };
-        assert!(is_expired(&cred(100), 200)); // positive, in the past
-        assert!(!is_expired(&cred(300), 200)); // in the future
+        let now = 1_000_000;
+        assert!(is_expired(&cred(now - 1), now)); // expired
+        assert!(is_expired(&cred(now), now)); // exactly now
+        assert!(is_expired(&cred(now + 299_000), now)); // near expiry
+        assert!(!is_expired(&cred(now + 301_000), now)); // outside skew
         assert!(!is_expired(&cred(0), 200)); // 0 = unknown → never expired
         assert!(!is_expired(&cred(-5), 200)); // non-positive → never
-        assert!(!is_expired(&cred(200), 200)); // exactly now → not yet (strict <)
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn expired_codex_without_refresh_token_errors_instead_of_using_stale_token() {
+        let _g = crate::store::STORE_TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let accounts_path = std::env::temp_dir().join(format!(
+            "ait_codex_refresh_error_{}.json",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&accounts_path);
+        std::env::set_var("AIT_ACCOUNTS_PATH", &accounts_path);
+
+        let id = crate::store::add(crate::store::StoredCredential {
+            id: String::new(),
+            provider: Provider::Codex,
+            label: "codex-expired@example.invalid".into(),
+            access_token: "STALE-CODEX".into(),
+            refresh_token: None,
+            expires_at: 1,
+            id_token: None,
+            account_id: None,
+        })
+        .unwrap();
+        let seed = crate::store::find(&id).unwrap();
+
+        let err = refresh_if_expired(&crate::http::build_client(), &seed)
+            .await
+            .expect_err(
+                "expired stored Codex OAuth credentials must not fall back to stale tokens",
+            );
+
+        assert!(matches!(err, ProviderError::Expired(_)), "got {err:?}");
+
+        std::env::remove_var("AIT_ACCOUNTS_PATH");
+        let _ = std::fs::remove_file(&accounts_path);
+        forget_stored_refresh_lock(&id);
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn near_expiring_gemini_refresh_http_failure_errors_instead_of_using_stale_token() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let _g = crate::store::STORE_TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("invalid_grant"))
+            .mount(&server)
+            .await;
+
+        let accounts_path = std::env::temp_dir().join(format!(
+            "ait_gemini_refresh_error_{}.json",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&accounts_path);
+        std::env::set_var("AIT_ACCOUNTS_PATH", &accounts_path);
+        std::env::set_var("GEMINI_OAUTH_TOKEN_URL", format!("{}/token", server.uri()));
+
+        let id = crate::store::add(crate::store::StoredCredential {
+            id: String::new(),
+            provider: Provider::Gemini,
+            label: "gemini-near-expiry@example.invalid".into(),
+            access_token: "STALE-GEMINI".into(),
+            refresh_token: Some("rt-invalid".into()),
+            expires_at: chrono::Utc::now().timestamp_millis() + 60_000,
+            id_token: None,
+            account_id: None,
+        })
+        .unwrap();
+        let seed = crate::store::find(&id).unwrap();
+
+        let err = refresh_if_expired(&crate::http::build_client(), &seed)
+            .await
+            .expect_err(
+                "near-expiring stored Gemini refresh failure must not fall back to stale tokens",
+            );
+
+        assert!(
+            matches!(err, ProviderError::Status { status: 401, .. }),
+            "got {err:?}"
+        );
+        let hits = server.received_requests().await.unwrap();
+        assert_eq!(hits.iter().filter(|r| r.url.path() == "/token").count(), 1);
+
+        std::env::remove_var("AIT_ACCOUNTS_PATH");
+        std::env::remove_var("GEMINI_OAUTH_TOKEN_URL");
+        let _ = std::fs::remove_file(&accounts_path);
+        forget_stored_refresh_lock(&id);
     }
 
     #[test]

@@ -1,13 +1,9 @@
 import { spawn } from "node:child_process";
 
-const env = { ...process.env };
-delete env.CI;
+import { tauriSpawnSpec } from "./tauriCommand.mjs";
 
-const command = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
-const child = spawn(command, ["exec", "tauri", ...process.argv.slice(2)], {
-  stdio: "inherit",
-  env,
-});
+const spec = tauriSpawnSpec(process.platform, process.argv.slice(2), process.env);
+const child = spawn(spec.command, spec.args, spec.options);
 
 child.on("exit", (code, signal) => {
   if (signal) {

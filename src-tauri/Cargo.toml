@@ -1,6 +1,6 @@
 [package]
 name = "ai-usage-tracker"
-version = "0.3.0"
+version = "0.3.1"
 description = "Track real subscription usage for AI coding services"
 authors = ["you"]
 edition = "2021"
